@@ -1,0 +1,86 @@
+# ============================================================================
+# EEG Format Benchmark Configuration
+# ============================================================================
+# Compares read performance, compression, and precision across EDF, HDF5,
+# and Apache Parquet for clinical EEG / PSG data at scale.
+#
+# DATA SOURCE OPTIONS
+# -------------------
+# Option A (no SDK required):
+#   Set source: "parquet" and provide a remote_parquet_url pointing to
+#   float32 Parquet files in Azure Blob. All other formats (EDF, HDF5,
+#   int32 variants) are derived from this Parquet data locally.
+#
+# Option B (requires nwreader SDK):
+#   Set source: "erd" and provide a blob_prefix pointing to native
+#   NeuroWorks ERD study folders. The SDK converts ERD -> EDF + Parquet.
+#
+# AZURE AUTHENTICATION
+# --------------------
+#   The default storage account uses anonymous (public) read access.
+#   No credentials needed. For private containers:
+#     1. Run `az login` (uses DefaultAzureCredential)
+#     2. Set AZURE_STORAGE_SAS_TOKEN env var
+#     3. Pass --sas-token on the command line
+
+azure:
+  storage_account: "nwcsandboxstorage"
+  container: "waveforms"
+  anonymous: true
+
+studies:
+  - name: "suppression_study"
+
+    # --- Option A: start from remote Parquet (no SDK needed) ---
+    source: "parquet"
+    remote_parquet_url: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"
+
+    # --- Option B: start from ERD (requires nwreader SDK) ---
+    # source: "erd"
+    # blob_prefix: "walter_studies_with_trending/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724"
+
+cache_dir: ".benchmark_cache"
+
+benchmarks:
+  - random_access        # A: read position scaling
+  - channel_subset       # B: columnar read advantage
+  - remontage            # C: read + bipolar montage
+  - filter_pipeline      # D: read + montage + filter + FFT
+  - window_scaling       # E: window size throughput
+  - compression          # F: Parquet codec comparison
+  - precision_loss       # G: EDF 16-bit quantization error
+  - int32_storage        # H: int32 storage modes
+  - remote_query         # I: remote Parquet (DuckDB) vs EDF download
+
+# Parquet compression variants for category F.
+parquet_compression:
+  - codec: "none"
+  - codec: "snappy"
+  - codec: "zstd"
+    level: 3
+  - codec: "zstd"
+    level: 9
+  - codec: "lz4"
+
+# Window sizes for category E (seconds).
+window_sizes: [10, 30, 60, 300, 900, 1800, 3600]
+
+# Channel subsets for category B.
+channel_subsets: [4, 10]
+
+# Read positions for category A (fraction of total duration).
+read_positions: [0.0, 0.5, 0.75, 0.95]
+
+# Fixed window for categories A, B, C (seconds).
+default_window: 60
+
+# Number of repetitions per benchmark.
+repetitions: 3
+
+# Remote query benchmark (category I).
+remote_benchmark:
+  n_random_points: 10
+  window_sec: 600
+  remote_float32_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"
+  remote_int32_nanovolt_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.int32_nanovolt.snappy.parquet/"
+

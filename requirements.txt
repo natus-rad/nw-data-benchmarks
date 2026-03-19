@@ -1,0 +1,19 @@
+# Core dependencies
+numpy>=1.24
+pyarrow>=14.0
+pyyaml>=6.0
+psutil>=5.9
+h5py>=3.10
+hdf5plugin>=4.0
+scipy>=1.11
+pyedflib>=0.1.30
+
+# Azure blob access (anonymous access works without credentials)
+azure-storage-blob>=12.0
+
+# Remote Parquet queries
+duckdb>=0.10
+
+# Optional: Azure AD authentication (only needed if blob is not public)
+# azure-identity>=1.15
+
