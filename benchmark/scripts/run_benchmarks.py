@@ -562,14 +562,25 @@ def _write_h5_rowgroup(hf: h5py.File, src_files: list,
 # ===================================================================
 # Row-group / chunk sizes to test (in samples).
 # 300s is the current default; 60m and 120m test whether larger blocks help.
-TUNED_BLOCK_SIZES = {
-    "300s": 76_800,       # 300 seconds at 256 Hz (current default)
-    "60m": 921_600,       # 60 minutes at 256 Hz
-    "120m": 1_843_200,    # 120 minutes at 256 Hz
-}
+# Default block sizes to test. Override via tuned_block_sizes_minutes in config.
+DEFAULT_TUNED_BLOCK_MINUTES = [5, 10, 20, 30, 60, 120]
 
 
-def _setup_tuned_variants(paths: dict, output_base: Path, info) -> None:
+def _get_tuned_block_sizes(cfg: dict, sample_freq: float) -> dict[str, int]:
+    """Build {label: samples} dict from config or defaults."""
+    minutes = cfg.get("tuned_block_sizes_minutes", DEFAULT_TUNED_BLOCK_MINUTES)
+    sizes = {}
+    for m in minutes:
+        if m < 1:
+            label = f"{int(m * 60)}s"
+        else:
+            label = f"{m}m"
+        sizes[label] = int(m * 60 * sample_freq)
+    return sizes
+
+
+def _setup_tuned_variants(paths: dict, output_base: Path, info,
+                          cfg: dict) -> None:
     """Create Parquet and HDF5 columnar variants with different block sizes.
 
     Parquet uses snappy (its fastest decompression codec).
@@ -585,11 +596,11 @@ def _setup_tuned_variants(paths: dict, output_base: Path, info) -> None:
     if not src_files:
         return
 
-    # Read all source data once
     schema = pq.read_schema(str(src_files[0]))
     ch_cols = [c for c in schema.names if c.startswith("ch_")]
+    block_sizes = _get_tuned_block_sizes(cfg, info.sample_freq)
 
-    for label, block_samples in TUNED_BLOCK_SIZES.items():
+    for label, block_samples in block_sizes.items():
         _setup_tuned_parquet(paths, output_base, src_files, ch_cols,
                             label, block_samples)
         _setup_tuned_h5(paths, output_base, src_files, ch_cols,
@@ -2010,8 +2021,9 @@ def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
     mid_stamp = info.start_stamp + total_stamps // 2
 
     # Collect all tuned variants present in paths
+    block_sizes = _get_tuned_block_sizes(cfg, sample_freq)
     variants = []
-    for label in TUNED_BLOCK_SIZES:
+    for label in block_sizes:
         pq_key = f"tuned_pq_{label}"
         h5_key = f"tuned_h5_{label}"
         if pq_key in paths:
@@ -2231,7 +2243,7 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> dict:
 
             # Tuned variants for benchmark J
             if "tuned_comparison" in [cat_id for cat_id, _, _ in selected]:
-                _setup_tuned_variants(paths, output_base, info)
+                _setup_tuned_variants(paths, output_base, info, cfg)
 
         for k, v in paths.items():
             print(f"  {k}: {v}")

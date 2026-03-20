@@ -66,6 +66,10 @@ parquet_compression:
 # Window sizes for category E (seconds).
 window_sizes: [10, 30, 60, 300, 900, 1800, 3600]
 
+# Block sizes for category J tuned comparison (minutes).
+# Each size generates a Parquet (snappy) and HDF5 (LZ4) variant.
+tuned_block_sizes_minutes: [5, 10, 20, 30, 60, 120]
+
 # Channel subsets for category B.
 channel_subsets: [4, 10]
 
