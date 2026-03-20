@@ -1,6 +1,21 @@
 # EEG Format Benchmarks
 
-Benchmarks comparing **EDF**, **HDF5**, and **Apache Parquet** for reading, processing, and storing clinical EEG and PSG waveform data at scale.
+Benchmarks comparing **EDF**, **HDF5**, and **Apache Parquet** for reading,
+processing, and storing clinical EEG and PSG waveform data at scale.
+
+### Fairness note
+
+Parquet files include per-row-group min/max column statistics as part of the
+format spec — readers like pyarrow use these automatically to skip irrelevant
+data during filtered reads, with no extra work from the user.
+
+HDF5 has no equivalent built-in index. To evaluate HDF5's best-case
+performance, the benchmark builds a custom `chunk_index` dataset at
+conversion time (a small lookup table of stamp ranges per chunk). **The HDF5
+results therefore represent an optimistic upper bound** — standard HDF5
+files without this index would need to scan the full timestamp dataset on
+every read, which is significantly slower. See the
+[benchmark report](benchmark/docs/benchmark_report.md) for details.
 
 ## Quickstart
 
@@ -168,6 +183,7 @@ studies:
 ## Requirements
 
 - Python 3.10+
-- See `requirements.txt` for dependencies
-- ~3 GB disk for cache (source data + derived formats)
+- pyarrow 17+ (tested on 19.0.0 — uses compiled C++ dataset scanner)
+- See `requirements.txt` for full dependency list
+- ~5 GB disk for cache (source data + derived format variants)
 

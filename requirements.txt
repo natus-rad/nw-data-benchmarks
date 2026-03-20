@@ -1,6 +1,6 @@
 # Core dependencies
 numpy>=1.24
-pyarrow>=14.0
+pyarrow>=17.0  # 17+ uses compiled C++ dataset scanner for predicate pushdown
 pyyaml>=6.0
 psutil>=5.9
 h5py>=3.10

@@ -1,18 +1,32 @@
 # EDF vs HDF5 vs Parquet — Benchmark Results
 
 **Study:** 46-channel EEG, 256 Hz, ~12.9 hours (11.85M samples)
+**PyArrow:** 19.0.0 (compiled C++ dataset scanner with predicate pushdown)
 
 All formats store the same float32 waveform data. EDF and HDF5 are derived
 from the source Parquet files. HDF5 uses LZ4 compression with chunk sizes
 matching Parquet row groups (76,800 samples = 300s at 256 Hz).
 
-Both HDF5 and Parquet use a small index to skip irrelevant data blocks:
-- **Parquet** stores per-row-group min/max statistics in the file footer.
-- **HDF5** stores a `chunk_index` dataset with `(start_idx, min_stamp, max_stamp)`
-  per chunk, built at conversion time.
+### A note on fairness: HDF5 chunk index
 
-At read time, both formats scan their index to find overlapping blocks, then
-read only the relevant data. This is an apples-to-apples comparison.
+**Parquet includes row-group statistics (min/max per column per row group)
+as part of the format specification.** Every Parquet file has these for free.
+Readers like pyarrow use them automatically to skip irrelevant row groups
+during filtered reads — no extra work required by the user.
+
+**HDF5 has no equivalent built-in index.** Standard HDF5 files store chunked
+data but provide no mechanism to skip chunks based on data values. To give
+HDF5 a fair shot in these benchmarks, we build a custom `chunk_index`
+dataset at conversion time — a small table of
+`(chunk_start_idx, min_stamp, max_stamp)` per chunk. This lets our reader
+skip to the right chunks without scanning the entire samplestamp dataset.
+
+**This means the HDF5 results below represent best-case performance** with
+a purpose-built index that does not exist in standard HDF5 files. Without
+the chunk index, HDF5 random access would require reading the full
+samplestamp dataset on every call (~90 MB for this study), making it
+significantly slower. Parquet's results, by contrast, use only the
+format's built-in capabilities.
 
 ## Summary
 
