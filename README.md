@@ -1,21 +1,32 @@
-# EEG Format Benchmarks
+# EEG/PSG Format Benchmarks
 
-Benchmarks comparing **EDF**, **HDF5**, and **Apache Parquet** for reading,
-processing, and storing clinical EEG and PSG waveform data at scale.
+Comprehensive benchmarks comparing **EDF**, **HDF5**, and **Apache Parquet**
+for reading, processing, and storing clinical EEG and PSG waveform data.
 
-### Fairness note
+**Goal:** Investigate how multiple storage formats can be used together in a
+**hybrid architecture** — Parquet for immutable signal data (optimized for
+compression and cloud access), and HDF5 for metadata, annotations, and study
+information (optimized for hierarchical organization and local access).
 
-Parquet files include per-row-group min/max column statistics as part of the
-format spec — readers like pyarrow use these automatically to skip irrelevant
-data during filtered reads, with no extra work from the user.
+### Implementation notes
 
-HDF5 has no equivalent built-in index. To evaluate HDF5's best-case
-performance, the benchmark builds a custom `chunk_index` dataset at
-conversion time (a small lookup table of stamp ranges per chunk). **The HDF5
-results therefore represent an optimistic upper bound** — standard HDF5
-files without this index would need to scan the full timestamp dataset on
-every read, which is significantly slower. See the
-[benchmark report](benchmark/docs/benchmark_report.md) for details.
+**Parquet:** Uses built-in per-row-group min/max column statistics (part of
+the format spec) for predicate pushdown during filtered reads. No custom
+indexing required.
+
+**HDF5:** Standard HDF5 has no built-in index for skipping chunks based on
+data values. To enable fair comparison, the benchmark builds a custom
+`chunk_index` dataset at conversion time — a small lookup table of timestamp
+ranges per chunk. This represents HDF5's best-case performance with a
+purpose-built index. Standard HDF5 files without this index would require
+scanning the full timestamp dataset on every filtered read, which is
+significantly slower.
+
+**EDF:** Uses raw byte-offset seeks with no indexing. Fast for sequential
+reads on single files, but requires full file scan for filtered access.
+
+See the [benchmark report](benchmark/docs/benchmark_report.md) for detailed
+analysis and recommendations for hybrid architectures.
 
 ## Quickstart
 
@@ -44,7 +55,10 @@ as float32 Parquet from a public Azure Blob container. No credentials needed.
 | Channels         | 46 (10-20 + auxiliaries) |
 | Sample rate      | 256 Hz |
 | Duration         | ~12.9 hours (~11.85M samples) |
-| Size (Parquet)   | ~1.1 GB (float32, snappy) |
+| Size (Parquet)   | ~759 MiB (float32, snappy) |
+| Size (HDF5)      | ~1,343 MiB (float32, LZ4 columnar) |
+| Size (EDF)       | ~1,040 MiB (int16, uncompressed) |
+| Raw float32 baseline | 2,170 MiB (46 ch × 11.85M samples × 4 bytes + timestamps) |
 
 Data is cached locally in `.benchmark_cache/` after the first download.
 
@@ -52,24 +66,37 @@ Data is cached locally in `.benchmark_cache/` after the first download.
 
 | ID | Category | What it measures |
 |----|----------|-----------------|
-| A  | Random access | Read 1-min window from different positions |
-| B  | Channel subset | Read 4, 10, or all 46 channels |
-| C  | Re-montage | Read + bipolar montage computation |
-| D.1 | Filter pipeline | Full study: read + montage + notch + bandpass |
-| D.2 | Sliding FFT | Full study: pipeline + 10s FFT windows |
+| A  | Random access | Read 1-min window from different positions (0%, 50%, 75%, 95%) |
+| B  | Channel subset | Read 4, 10, or all 46 channels (1-min window) |
+| C  | Re-montage | Read + bipolar montage computation (1-min window) |
+| D.1 | Filter pipeline | Full study: read + montage + notch + bandpass filters |
+| D.2 | Sliding FFT | Full study: pipeline + 10s FFT windows with 2s stride |
 | E  | Window scaling | Throughput vs. window size (10s to 60min) |
 | F  | Compression | Parquet codec comparison (none/snappy/zstd/lz4) |
-| G  | Precision | EDF 16-bit quantization error |
+| G  | Precision | EDF 16-bit quantization error vs. float32 |
 | H  | Int32 storage | Int32 nanovolt and calibrated Parquet variants |
 | I  | Remote query | DuckDB remote Parquet vs. full-file download |
-| J  | Tuned comparison | Parquet vs HDF5 at matched block sizes |
+| J  | Tuned comparison | Parquet (snappy/LZ4) vs HDF5 at matched block sizes (5m–120m) |
 
 ## Formats compared
 
-- **EDF** — European Data Format. Row-oriented, 16-bit, no compression. Derived from Parquet.
+- **EDF** — European Data Format. Row-oriented, 16-bit signed integer, no compression.
+  In this benchmark, EDF files are derived from the source Parquet data. Fast
+  for sequential reads on single files, but limited to 16-bit precision and no
+  columnar access.
+
 - **HDF5 columnar** — One 1D dataset per channel, LZ4 compressed, chunked along time.
-- **HDF5 row-group** — Single 2D dataset (samples × channels), LZ4, chunk-aligned to Parquet row groups.
-- **Parquet** — Columnar, per-column encoding, snappy/zstd/lz4. Source format.
+  Hierarchical, self-describing, efficient for selective column reads at small
+  block sizes. Includes custom chunk index for fast seeks.
+
+- **HDF5 row-group** — Single 2D dataset (samples × channels), LZ4 compressed,
+  chunk-aligned to Parquet row groups. Tested for comparison but less efficient
+  than columnar layout for selective reads.
+
+- **Parquet** — Columnar, per-column encoding (dictionary, delta, RLE), multiple
+  compression codecs (snappy/zstd/lz4). Includes built-in row-group statistics
+  for predicate pushdown. Better compression ratio than HDF5, cloud-native,
+  supports SQL engines and byte-range queries.
 
 ## Configuration
 
@@ -180,10 +207,36 @@ studies:
 - **JSON results** → `benchmark/results/` (gitignored, regenerated each run)
 - **Markdown reports** → `benchmark/docs/`
 
+## Recommended hybrid architecture
+
+Based on benchmark results, a production system should use:
+
+1. **Parquet for immutable signal data:**
+   - Better compression (2.86× vs 2,170 MiB raw; 1.8× smaller than HDF5 LZ4)
+   - Cloud-native (byte-range queries, SQL engines like DuckDB/Spark)
+   - Scales efficiently to large block sizes (30m+)
+   - Supports remote access and distributed processing
+
+2. **HDF5 for metadata, annotations, and study information:**
+   - Hierarchical organization (patient info, study metadata, annotations)
+   - Self-describing format with flexible schema
+   - Efficient for structured data and selective reads
+   - Can include video sync metadata and chunk indices
+
+3. **Video storage (optional):**
+   - Store separately from HDF5 (video is large and has different access patterns)
+   - Include sync metadata in HDF5 for coordinated playback
+   - Use standard video codecs (H.264, VP9) for compatibility
+
+4. **EDF for legacy compatibility:**
+   - Use only when required for compatibility with existing systems
+   - Limited to 16-bit precision and no compression
+   - Suitable for simple sequential reads on single files
+
 ## Requirements
 
 - Python 3.10+
-- pyarrow 19+ (tested on 23.0.1)
+- pyarrow 23+ (tested on 23.0.1)
 - See `requirements.txt` for full dependency list
 - ~5 GB disk for cache (source data + derived format variants)
 

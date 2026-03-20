@@ -296,17 +296,62 @@ def _setup_parquet_compression_variants(paths: dict, src_dir: Path,
         out_dir.mkdir(parents=True, exist_ok=True)
         compression = None if codec == "none" else codec
 
+        output_files = []
         for src_file in src_files:
             table = pq.read_table(str(src_file))
             out_file = out_dir / src_file.name
             pq.write_table(table, str(out_file), compression=compression,
                            compression_level=level)
+            output_files.append(src_file.name)
+
+        # Create _metadata and _common_metadata for multi-file datasets
+        # These files enable fast filtered reads by allowing parquet clients to skip
+        # irrelevant dataset files.
+        if len(output_files) > 1:
+            _write_parquet_dataset_metadata(out_dir, output_files)
+
         paths[f"parquet_{label}"] = out_dir
 
 
 # Nanovolt scale: 1 int32 unit = 0.001 µV (i.e. 1 nV).
 # Range: ±2,147,483 µV — far beyond any EEG amplifier.
 NANOVOLT_SCALE = 0.001  # µV per int32 unit
+
+
+def _write_parquet_dataset_metadata(out_dir: Path, output_files: list[str]) -> None:
+    """Write _metadata and _common_metadata files for a multi-file Parquet dataset.
+
+    Parquet standard metadata files improve readback performance. Without them,
+    PyArrow must open every file to read footers. With them, PyArrow reads one small
+    metadata file and can skip irrelevant files entirely.
+
+    Args:
+        out_dir: Directory containing the Parquet files
+        output_files: List of Parquet file basenames (e.g., ["segment_00000.parquet", ...])
+    """
+    if not output_files:
+        return
+
+    # Read schema from first file
+    first_file = out_dir / output_files[0]
+    schema = pq.read_schema(str(first_file))
+
+    # Write _common_metadata (schema only)
+    pq.write_metadata(schema, str(out_dir / "_common_metadata"))
+
+    # Write _metadata (combined row-group metadata from all files)
+    combined_meta = None
+    for basename in output_files:
+        file_path = out_dir / basename
+        file_meta = pq.read_metadata(str(file_path))
+        file_meta.set_file_path(basename)
+        if combined_meta is None:
+            combined_meta = file_meta
+        else:
+            combined_meta.append_row_groups(file_meta)
+
+    if combined_meta is not None:
+        combined_meta.write_metadata_file(str(out_dir / "_metadata"))
 
 
 def _setup_int32_variants(paths: dict, output_base: Path, name: str) -> None:
@@ -353,6 +398,7 @@ def _setup_int32_variants(paths: dict, output_base: Path, name: str) -> None:
                     gain = val_range / 2_000_000_000 if val_range > 0 else 1.0
                     global_calibration[col_name] = {"gain": gain, "offset": mn}
 
+            output_files = []
             for src_file in src_files:
                 table = pq.read_table(str(src_file))
                 schema_meta = dict(table.schema.metadata or {})
@@ -394,6 +440,13 @@ def _setup_int32_variants(paths: dict, output_base: Path, name: str) -> None:
                 compression = None if codec == "none" else codec
                 pq.write_table(new_table, str(out_path / src_file.name),
                                compression=compression)
+                output_files.append(src_file.name)
+
+            # Create _metadata and _common_metadata for multi-file datasets
+            # These files enable fast filtered reads by allowing parquet clients
+            # to skip irrelevant files.
+            if len(output_files) > 1:
+                _write_parquet_dataset_metadata(out_path, output_files)
 
             paths[f"parquet_{label}"] = out_path
 
