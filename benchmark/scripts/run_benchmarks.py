@@ -454,14 +454,16 @@ def _setup_h5_variants(paths: dict, output_base: Path, name: str, info) -> None:
 
 
 def _write_h5_columnar(hf: h5py.File, src_files: list, all_cols: list[str]) -> None:
-    """Layout 1: one 1D dataset per channel + samplestamp, LZ4 compressed."""
-    # First pass: count total rows
+    """Layout 1: one 1D dataset per channel, LZ4 compressed.
+
+    Stores start_stamp as an attribute so readers can compute array indices
+    directly from stamp values without reading the samplestamp dataset.
+    """
     total_rows = 0
     for f in src_files:
         meta = pq.ParquetFile(str(f)).metadata
         total_rows += meta.num_rows
 
-    # Create datasets
     grp = hf.create_group("channels")
     ch_datasets = {}
     for col in all_cols:
@@ -473,59 +475,60 @@ def _write_h5_columnar(hf: h5py.File, src_files: list, all_cols: list[str]) -> N
         )
         ch_datasets[col] = ds
 
-    stamp_ds = hf.create_dataset(
-        "samplestamp", shape=(total_rows,), dtype=np.int64,
-        chunks=(min(H5_CHUNK_SAMPLES, total_rows),),
-        **hdf5plugin.LZ4(),
-    )
-
-    # Write data file by file
     offset = 0
+    first_stamp = None
     for src_file in src_files:
         table = pq.read_table(str(src_file), columns=["samplestamp"] + all_cols)
         n = table.num_rows
-        stamp_ds[offset:offset + n] = table.column("samplestamp").to_numpy()
+        stamps = table.column("samplestamp").to_numpy()
+        if first_stamp is None:
+            first_stamp = int(stamps[0])
         for col in all_cols:
             ch_datasets[col][offset:offset + n] = (
                 table.column(col).to_numpy().astype(np.float32, copy=False)
             )
         offset += n
 
+    # Store start_stamp so readers can compute index = stamp - start_stamp
+    hf.attrs["start_stamp"] = first_stamp
+    hf.attrs["total_samples"] = total_rows
+
 
 def _write_h5_rowgroup(hf: h5py.File, src_files: list,
                        all_cols: list[str], n_channels: int) -> None:
-    """Layout 2: single 2D dataset (samples × channels), row-group-aligned chunks."""
+    """Layout 2: single 2D dataset (samples × channels), row-group-aligned chunks.
+
+    Stores start_stamp as an attribute for direct index computation.
+    """
     total_rows = 0
     for f in src_files:
         meta = pq.ParquetFile(str(f)).metadata
         total_rows += meta.num_rows
 
-    # 2D dataset: (total_samples, n_channels), chunked (H5_CHUNK_SAMPLES, n_channels)
     data_ds = hf.create_dataset(
         "data", shape=(total_rows, n_channels), dtype=np.float32,
         chunks=(min(H5_CHUNK_SAMPLES, total_rows), n_channels),
         **hdf5plugin.LZ4(),
     )
-    stamp_ds = hf.create_dataset(
-        "samplestamp", shape=(total_rows,), dtype=np.int64,
-        chunks=(min(H5_CHUNK_SAMPLES, total_rows),),
-        **hdf5plugin.LZ4(),
-    )
-    # Store column order as attribute
     hf.attrs["column_order"] = all_cols
 
     offset = 0
+    first_stamp = None
     for src_file in src_files:
         table = pq.read_table(str(src_file), columns=["samplestamp"] + all_cols)
         n = table.num_rows
-        stamp_ds[offset:offset + n] = table.column("samplestamp").to_numpy()
-        # Build (n, n_channels) matrix
+        stamps = table.column("samplestamp").to_numpy()
+        if first_stamp is None:
+            first_stamp = int(stamps[0])
         block = np.column_stack([
             table.column(col).to_numpy().astype(np.float32, copy=False)
             for col in all_cols
         ])
         data_ds[offset:offset + n, :] = block
         offset += n
+
+    hf.attrs["start_stamp"] = first_stamp
+    hf.attrs["total_samples"] = total_rows
 
 # ===================================================================
 # Timing / measurement utilities
@@ -641,9 +644,13 @@ def _study_info(study_dir: Path, source_type: str = "parquet") -> StudyInfo:
 
 def _read_parquet_window(parquet_dir: Path, columns: list[str],
                          start_stamp: int, end_stamp: int) -> np.ndarray:
-    """Read a stamp window from Parquet, return (channels, samples) float32 matrix."""
+    """Read a stamp window from Parquet, return (channels, samples) float32 matrix.
+
+    Uses Parquet row-group statistics on the samplestamp column to skip
+    irrelevant row groups, then reads only the requested channel columns.
+    """
     table = pq.read_table(
-        str(parquet_dir), columns=["samplestamp"] + columns,
+        str(parquet_dir), columns=columns,
         filters=[("samplestamp", ">=", start_stamp), ("samplestamp", "<=", end_stamp)],
     )
     if table.num_rows == 0:
@@ -688,18 +695,20 @@ def _read_h5_columnar_window(h5_path: Path, columns: list[str],
                              start_stamp: int, end_stamp: int) -> np.ndarray:
     """Read a stamp window from columnar HDF5 (one dataset per channel).
 
+    Uses start_stamp attribute to compute array indices directly — no need
+    to read the samplestamp dataset. This is the HDF5 equivalent of Parquet's
+    row-group statistics: both formats can skip to the right data without
+    scanning the full file.
+
     Returns (channels, samples) float32 matrix.
     """
     with h5py.File(str(h5_path), "r") as hf:
-        stamps = hf["samplestamp"]
-        # Binary search for start/end indices
-        all_stamps = stamps[:]
-        mask = (all_stamps >= start_stamp) & (all_stamps <= end_stamp)
-        indices = np.where(mask)[0]
-        if len(indices) == 0:
+        base = int(hf.attrs["start_stamp"])
+        total = int(hf.attrs["total_samples"])
+        i_start = max(0, start_stamp - base)
+        i_end = min(total, end_stamp - base + 1)
+        if i_end <= i_start:
             return np.empty((len(columns), 0), dtype=np.float32)
-        i_start = int(indices[0])
-        i_end = int(indices[-1]) + 1
         grp = hf["channels"]
         rows = []
         for col in columns:
@@ -712,49 +721,32 @@ def _read_h5_rowgroup_window(h5_path: Path, columns: list[str],
                              start_stamp: int, end_stamp: int) -> np.ndarray:
     """Read a stamp window from row-group-aligned HDF5 (single 2D dataset).
 
+    Uses start_stamp attribute for direct index computation.
+    Reads only the requested column indices from the 2D dataset.
+
     Returns (channels, samples) float32 matrix.
     """
     with h5py.File(str(h5_path), "r") as hf:
-        stamps = hf["samplestamp"]
-        all_stamps = stamps[:]
-        mask = (all_stamps >= start_stamp) & (all_stamps <= end_stamp)
-        indices = np.where(mask)[0]
-        if len(indices) == 0:
+        base = int(hf.attrs["start_stamp"])
+        total = int(hf.attrs["total_samples"])
+        i_start = max(0, start_stamp - base)
+        i_end = min(total, end_stamp - base + 1)
+        if i_end <= i_start:
             return np.empty((len(columns), 0), dtype=np.float32)
-        i_start = int(indices[0])
-        i_end = int(indices[-1]) + 1
         col_order = list(hf.attrs["column_order"])
-        col_indices = [col_order.index(c) for c in columns]
-        data = hf["data"][i_start:i_end, :]
-        return data[:, col_indices].T.astype(np.float32, copy=False)
-
-
-def _read_h5_columnar_by_index(h5_path: Path, columns: list[str],
-                               start_idx: int, n_samples: int) -> np.ndarray:
-    """Read by sample index from columnar HDF5. Returns (channels, samples) float32."""
-    with h5py.File(str(h5_path), "r") as hf:
-        grp = hf["channels"]
-        rows = []
-        for col in columns:
-            label = col[3:] if col.startswith("ch_") else col
-            rows.append(grp[label][start_idx:start_idx + n_samples])
-        return np.vstack(rows).astype(np.float32, copy=False)
-
-
-def _read_h5_rowgroup_by_index(h5_path: Path, columns: list[str],
-                               start_idx: int, n_samples: int) -> np.ndarray:
-    """Read by sample index from row-group HDF5. Returns (channels, samples) float32."""
-    with h5py.File(str(h5_path), "r") as hf:
-        col_order = list(hf.attrs["column_order"])
-        col_indices = [col_order.index(c) for c in columns]
-        data = hf["data"][start_idx:start_idx + n_samples, :]
-        return data[:, col_indices].T.astype(np.float32, copy=False)
+        col_indices = sorted([col_order.index(c) for c in columns])
+        # Read only the requested columns using h5py fancy indexing
+        data = hf["data"][i_start:i_end, col_indices]
+        # Reorder columns to match the requested order
+        request_order = [col_order.index(c) for c in columns]
+        reindex = [col_indices.index(ci) for ci in request_order]
+        return data[:, reindex].T.astype(np.float32, copy=False)
 
 
 def _h5_total_samples(h5_path: Path) -> int:
     """Return total number of samples in an HDF5 file."""
     with h5py.File(str(h5_path), "r") as hf:
-        return hf["samplestamp"].shape[0]
+        return int(hf.attrs["total_samples"])
 
 
 
