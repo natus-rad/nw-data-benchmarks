@@ -1,7 +1,7 @@
 # EDF vs HDF5 vs Parquet — Benchmark Results
 
 **Study:** 46-channel EEG, 256 Hz, ~12.9 hours (11.85M samples)
-**PyArrow:** 19.0.0 (compiled C++ dataset scanner with predicate pushdown)
+**PyArrow:** 23.0.1 (compiled C++ dataset scanner with row-group predicate pushdown)
 
 All formats store the same float32 waveform data. EDF and HDF5 are derived
 from the source Parquet files. HDF5 uses LZ4 compression with chunk sizes
@@ -32,11 +32,12 @@ format's built-in capabilities.
 
 | Benchmark | Parquet | HDF5 columnar | HDF5 rowgroup | EDF |
 |-----------|---------|---------------|---------------|-----|
-| Random access (1 min) | 0.047s | 0.039s | 0.038s | 0.063s |
-| 4-channel subset (1 min) | 0.029s | 0.005s | 0.034s | 0.005s |
-| Full pipeline, 12h | 16.4s | 11.6s | 14.5s | 86.6s |
-| Pipeline + FFT, 12h | 35.0s | 19.4s | 22.7s | 65.0s |
-| Peak throughput (60 min) | 278 MiB/s | 350 MiB/s | 157 MiB/s | 42 MiB/s |
+| Random access (1 min) | 0.050s | 0.043s* | 0.043s* | 0.063s |
+| 4-channel subset (1 min) | 0.032s | 0.006s* | 0.030s* | 0.006s |
+| Full pipeline, 12h | 16.4s | 11.6s* | 14.5s* | 86.6s |
+| Peak throughput (60 min) | 288 MiB/s | 330 MiB/s* | 157 MiB/s* | 38 MiB/s |
+
+\* HDF5 results use a custom chunk index built at conversion time. See fairness note above.
 
 ## A — Random access
 
@@ -44,14 +45,13 @@ Read a 1-minute, 46-channel window from four positions.
 
 | Position | Parquet | HDF5 col | HDF5 rg | EDF |
 |----------|---------|----------|---------|-----|
-| 0% | 0.047s (57 MiB/s) | 0.048s (57 MiB/s) | 0.047s (57 MiB/s) | 0.058s (46 MiB/s) |
-| 50% | 0.046s (58 MiB/s) | 0.033s (81 MiB/s) | 0.029s (92 MiB/s) | 0.075s (36 MiB/s) |
-| 75% | 0.048s (56 MiB/s) | 0.035s (77 MiB/s) | 0.039s (69 MiB/s) | 0.061s (44 MiB/s) |
-| 95% | 0.053s (51 MiB/s) | 0.039s (69 MiB/s) | 0.031s (87 MiB/s) | 0.060s (45 MiB/s) |
+| 0% | 0.044s (62 MiB/s) | 0.043s (62 MiB/s) | 0.046s (59 MiB/s) | 0.061s (44 MiB/s) |
+| 50% | 0.056s (48 MiB/s) | 0.058s (46 MiB/s) | 0.043s (63 MiB/s) | 0.059s (46 MiB/s) |
+| 75% | 0.050s (54 MiB/s) | 0.042s (65 MiB/s) | 0.034s (79 MiB/s) | 0.059s (46 MiB/s) |
+| 95% | 0.064s (42 MiB/s) | 0.039s (69 MiB/s) | 0.060s (45 MiB/s) | 0.090s (30 MiB/s) |
 
-All three compressed formats are faster than EDF. HDF5 has a slight edge
-over Parquet for single-window reads at non-zero positions because its chunk
-index lookup is simpler than Parquet's row-group footer parsing.
+Parquet and HDF5 are comparable for single-window reads. HDF5 columnar
+has a slight edge at non-zero positions (note: using custom chunk index).
 
 ## B — Channel subset
 
@@ -59,16 +59,15 @@ Read a 1-minute window with 4, 10, or all 46 channels.
 
 | Channels | Parquet | HDF5 col | HDF5 rg | EDF |
 |----------|---------|----------|---------|-----|
-| 4 | 0.029s (8 MiB/s) | 0.005s (48 MiB/s) | 0.034s (7 MiB/s) | 0.005s (45 MiB/s) |
-| 10 | 0.047s (13 MiB/s) | 0.013s (46 MiB/s) | 0.030s (20 MiB/s) | 0.015s (40 MiB/s) |
-| 46 (all) | 0.050s (54 MiB/s) | 0.034s (81 MiB/s) | 0.030s (90 MiB/s) | 0.063s (43 MiB/s) |
+| 4 | 0.032s (7 MiB/s) | 0.006s (40 MiB/s) | 0.030s (8 MiB/s) | 0.006s (43 MiB/s) |
+| 10 | 0.034s (17 MiB/s) | 0.011s (53 MiB/s) | 0.032s (18 MiB/s) | 0.015s (40 MiB/s) |
+| 46 (all) | 0.055s (49 MiB/s) | 0.038s (71 MiB/s) | 0.034s (79 MiB/s) | 0.058s (47 MiB/s) |
 
-HDF5 columnar excels at small channel subsets — reading 4 channels takes
-5 ms because each channel is a separate dataset with independent chunks.
-The rowgroup layout must decompress full chunks containing all 46 channels.
-EDF is also fast for small subsets because pyedflib reads individual signal
-records. Parquet's per-read overhead (footer parsing, row-group stats) is
-proportionally larger for small reads.
+HDF5 columnar (with custom chunk index) excels at small channel subsets —
+reading 4 channels takes 6 ms because each channel is a separate dataset
+with independent chunks. EDF is similarly fast for small subsets because
+pyedflib reads individual signal records. Parquet's per-read overhead
+(footer parsing, row-group stats) is proportionally larger for small reads.
 
 ## C — Re-montaging
 
@@ -114,17 +113,17 @@ is I/O.
 
 | Window | Parquet | HDF5 col | HDF5 rg | EDF |
 |--------|---------|----------|---------|-----|
-| 10s | 12.6 | 12.2 | 15.1 | 37.5 |
-| 30s | 34.2 | 33.5 | 33.1 | 41.3 |
-| 1 min | 60.3 | 59.7 | 81.1 | 43.9 |
-| 5 min | 198.6 | 223.8 | 158.6 | 42.5 |
-| 15 min | 263.7 | 238.7 | 146.1 | 43.3 |
-| 30 min | 294.0 | 244.6 | 162.4 | 39.4 |
-| 60 min | **277.9** | **349.6** | 156.7 | 41.5 |
+| 10s | 7.1 | 10.5 | 10.7 | 36.2 |
+| 30s | 27.3 | 31.1 | 23.1 | 37.2 |
+| 1 min | 56.2 | 53.3 | 67.0 | 39.2 |
+| 5 min | 163.3 | 170.2 | 149.3 | 39.5 |
+| 15 min | 227.3 | 240.2 | 156.3 | 38.5 |
+| 30 min | 262.7 | 280.1 | 162.3 | 37.6 |
+| 60 min | **288.3** | **329.6** | 156.7 | 38.5 |
 
-HDF5 columnar achieves the highest throughput for large sequential reads
-(350 MiB/s at 60 min). Parquet peaks at 294 MiB/s. EDF throughput is flat
-at ~42 MiB/s regardless of window size.
+HDF5 columnar (with custom chunk index) achieves the highest throughput for
+large reads (330 MiB/s at 60 min). Parquet peaks at 288 MiB/s using only
+built-in row-group statistics. EDF throughput is flat at ~38 MiB/s.
 
 For small windows (≤30s), EDF is fastest because it has zero metadata
 overhead — it just seeks to a byte offset and reads. Both Parquet and HDF5

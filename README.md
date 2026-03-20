@@ -183,7 +183,7 @@ studies:
 ## Requirements
 
 - Python 3.10+
-- pyarrow 17+ (tested on 19.0.0 — uses compiled C++ dataset scanner)
+- pyarrow 19+ (tested on 23.0.1)
 - See `requirements.txt` for full dependency list
 - ~5 GB disk for cache (source data + derived format variants)
 
