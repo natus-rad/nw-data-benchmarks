@@ -23,7 +23,6 @@ import datetime
 import json
 import os
 import platform
-import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -170,7 +169,7 @@ def setup_study(study_dir: Path, cfg: dict, cache_dir: Path,
         # Derive EDF from Parquet data
         edf_path = output_base / f"{name}.edf"
         if not edf_path.exists():
-            print(f"  [convert] Parquet -> EDF ...")
+            print("  [convert] Parquet -> EDF ...")
             _parquet_to_edf(study_dir, edf_path)
         paths["edf"] = edf_path
 
@@ -556,7 +555,6 @@ def _write_h5_rowgroup(hf: h5py.File, src_files: list,
     hf.attrs["total_samples"] = total_rows
 
 
-
 # ===================================================================
 # Tuned format variants — matched chunk/row-group sizes for fair comparison
 # ===================================================================
@@ -688,6 +686,8 @@ def _setup_tuned_h5(paths, output_base, src_files, ch_cols,
     size_mib = out_file.stat().st_size / (1024 * 1024)
     n_chunks = (total_rows + cs - 1) // cs
     print(f"  [convert] {key}: {size_mib:.1f} MiB, {n_chunks} chunks")
+
+
 # ===================================================================
 # Timing / measurement utilities
 # ===================================================================
@@ -933,7 +933,6 @@ def _h5_total_samples(h5_path: Path) -> int:
         return int(hf.attrs["total_samples"])
 
 
-
 # ===================================================================
 # Montage & filter helpers
 # ===================================================================
@@ -1014,7 +1013,7 @@ def bench_random_access(info, paths: dict, cfg: dict) -> list[dict]:
 
         # HDF5 variants
         for h5_key, h5_read_fn in [("h5_columnar", _read_h5_columnar_window),
-                                    ("h5_rowgroup", _read_h5_rowgroup_window)]:
+                                   ("h5_rowgroup", _read_h5_rowgroup_window)]:
             if h5_key not in paths:
                 continue
             t, data = _timed(lambda s=start_stamp, e=end_stamp, fn=h5_read_fn, p=paths[h5_key]:
@@ -1073,7 +1072,7 @@ def bench_channel_subset(info, paths: dict, cfg: dict) -> list[dict]:
 
         # HDF5 variants
         for h5_key, h5_read_fn in [("h5_columnar", _read_h5_columnar_window),
-                                    ("h5_rowgroup", _read_h5_rowgroup_window)]:
+                                   ("h5_rowgroup", _read_h5_rowgroup_window)]:
             if h5_key not in paths:
                 continue
             t, data = _timed(lambda c=cols, fn=h5_read_fn, p=paths[h5_key]:
@@ -1085,7 +1084,6 @@ def bench_channel_subset(info, paths: dict, cfg: dict) -> list[dict]:
                             **_throughput(n_samples, n_ch, t)})
 
     return results
-
 
 
 # ===================================================================
@@ -1108,7 +1106,7 @@ def bench_remontage(info, paths: dict, cfg: dict) -> list[dict]:
     # Build list of formats to test
     formats_to_test = [("parquet", None), ("edf", None)]
     for h5_key, h5_fn in [("h5_columnar", _read_h5_columnar_window),
-                           ("h5_rowgroup", _read_h5_rowgroup_window)]:
+                          ("h5_rowgroup", _read_h5_rowgroup_window)]:
         if h5_key in paths:
             formats_to_test.append((h5_key, h5_fn))
 
@@ -1201,7 +1199,7 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
     # Build format list: (format_key, read_fn_or_None)
     d1_formats = [("parquet", None), ("edf", None)]
     for h5_key, h5_fn in [("h5_columnar", _read_h5_columnar_window),
-                           ("h5_rowgroup", _read_h5_rowgroup_window)]:
+                          ("h5_rowgroup", _read_h5_rowgroup_window)]:
         if h5_key in paths:
             d1_formats.append((h5_key, h5_fn))
 
@@ -1282,7 +1280,7 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
     # Build format list for D.2
     d2_formats = [("parquet", None), ("edf", None)]
     for h5_key, h5_fn in [("h5_columnar", _read_h5_columnar_window),
-                           ("h5_rowgroup", _read_h5_rowgroup_window)]:
+                          ("h5_rowgroup", _read_h5_rowgroup_window)]:
         if h5_key in paths:
             d2_formats.append((h5_key, h5_fn))
 
@@ -1430,7 +1428,7 @@ def bench_window_scaling(info, paths: dict, cfg: dict) -> list[dict]:
 
         # HDF5 variants
         for h5_key, h5_read_fn in [("h5_columnar", _read_h5_columnar_window),
-                                    ("h5_rowgroup", _read_h5_rowgroup_window)]:
+                                   ("h5_rowgroup", _read_h5_rowgroup_window)]:
             if h5_key not in paths:
                 continue
             t, data = _timed(lambda fn=h5_read_fn, p=paths[h5_key]:
@@ -1842,13 +1840,11 @@ def bench_remote_query(info, paths: dict, cfg: dict) -> list[dict]:
 
     sample_freq = info.sample_freq
     n_channels = len(info.channel_labels)
-    total_stamps = info.end_stamp - info.start_stamp
     window_sec = remote_cfg.get("window_sec", 600)  # 10 min
     window_stamps = int(window_sec * sample_freq)
     n_points = remote_cfg.get("n_random_points", 10)
     account = cfg["azure"]["storage_account"]
     container = cfg["azure"]["container"]
-    base_url = f"https://{account}.blob.core.windows.net/{container}"
 
     # Generate reproducible random positions
     rng = np.random.default_rng(42)
@@ -1942,14 +1938,13 @@ def bench_remote_query(info, paths: dict, cfg: dict) -> list[dict]:
             edf_read_path = dl_path
         else:
             # Estimate download time from parquet query bandwidth
-            print(f"    EDF: no remote path configured, using local file + estimated download")
+            print("    EDF: no remote path configured, using local file + estimated download")
             # Use the EDF file size / measured Azure bandwidth
             # We'll measure bandwidth from one parquet query and extrapolate
             dl_time = None
             edf_read_path = edf_path
 
         # Now read the 10 windows from local EDF
-        read_times = []
         for ch_label, ch_indices in [("all", None), ("10-20 (19ch)", list(range(min(n_subset, n_channels))))]:
             print(f"    EDF local read [{ch_label}] ... ", end="", flush=True)
             local_times = []
@@ -2085,7 +2080,7 @@ def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
         _print_result(row)
 
     # --- J.3: Window scaling ---
-    print(f"\n  --- J.3: Window scaling ---")
+    print("\n  --- J.3: Window scaling ---")
     window_sizes = cfg.get("window_sizes", [10, 60, 300, 900, 3600])
     for ws in window_sizes:
         ws_stamps = int(ws * sample_freq)
@@ -2112,14 +2107,13 @@ def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
             _print_result(row)
 
     # --- J.4: Full-study sequential read (all channels, chunked) ---
-    print(f"\n  --- J.4: Full-study sequential read ---")
+    print("\n  --- J.4: Full-study sequential read ---")
     chunk_sec = 300
     chunk_stamps = int(chunk_sec * sample_freq)
     bench_start = info.start_stamp
     bench_end = info.end_stamp
 
     for key, block_label, codec, path in variants:
-        t_total = 0.0
         samples_read = 0
         t_wall_start = time.perf_counter()
         for cs, ce in _chunk_ranges(bench_start, bench_end, chunk_stamps):
@@ -2138,6 +2132,7 @@ def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
         _print_result(row)
 
     return results
+
 
 # ===================================================================
 # Benchmark registry
@@ -2179,7 +2174,7 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> dict:
         print("\n=== DRY RUN ===")
         print(f"Config: {args.config}")
         print(f"Cache dir: {cache_dir}")
-        print(f"\nStudies:")
+        print("\nStudies:")
         for study in cfg.get("studies", []):
             src = study.get("source", "parquet")
             path = study.get("remote_parquet_url") or study.get("blob_prefix", "")
@@ -2206,9 +2201,9 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> dict:
     }
 
     for study_cfg in cfg.get("studies", []):
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"Study: {study_cfg['name']}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
         source_type = study_cfg.get("source", "parquet")
 
@@ -2216,7 +2211,7 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> dict:
         study_dir = download_study(cfg, study_cfg, args)
 
         # Setup: convert / derive all format variants
-        print(f"\n  --- Setup ---")
+        print("\n  --- Setup ---")
         paths = setup_study(study_dir, cfg, cache_dir, source_type=source_type)
 
         # Get study info (from Parquet files or SDK)
@@ -2267,9 +2262,9 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> dict:
     out_file = out_dir / f"{run_id}_benchmark_results.json"
     with open(out_file, "w") as f:
         json.dump(output, f, indent=2, default=str)
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Results written to: {out_file}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     return output
 
@@ -2296,7 +2291,6 @@ def _estimate_runs(cfg: dict, selected: list) -> int:
 
 def _print_result(r: dict) -> None:
     """Pretty-print a single benchmark result."""
-    cat = r.get("category", "")
     fmt = r.get("format", "")
     t = r.get("wall_clock_seconds", 0)
 
