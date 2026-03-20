@@ -77,6 +77,78 @@ studies:
 
 Parquet files must have `samplestamp` (int64) and `ch_<label>` (float32) columns.
 
+### Starting from your own HDF5 data
+
+If you have EEG data in HDF5 already, you can convert it to the formats
+used by these benchmarks with a short script. The benchmark suite expects:
+
+- **Parquet:** one `samplestamp` column (int64) and one `ch_<label>` column
+  (float32, microvolts) per channel. Samplestamp values must be monotonically
+  non-decreasing but can have gaps and variable stride.
+- **HDF5 columnar:** one 1D dataset per channel under `/channels/<label>`,
+  plus a `/samplestamp` dataset and a `/chunk_index` dataset for fast seeks.
+
+Here's an example conversion script:
+
+```python
+import h5py, numpy as np, pyarrow as pa, pyarrow.parquet as pq
+import hdf5plugin
+
+# -- Load your HDF5 data --
+with h5py.File("my_study.h5", "r") as hf:
+    # Adapt these lines to match your file's layout
+    channels = {name: hf["eeg"][name][:] for name in hf["eeg"]}
+    timestamps = hf["timestamps"][:]  # sample-level timestamps
+
+# -- Write Parquet (snappy, 5-minute row groups) --
+sample_rate = 256  # adjust to your data
+row_group_size = 5 * 60 * sample_rate  # 5 minutes
+
+cols = {"samplestamp": pa.array(timestamps, type=pa.int64())}
+for name, data in channels.items():
+    cols[f"ch_{name}"] = pa.array(data.astype(np.float32), type=pa.float32())
+
+table = pa.table(cols)
+pq.write_table(table, "my_study.parquet",
+               compression="snappy", row_group_size=row_group_size,
+               write_statistics=True)
+
+# -- Write HDF5 columnar (LZ4, matched chunk size) --
+n_samples = len(timestamps)
+chunk_size = min(row_group_size, n_samples)
+
+with h5py.File("my_study_columnar.h5", "w") as hf:
+    grp = hf.create_group("channels")
+    for name, data in channels.items():
+        grp.create_dataset(name, data=data.astype(np.float32),
+                           chunks=(chunk_size,), **hdf5plugin.LZ4())
+
+    stamp_ds = hf.create_dataset("samplestamp", data=timestamps,
+                                 chunks=(chunk_size,), **hdf5plugin.LZ4())
+
+    # Build chunk index for fast seeks (required by the benchmark reader)
+    n_chunks = (n_samples + chunk_size - 1) // chunk_size
+    index = np.empty((n_chunks, 3), dtype=np.int64)
+    for i in range(n_chunks):
+        s, e = i * chunk_size, min((i + 1) * chunk_size, n_samples)
+        index[i] = [s, timestamps[s], timestamps[e - 1]]
+    hf.create_dataset("chunk_index", data=index)
+    hf.attrs["total_samples"] = n_samples
+```
+
+Then point the config at your local files:
+
+```yaml
+studies:
+  - name: "my_study"
+    source: "parquet"
+    local_path: "/path/to/directory/containing/my_study.parquet"
+```
+
+The benchmark suite will derive EDF and additional HDF5/Parquet variants
+(different block sizes, compression codecs) automatically from the source
+Parquet data.
+
 ### Using native NeuroWorks data (optional)
 
 If the `nwreader` SDK is installed, you can start from ERD format:
