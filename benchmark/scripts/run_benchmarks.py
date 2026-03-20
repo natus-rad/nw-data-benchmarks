@@ -607,29 +607,45 @@ def _setup_tuned_variants(paths: dict, output_base: Path, info,
 
 def _setup_tuned_parquet(paths, output_base, src_files, ch_cols,
                          label, row_group_size):
-    """Write a single consolidated Parquet file with a specific row-group size."""
-    key = f"tuned_pq_{label}"
-    out_file = output_base / f"tuned_pq_{label}.parquet"
-    if out_file.exists():
-        paths[key] = out_file
-        print(f"  [cached] {key} -> {out_file}")
-        return
+    """Write single consolidated Parquet files with specific row-group size.
 
-    print(f"  [convert] tuned Parquet (rg={label}, snappy) ...")
+    Creates both snappy and lz4 variants for comparison.
+    """
+    import pyarrow as pa
+
     # Read all source files into one table
     tables = [pq.read_table(str(f)) for f in src_files]
-    import pyarrow as pa
     combined = pa.concat_tables(tables)
 
-    pq.write_table(combined, str(out_file),
-                   compression="snappy",
-                   row_group_size=row_group_size,
-                   write_statistics=True)
-    paths[key] = out_file
-    size_mib = out_file.stat().st_size / (1024 * 1024)
-    pf = pq.ParquetFile(str(out_file))
-    print(f"  [convert] {key}: {size_mib:.1f} MiB, "
-          f"{pf.metadata.num_row_groups} row groups")
+    # Create snappy variant
+    key_snappy = f"tuned_pq_{label}"
+    out_file_snappy = output_base / f"tuned_pq_{label}.parquet"
+    if not out_file_snappy.exists():
+        print(f"  [convert] tuned Parquet (rg={label}, snappy) ...")
+        pq.write_table(combined, str(out_file_snappy),
+                       compression="snappy",
+                       row_group_size=row_group_size,
+                       write_statistics=True)
+        size_mib = out_file_snappy.stat().st_size / (1024 * 1024)
+        pf = pq.ParquetFile(str(out_file_snappy))
+        print(f"  [convert] {key_snappy}: {size_mib:.1f} MiB, "
+              f"{pf.metadata.num_row_groups} row groups")
+    paths[key_snappy] = out_file_snappy
+
+    # Create lz4 variant
+    key_lz4 = f"tuned_pq_lz4_{label}"
+    out_file_lz4 = output_base / f"tuned_pq_lz4_{label}.parquet"
+    if not out_file_lz4.exists():
+        print(f"  [convert] tuned Parquet (rg={label}, lz4) ...")
+        pq.write_table(combined, str(out_file_lz4),
+                       compression="lz4",
+                       row_group_size=row_group_size,
+                       write_statistics=True)
+        size_mib = out_file_lz4.stat().st_size / (1024 * 1024)
+        pf = pq.ParquetFile(str(out_file_lz4))
+        print(f"  [convert] {key_lz4}: {size_mib:.1f} MiB, "
+              f"{pf.metadata.num_row_groups} row groups")
+    paths[key_lz4] = out_file_lz4
 
 
 def _setup_tuned_h5(paths, output_base, src_files, ch_cols,
@@ -2002,9 +2018,9 @@ def _read_tuned_pq(path: Path, columns: list[str],
 def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
     """Benchmark J: Tuned Parquet vs HDF5 with matched block sizes.
 
-    Tests each format at 300s, 60m, and 120m block sizes. Parquet uses
-    snappy; HDF5 uses LZ4 — each format's fastest decompression codec.
-    Runs random access, channel subset, and window scaling sub-benchmarks.
+    Tests each format at multiple block sizes. Parquet tests both snappy
+    and LZ4 codecs; HDF5 uses LZ4. Runs random access, channel subset,
+    and window scaling sub-benchmarks.
     """
     results = []
     sample_freq = info.sample_freq
@@ -2019,10 +2035,13 @@ def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
     block_sizes = _get_tuned_block_sizes(cfg, sample_freq)
     variants = []
     for label in block_sizes:
-        pq_key = f"tuned_pq_{label}"
+        pq_key_snappy = f"tuned_pq_{label}"
+        pq_key_lz4 = f"tuned_pq_lz4_{label}"
         h5_key = f"tuned_h5_{label}"
-        if pq_key in paths:
-            variants.append((pq_key, label, "parquet_snappy", paths[pq_key]))
+        if pq_key_snappy in paths:
+            variants.append((pq_key_snappy, label, "parquet_snappy", paths[pq_key_snappy]))
+        if pq_key_lz4 in paths:
+            variants.append((pq_key_lz4, label, "parquet_lz4", paths[pq_key_lz4]))
         if h5_key in paths:
             variants.append((h5_key, label, "hdf5_lz4", paths[h5_key]))
 
