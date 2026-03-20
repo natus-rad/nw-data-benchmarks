@@ -47,6 +47,7 @@ Data is cached locally in `.benchmark_cache/` after the first download.
 | G  | Precision | EDF 16-bit quantization error |
 | H  | Int32 storage | Int32 nanovolt and calibrated Parquet variants |
 | I  | Remote query | DuckDB remote Parquet vs. full-file download |
+| J  | Tuned comparison | Parquet vs HDF5 at matched block sizes |
 
 ## Formats compared
 

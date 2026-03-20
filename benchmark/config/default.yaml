@@ -51,6 +51,7 @@ benchmarks:
   - precision_loss       # G: EDF 16-bit quantization error
   - int32_storage        # H: int32 storage modes
   - remote_query         # I: remote Parquet (DuckDB) vs EDF download
+  - tuned_comparison     # J: tuned Parquet vs HDF5 (matched block sizes)
 
 # Parquet compression variants for category F.
 parquet_compression:

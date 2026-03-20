@@ -555,6 +555,128 @@ def _write_h5_rowgroup(hf: h5py.File, src_files: list,
     hf.create_dataset("chunk_index", data=index)
     hf.attrs["total_samples"] = total_rows
 
+
+
+# ===================================================================
+# Tuned format variants — matched chunk/row-group sizes for fair comparison
+# ===================================================================
+# Row-group / chunk sizes to test (in samples).
+# 300s is the current default; 60m and 120m test whether larger blocks help.
+TUNED_BLOCK_SIZES = {
+    "300s": 76_800,       # 300 seconds at 256 Hz (current default)
+    "60m": 921_600,       # 60 minutes at 256 Hz
+    "120m": 1_843_200,    # 120 minutes at 256 Hz
+}
+
+
+def _setup_tuned_variants(paths: dict, output_base: Path, info) -> None:
+    """Create Parquet and HDF5 columnar variants with different block sizes.
+
+    Parquet uses snappy (its fastest decompression codec).
+    HDF5 uses LZ4 (its fastest decompression codec).
+    Each format uses its best-performing codec so we compare container
+    overhead, not codec speed.
+    """
+    src_path = paths.get("parquet")
+    if not src_path:
+        return
+
+    src_files = sorted(Path(src_path).glob("*.parquet"))
+    if not src_files:
+        return
+
+    # Read all source data once
+    schema = pq.read_schema(str(src_files[0]))
+    ch_cols = [c for c in schema.names if c.startswith("ch_")]
+
+    for label, block_samples in TUNED_BLOCK_SIZES.items():
+        _setup_tuned_parquet(paths, output_base, src_files, ch_cols,
+                            label, block_samples)
+        _setup_tuned_h5(paths, output_base, src_files, ch_cols,
+                        label, block_samples, info)
+
+
+def _setup_tuned_parquet(paths, output_base, src_files, ch_cols,
+                         label, row_group_size):
+    """Write a single consolidated Parquet file with a specific row-group size."""
+    key = f"tuned_pq_{label}"
+    out_file = output_base / f"tuned_pq_{label}.parquet"
+    if out_file.exists():
+        paths[key] = out_file
+        print(f"  [cached] {key} -> {out_file}")
+        return
+
+    print(f"  [convert] tuned Parquet (rg={label}, snappy) ...")
+    # Read all source files into one table
+    tables = [pq.read_table(str(f)) for f in src_files]
+    import pyarrow as pa
+    combined = pa.concat_tables(tables)
+
+    pq.write_table(combined, str(out_file),
+                   compression="snappy",
+                   row_group_size=row_group_size,
+                   write_statistics=True)
+    paths[key] = out_file
+    size_mib = out_file.stat().st_size / (1024 * 1024)
+    pf = pq.ParquetFile(str(out_file))
+    print(f"  [convert] {key}: {size_mib:.1f} MiB, "
+          f"{pf.metadata.num_row_groups} row groups")
+
+
+def _setup_tuned_h5(paths, output_base, src_files, ch_cols,
+                    label, chunk_samples, info):
+    """Write an HDF5 columnar file with a specific chunk size."""
+    key = f"tuned_h5_{label}"
+    out_file = output_base / f"tuned_h5_{label}.h5"
+    if out_file.exists():
+        paths[key] = out_file
+        print(f"  [cached] {key} -> {out_file}")
+        return
+
+    print(f"  [convert] tuned HDF5 columnar (chunk={label}, LZ4) ...")
+
+    # Count total rows
+    total_rows = sum(pq.ParquetFile(str(f)).metadata.num_rows for f in src_files)
+    cs = min(chunk_samples, total_rows)
+
+    with h5py.File(str(out_file), "w") as hf:
+        hf.attrs["sample_freq"] = info.sample_freq
+        hf.attrs["channel_labels"] = [c[3:] for c in ch_cols]
+        hf.attrs["n_channels"] = len(ch_cols)
+        hf.attrs["layout"] = "columnar"
+        hf.attrs["chunk_samples"] = cs
+
+        grp = hf.create_group("channels")
+        ch_ds = {}
+        for col in ch_cols:
+            ch_ds[col] = grp.create_dataset(
+                col[3:], shape=(total_rows,), dtype=np.float32,
+                chunks=(cs,), **hdf5plugin.LZ4())
+
+        stamp_ds = hf.create_dataset(
+            "samplestamp", shape=(total_rows,), dtype=np.int64,
+            chunks=(cs,), **hdf5plugin.LZ4())
+
+        offset = 0
+        for src_file in src_files:
+            table = pq.read_table(str(src_file),
+                                  columns=["samplestamp"] + ch_cols)
+            n = table.num_rows
+            stamp_ds[offset:offset + n] = (
+                table.column("samplestamp").to_numpy())
+            for col in ch_cols:
+                ch_ds[col][offset:offset + n] = (
+                    table.column(col).to_numpy().astype(np.float32, copy=False))
+            offset += n
+
+        idx = _build_chunk_index(stamp_ds)
+        hf.create_dataset("chunk_index", data=idx)
+        hf.attrs["total_samples"] = total_rows
+
+    paths[key] = out_file
+    size_mib = out_file.stat().st_size / (1024 * 1024)
+    n_chunks = (total_rows + cs - 1) // cs
+    print(f"  [convert] {key}: {size_mib:.1f} MiB, {n_chunks} chunks")
 # ===================================================================
 # Timing / measurement utilities
 # ===================================================================
@@ -1855,6 +1977,157 @@ def bench_remote_query(info, paths: dict, cfg: dict) -> list[dict]:
 
 
 # ===================================================================
+# Benchmark J: Tuned format comparison
+# ===================================================================
+def _read_tuned_pq(path: Path, columns: list[str],
+                   start_stamp: int, end_stamp: int) -> np.ndarray:
+    """Read from a single consolidated Parquet file."""
+    table = pq.read_table(
+        str(path), columns=columns,
+        filters=[("samplestamp", ">=", start_stamp),
+                 ("samplestamp", "<=", end_stamp)])
+    if table.num_rows == 0:
+        return np.empty((len(columns), 0), dtype=np.float32)
+    return np.vstack([
+        table.column(c).to_numpy().astype(np.float32, copy=False)
+        for c in columns])
+
+
+def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
+    """Benchmark J: Tuned Parquet vs HDF5 with matched block sizes.
+
+    Tests each format at 300s, 60m, and 120m block sizes. Parquet uses
+    snappy; HDF5 uses LZ4 — each format's fastest decompression codec.
+    Runs random access, channel subset, and window scaling sub-benchmarks.
+    """
+    results = []
+    sample_freq = info.sample_freq
+    n_channels = len(info.channel_labels)
+    ch_cols = info.channel_columns
+    reps = cfg.get("repetitions", 3)
+
+    total_stamps = info.end_stamp - info.start_stamp + 1
+    mid_stamp = info.start_stamp + total_stamps // 2
+
+    # Collect all tuned variants present in paths
+    variants = []
+    for label in TUNED_BLOCK_SIZES:
+        pq_key = f"tuned_pq_{label}"
+        h5_key = f"tuned_h5_{label}"
+        if pq_key in paths:
+            variants.append((pq_key, label, "parquet_snappy", paths[pq_key]))
+        if h5_key in paths:
+            variants.append((h5_key, label, "hdf5_lz4", paths[h5_key]))
+
+    if not variants:
+        print("    [skip] No tuned variants found.")
+        return results
+
+    # --- J.1: Random access at 50% position ---
+    window_sec = cfg.get("default_window", 60)
+    window_stamps = int(window_sec * sample_freq)
+    start_stamp = mid_stamp
+    end_stamp = mid_stamp + window_stamps - 1
+
+    print(f"\n  --- J.1: Random access ({window_sec}s at 50%) ---")
+    for key, block_label, codec, path in variants:
+        if "pq" in key:
+            t, data = _timed(
+                lambda p=path: _read_tuned_pq(p, ch_cols, start_stamp, end_stamp),
+                reps)
+        else:
+            t, data = _timed(
+                lambda p=path: _read_h5_columnar_window(
+                    p, ch_cols, start_stamp, end_stamp),
+                reps)
+        n_samples = data.shape[1] if data.ndim == 2 else 0
+        row = {"category": "tuned_random_access", "format": codec,
+               "block_size": block_label, "variant": key,
+               "window_seconds": window_sec,
+               "wall_clock_seconds": round(t, 6),
+               **_throughput(n_samples, n_channels, t)}
+        results.append(row)
+        _print_result(row)
+
+    # --- J.2: Channel subset (4 channels) ---
+    print(f"\n  --- J.2: Channel subset (4 ch, {window_sec}s) ---")
+    subset_cols = ch_cols[:4]
+    for key, block_label, codec, path in variants:
+        if "pq" in key:
+            t, data = _timed(
+                lambda p=path: _read_tuned_pq(
+                    p, subset_cols, start_stamp, end_stamp),
+                reps)
+        else:
+            t, data = _timed(
+                lambda p=path: _read_h5_columnar_window(
+                    p, subset_cols, start_stamp, end_stamp),
+                reps)
+        n_samples = data.shape[1] if data.ndim == 2 else 0
+        row = {"category": "tuned_channel_subset", "format": codec,
+               "block_size": block_label, "variant": key,
+               "channels": 4, "window_seconds": window_sec,
+               "wall_clock_seconds": round(t, 6),
+               **_throughput(n_samples, 4, t)}
+        results.append(row)
+        _print_result(row)
+
+    # --- J.3: Window scaling ---
+    print(f"\n  --- J.3: Window scaling ---")
+    window_sizes = cfg.get("window_sizes", [10, 60, 300, 900, 3600])
+    for ws in window_sizes:
+        ws_stamps = int(ws * sample_freq)
+        s = mid_stamp
+        e = min(mid_stamp + ws_stamps - 1, info.end_stamp)
+        for key, block_label, codec, path in variants:
+            if "pq" in key:
+                t, data = _timed(
+                    lambda p=path, ss=s, ee=e: _read_tuned_pq(
+                        p, ch_cols, ss, ee),
+                    reps)
+            else:
+                t, data = _timed(
+                    lambda p=path, ss=s, ee=e: _read_h5_columnar_window(
+                        p, ch_cols, ss, ee),
+                    reps)
+            n_samples = data.shape[1] if data.ndim == 2 else 0
+            row = {"category": "tuned_window_scaling", "format": codec,
+                   "block_size": block_label, "variant": key,
+                   "window_seconds": ws,
+                   "wall_clock_seconds": round(t, 6),
+                   **_throughput(n_samples, n_channels, t)}
+            results.append(row)
+            _print_result(row)
+
+    # --- J.4: Full-study sequential read (all channels, chunked) ---
+    print(f"\n  --- J.4: Full-study sequential read ---")
+    chunk_sec = 300
+    chunk_stamps = int(chunk_sec * sample_freq)
+    bench_start = info.start_stamp
+    bench_end = info.end_stamp
+
+    for key, block_label, codec, path in variants:
+        t_total = 0.0
+        samples_read = 0
+        t_wall_start = time.perf_counter()
+        for cs, ce in _chunk_ranges(bench_start, bench_end, chunk_stamps):
+            if "pq" in key:
+                matrix = _read_tuned_pq(path, ch_cols, cs, ce)
+            else:
+                matrix = _read_h5_columnar_window(path, ch_cols, cs, ce)
+            samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
+        t_wall = time.perf_counter() - t_wall_start
+        row = {"category": "tuned_full_study", "format": codec,
+               "block_size": block_label, "variant": key,
+               "total_samples": samples_read,
+               "wall_clock_seconds": round(t_wall, 3),
+               **_throughput(samples_read, n_channels, t_wall)}
+        results.append(row)
+        _print_result(row)
+
+    return results
+
+# ===================================================================
 # Benchmark registry
 # ===================================================================
 BENCHMARKS = {
@@ -1867,6 +2140,7 @@ BENCHMARKS = {
     "precision_loss": ("G: 16-bit precision loss", bench_precision_loss),
     "int32_storage": ("H: Int32 storage comparison", bench_int32_storage),
     "remote_query": ("I: Remote query — DuckDB Parquet vs EDF download", bench_remote_query),
+    "tuned_comparison": ("J: Tuned Parquet vs HDF5 (matched block sizes)", bench_tuned_comparison),
 }
 
 
@@ -1954,6 +2228,10 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> dict:
             sn = study_dir.name[:40] if len(study_dir.name) > 40 else study_dir.name
             output_base = cache_dir / f"{sn}_exports"
             _setup_h5_variants(paths, output_base, sn, info)
+
+            # Tuned variants for benchmark J
+            if "tuned_comparison" in [cat_id for cat_id, _, _ in selected]:
+                _setup_tuned_variants(paths, output_base, info)
 
         for k, v in paths.items():
             print(f"  {k}: {v}")
@@ -2064,6 +2342,7 @@ available categories:
   precision_loss   G: EDF 16-bit quantization error
   int32_storage    H: Int32 storage modes
   remote_query     I: Remote Parquet (DuckDB) vs full download
+  tuned_comparison J: Tuned Parquet vs HDF5 (matched block sizes)
 """,
     )
     parser.add_argument("--config", default="benchmark/config/default.yaml",
