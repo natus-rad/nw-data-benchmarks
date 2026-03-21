@@ -2116,19 +2116,28 @@ def bench_remote_query(info, paths: dict, cfg: dict,
         edf_size = edf_path.stat().st_size
         edf_total = _edf_total_samples(edf_path)
 
-        # Simulate download: if blob path exists, actually download; otherwise estimate
+        # Download or estimate: if a blob path is configured, perform the real
+        # download and measure it; otherwise compute a theoretical download time
+        # at 800 Mbps so the EDF total is directly comparable to a real run
+        # rather than understating the cost.
+        _THEORETICAL_MBPS = 800
         if edf_blob_path:
             print(f"    EDF download ({edf_size / 1024 / 1024:.0f} MiB) ... ", end="", flush=True)
             dl_time, dl_path = _download_edf_from_azure(cfg, edf_blob_path, args)
             print(f"{dl_time:.1f}s")
             edf_read_path = dl_path
+            dl_estimated = False
         else:
-            # Estimate download time from parquet query bandwidth
-            print("    EDF: no remote path configured, using local file + estimated download")
-            # Use the EDF file size / measured Azure bandwidth
-            # We'll measure bandwidth from one parquet query and extrapolate
-            dl_time = None
+            # No remote EDF path — compute theoretical download time at
+            # 800 Mbps so the EDF side is not artificially cheaper.
+            dl_time = (edf_size * 8) / (_THEORETICAL_MBPS * 1e6)
+            print(
+                f"    EDF: no remote path configured — using local file + "
+                f"theoretical {_THEORETICAL_MBPS} Mbps download "
+                f"({dl_time:.1f}s for {edf_size / 1024 / 1024:.0f} MiB)"
+            )
             edf_read_path = edf_path
+            dl_estimated = True
 
         # Build the 10-20 channel index list from the EDF header labels (not
         # info.channel_labels) in the canonical CHANNELS_10_20 order so the
@@ -2161,9 +2170,10 @@ def bench_remote_query(info, paths: dict, cfg: dict,
                 local_times.append(time.perf_counter() - t0)
 
             local_total = sum(local_times)
-            combined = (dl_time if dl_time is not None else 0) + local_total
+            combined = dl_time + local_total
             n_ch = len(ch_indices) if ch_indices else n_channels
-            print(f"{local_total:.1f}s read" + (f" + {dl_time:.1f}s download = {combined:.1f}s" if dl_time is not None else ""))
+            dl_label = f"~{dl_time:.1f}s dl (est.)" if dl_estimated else f"{dl_time:.1f}s dl"
+            print(f"{local_total:.1f}s read + {dl_label} = {combined:.1f}s total")
 
             results.append({
                 "category": "remote_query",
@@ -2173,7 +2183,8 @@ def bench_remote_query(info, paths: dict, cfg: dict,
                 "n_channels": n_ch,
                 "n_windows": n_points,
                 "window_seconds": window_sec,
-                "download_seconds": round(dl_time, 3) if dl_time is not None else None,
+                "download_seconds": round(dl_time, 3),
+                "download_estimated": dl_estimated,
                 "edf_file_size_mib": round(edf_size / (1024 * 1024), 1),
                 "read_seconds": round(local_total, 3),
                 "total_wall_seconds": round(combined, 3),
