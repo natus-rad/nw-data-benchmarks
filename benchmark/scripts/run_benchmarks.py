@@ -2110,22 +2110,18 @@ def bench_remote_query(info, paths: dict, cfg: dict,
             dl_time = None
             edf_read_path = edf_path
 
-        # Build the 10-20 channel index list by matching labels so the EDF
-        # subset is consistent with the Parquet subset regardless of channel
-        # order.  Falls back to the first n_subset channels if fewer than
-        # n_subset 10-20 labels are found in the file.
-        ten_twenty_labels = {
-            "Fp1", "Fp2",
-            "F7", "F3", "Fz", "F4", "F8",
-            "T3", "C3", "Cz", "C4", "T4",
-            "T5", "P3", "Pz", "P4", "T6",
-            "O1", "O2",
-        }
-        label_to_idx = {lbl.strip().upper(): i
-                        for i, lbl in enumerate(info.channel_labels)}
-        matched = [label_to_idx[lbl.upper()]
-                   for lbl in ten_twenty_labels
-                   if lbl.upper() in label_to_idx]
+        # Build the 10-20 channel index list from the EDF header labels (not
+        # info.channel_labels) in the canonical CHANNELS_10_20 order so the
+        # EDF subset is consistent with the Parquet subset in both membership
+        # and ordering.  Falls back to the first n_subset channels if fewer
+        # than n_subset 10-20 labels are present in this file.
+        import pyedflib as _pyedflib
+        with _pyedflib.EdfReader(str(edf_read_path)) as _rdr:
+            edf_labels = [lbl.strip().upper() for lbl in _rdr.getSignalLabels()]
+        edf_label_to_idx = {lbl: i for i, lbl in enumerate(edf_labels)}
+        matched = [edf_label_to_idx[lbl.upper()]
+                   for lbl in CHANNELS_10_20
+                   if lbl.upper() in edf_label_to_idx]
         subset_indices = (matched[:n_subset] if len(matched) >= n_subset
                           else list(range(min(n_subset, n_channels))))
 
