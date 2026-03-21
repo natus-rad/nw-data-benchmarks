@@ -145,7 +145,7 @@ def download_study(cfg: dict, study: dict, args: argparse.Namespace) -> Path:
         local_path = study_cache / rel
         local_path.parent.mkdir(parents=True, exist_ok=True)
         with open(local_path, "wb") as f:
-            f.write(container_client.download_blob(blob).readall())
+            container_client.download_blob(blob).readinto(f)
         count += 1
         print(f"    {rel} ({blob.size / 1024 / 1024:.1f} MiB)")
     print(f"  [download] {count} files -> {study_cache}")
