@@ -82,10 +82,9 @@ class StudyInfo:
         # of gaps anywhere within or between partition files.
         stamps = np.concatenate([
             pq.read_table(str(f), columns=["samplestamp"])
-              .column("samplestamp").to_pydict()["samplestamp"]
+              .column("samplestamp").to_numpy()
             for f in files
-        ])
-        stamps = np.asarray(stamps, dtype=np.int64)
+        ]).astype(np.int64)
 
         obj = cls(
             sample_freq=float(sample_freq),

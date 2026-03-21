@@ -36,7 +36,7 @@ def _throughput(n_samples: int, n_channels: int, seconds: float) -> dict:
 
 def _full_study_duration_hours(info) -> int:
     """Return study duration rounded down to the nearest whole hour."""
-    total_sec = (info.end_stamp - info.start_stamp + 1) / info.sample_freq
+    total_sec = info.total_rows / info.sample_freq
     return int(total_sec // 3600)
 
 
