@@ -42,6 +42,9 @@ class ReportGenerationError(RuntimeError):
     """Raised when benchmark report generation cannot proceed."""
 
 
+MISSING_SECTION_MESSAGE = "*This category was not present in the input results file.*"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate benchmark/docs/benchmark_report.md from a benchmark result JSON file."
@@ -243,63 +246,102 @@ def build_key_observations(payload: dict[str, Any]) -> str:
 
 
 def build_sections(payload: dict[str, Any]) -> str:
-    tuned_rows = []
-    for category in ["tuned_random_access", "tuned_channel_subset", "tuned_window_scaling", "tuned_full_study"]:
-        tuned_rows.extend(rows_for(payload, category))
-    renderers = [
-        ("A. Random Access", "random_access", render_random_access),
-        ("B. Channel Subset", "channel_subset", render_channel_subset),
-        ("C. Re-montage", "remontage", render_remontage),
-        ("D.1 Full-Study Filter Pipeline", "filter_pipeline_full", render_filter_pipeline),
-        ("D.2 Sliding FFT", "sliding_fft_full", render_sliding_fft),
-        ("E. Window Scaling", "window_scaling", render_window_scaling),
-        ("F. Compression", "compression", render_compression),
-        ("G. Precision Loss", "precision_loss", render_precision_loss),
-        ("H. Int32 Storage", "int32_storage", render_int32_storage),
-        ("I. Remote Query", "remote_query", render_remote_query),
-    ]
     sections = [
-        section(title, rows_for(payload, category), lambda rows, p=payload, r=renderer: r(rows, p))
-        for title, category, renderer in renderers
+        section(spec["title"], spec["rows_getter"](payload), spec["renderer"], payload)
+        for spec in report_section_specs()
     ]
-    sections.append(section("J. Tuned Format Comparison", tuned_rows, lambda rows, p=payload: render_tuned_comparison(rows, p)))
+    sections.append(
+        section(
+            "J. Tuned Format Comparison",
+            rows_for_categories(payload, tuned_section_categories()),
+            lambda rows, p: render_tuned_comparison(p),
+            payload,
+        )
+    )
     return "\n\n".join(sections)
 
 
 def build_section_placeholders(payload: dict[str, Any]) -> dict[str, str]:
-    full_rows = rows_for(payload, "tuned_full_study")
-    return {
-        "a_results": render_section_results(rows_for(payload, "random_access"), render_random_access, payload),
-        "b_results": render_section_results(rows_for(payload, "channel_subset"), render_channel_subset, payload),
-        "c_results": render_section_results(rows_for(payload, "remontage"), render_remontage, payload),
-        "d1_results": render_section_results(rows_for(payload, "filter_pipeline_full"), render_filter_pipeline, payload),
-        "d2_results": render_section_results(rows_for(payload, "sliding_fft_full"), render_sliding_fft, payload),
-        "e_results": render_section_results(rows_for(payload, "window_scaling"), render_window_scaling, payload),
-        "f_results": render_section_results(rows_for(payload, "compression"), render_compression, payload),
-        "g_results": render_section_results(rows_for(payload, "precision_loss"), render_precision_loss, payload),
-        "h_results": render_section_results(rows_for(payload, "int32_storage"), render_int32_storage, payload),
-        "i_results": render_section_results(rows_for(payload, "remote_query"), render_remote_query, payload),
-        "j1_results": render_section_results(rows_for(payload, "tuned_random_access"), lambda rows, _: pivot_table(rows, "block_size", "format", "wall_clock_seconds", "time"), payload),
-        "j2_results": render_section_results(rows_for(payload, "tuned_channel_subset"), lambda rows, _: pivot_table(rows, "block_size", "format", "wall_clock_seconds", "time"), payload),
-        "j3_results": render_section_results(rows_for(payload, "tuned_window_scaling"), lambda rows, _: tuned_peak_table(rows), payload),
-        "j4_results": render_section_results(full_rows, lambda rows, _: pivot_table(rows, "block_size", "format", "wall_clock_seconds", "time"), payload),
-        "j_notes": (
-            "\n\nPer-variant artifact sizes are not currently recorded in the result JSON, so this generated report limits Benchmark J to performance-derived comparisons."
-            if full_rows else ""
-        ),
+    placeholders = {
+        spec["placeholder"]: render_section_results(spec["rows_getter"](payload), spec["renderer"], payload)
+        for spec in report_section_specs() + tuned_placeholder_specs()
     }
+    full_rows = rows_for(payload, "tuned_full_study")
+    placeholders["j_notes"] = (
+        "\n\nPer-variant artifact sizes are not currently recorded in the result JSON, so this generated report limits Benchmark J to performance-derived comparisons."
+        if full_rows else ""
+    )
+    return placeholders
 
 
 def render_section_results(rows: list[dict[str, Any]], renderer, payload: dict[str, Any]) -> str:
     if not rows:
-        return "*This category was not present in the input results file.*"
+        return MISSING_SECTION_MESSAGE
     return renderer(rows, payload)
 
 
-def section(title: str, rows: list[dict[str, Any]], renderer) -> str:
+def section(title: str, rows: list[dict[str, Any]], renderer, payload: dict[str, Any]) -> str:
     if not rows:
-        return f"## {title}\n\n*This category was not present in the input results file.*"
-    return f"## {title}\n\n{renderer(rows)}"
+        return f"## {title}\n\n{MISSING_SECTION_MESSAGE}"
+    return f"## {title}\n\n{renderer(rows, payload)}"
+
+
+def report_section_specs() -> list[dict[str, Any]]:
+    return [
+        section_spec("A. Random Access", "a_results", "random_access", render_random_access),
+        section_spec("B. Channel Subset", "b_results", "channel_subset", render_channel_subset),
+        section_spec("C. Re-montage", "c_results", "remontage", render_remontage),
+        section_spec("D.1 Full-Study Filter Pipeline", "d1_results", "filter_pipeline_full", render_filter_pipeline),
+        section_spec("D.2 Sliding FFT", "d2_results", "sliding_fft_full", render_sliding_fft),
+        section_spec("E. Window Scaling", "e_results", "window_scaling", render_window_scaling),
+        section_spec("F. Compression", "f_results", "compression", render_compression),
+        section_spec("G. Precision Loss", "g_results", "precision_loss", render_precision_loss),
+        section_spec("H. Int32 Storage", "h_results", "int32_storage", render_int32_storage),
+        section_spec("I. Remote Query", "i_results", "remote_query", render_remote_query),
+    ]
+
+
+def tuned_placeholder_specs() -> list[dict[str, Any]]:
+    return [
+        section_spec(
+            "J.1 Random Access",
+            "j1_results",
+            "tuned_random_access",
+            lambda rows, _: pivot_table(rows, "block_size", "format", "wall_clock_seconds", "time"),
+        ),
+        section_spec(
+            "J.2 Channel Subset",
+            "j2_results",
+            "tuned_channel_subset",
+            lambda rows, _: pivot_table(rows, "block_size", "format", "wall_clock_seconds", "time"),
+        ),
+        section_spec(
+            "J.3 Peak Window-Scaling Throughput",
+            "j3_results",
+            "tuned_window_scaling",
+            lambda rows, _: tuned_peak_table(rows),
+        ),
+        section_spec(
+            "J.4 Full-Study Sequential Read",
+            "j4_results",
+            "tuned_full_study",
+            lambda rows, _: pivot_table(rows, "block_size", "format", "wall_clock_seconds", "time"),
+        ),
+    ]
+
+
+def tuned_section_categories() -> list[str]:
+    return [spec["category"] for spec in tuned_placeholder_specs()]
+
+
+def section_spec(title: str, placeholder: str, category: str, renderer) -> dict[str, Any]:
+    return {
+        "title": title,
+        "placeholder": placeholder,
+        "category": category,
+        "renderer": renderer,
+        "rows_getter": lambda payload, category=category: rows_for(payload, category),
+    }
 
 
 def render_random_access(rows: list[dict[str, Any]], _: dict[str, Any]) -> str:
@@ -525,7 +567,7 @@ def render_remote_query(rows: list[dict[str, Any]], _: dict[str, Any]) -> str:
     return note + "\n\n" + table
 
 
-def render_tuned_comparison(rows: list[dict[str, Any]], payload: dict[str, Any]) -> str:
+def render_tuned_comparison(payload: dict[str, Any]) -> str:
     sections = ["This section compares matched block-size variants generated for Benchmark J."]
     random_rows = rows_for(payload, "tuned_random_access")
     if random_rows:
@@ -584,6 +626,13 @@ def tuned_peak_table(rows: list[dict[str, Any]]) -> str:
 
 def rows_for(payload: dict[str, Any], category: str) -> list[dict[str, Any]]:
     return [row for row in payload["benchmarks"] if row.get("category") == category]
+
+
+def rows_for_categories(payload: dict[str, Any], categories: list[str]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for category in categories:
+        rows.extend(rows_for(payload, category))
+    return rows
 
 
 def formats_in_rows(rows: list[dict[str, Any]]) -> list[str]:
