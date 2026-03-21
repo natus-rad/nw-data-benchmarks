@@ -2102,8 +2102,15 @@ def bench_remote_query(info, paths: dict, cfg: dict,
     rng = np.random.default_rng(42)
     # Keep margin so window fits within the study
     margin = window_stamps + 1
+    max_start = info.end_stamp - margin
+    if max_start <= info.start_stamp:
+        print(
+            "    [skip] Study too short for remote_benchmark window "
+            f"({window_sec}s)."
+        )
+        return results
     random_starts = rng.integers(
-        info.start_stamp, info.end_stamp - margin, size=n_points
+        info.start_stamp, max_start, size=n_points
     )
     random_starts.sort()
 
