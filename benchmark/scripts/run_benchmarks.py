@@ -2160,7 +2160,7 @@ def bench_remote_query(info, paths: dict, cfg: dict,
 
             total_time = sum(times)
             avg_time = total_time / len(times)
-            print(f"{total_time:.1f}s ({avg_time:.2f}s avg/window)")
+            print(f"done ({total_time:.1f}s)")
 
             n_ch = len(cols)
             results.append({
@@ -2247,7 +2247,7 @@ def bench_remote_query(info, paths: dict, cfg: dict,
             combined = dl_time + local_total
             n_ch = len(ch_indices) if ch_indices else n_channels
             dl_label = f"~{dl_time:.1f}s dl (est.)" if dl_estimated else f"{dl_time:.1f}s dl"
-            print(f"{local_total:.1f}s read + {dl_label} = {combined:.1f}s total")
+            print(f"done ({combined:.1f}s)")
 
             results.append({
                 "category": "remote_query",
@@ -2586,7 +2586,8 @@ def _estimate_runs(cfg: dict, selected: list) -> int:
 def _print_result(r: dict) -> None:
     """Pretty-print a single benchmark result."""
     fmt = r.get("format", "")
-    t = r.get("wall_clock_seconds", 0)
+    # remote_query results use total_wall_seconds; all others use wall_clock_seconds.
+    t = r.get("wall_clock_seconds") or r.get("total_wall_seconds", 0)
 
     mode = r.get("mode", fmt)
     parts = [f"    {mode:20s}"]
@@ -2594,6 +2595,8 @@ def _print_result(r: dict) -> None:
         parts.append(f"via={r['read_method']:>5s}")
     if "position" in r:
         parts.append(f"pos={r['position']:>4s}")
+    if "channel_subset" in r:
+        parts.append(f"subset={r['channel_subset']}")
     if "channels" in r and isinstance(r["channels"], str):
         parts.append(f"ch={r['channels']:>4s}")
     if "codec" in r:
@@ -2601,6 +2604,11 @@ def _print_result(r: dict) -> None:
     if "window_seconds" in r:
         parts.append(f"win={r['window_seconds']:>5}s")
     parts.append(f"time={t:.4f}s")
+    if "avg_wall_per_window" in r:
+        parts.append(f"avg/win={r['avg_wall_per_window']:.3f}s")
+    if "download_seconds" in r:
+        dl_tag = "dl~" if r.get("download_estimated") else "dl="
+        parts.append(f"{dl_tag}{r['download_seconds']:.1f}s")
     if "mib_per_sec" in r:
         parts.append(f"tput={r['mib_per_sec']:.1f} MiB/s")
     if "compression_ratio" in r and r["compression_ratio"] is not None:
