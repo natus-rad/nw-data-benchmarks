@@ -240,6 +240,15 @@ def _parquet_to_edf(pq_dir: Path, edf_path: Path,
                     sample_freq: float = 256.0) -> None:
     """Convert float32 Parquet files to a single EDF file.
 
+    Streams the conversion one Parquet partition at a time so that peak memory
+    is bounded by the size of a single partition rather than the whole study.
+
+    EDF headers require per-channel physical_min/max before any data is written,
+    so this function makes two passes over the Parquet files:
+      Pass 1 — compute per-channel min/max (stats only, no vstack).
+      Pass 2 — write the header, then stream each partition to EDF via
+               repeated writeSamples() calls (pyedflib appends on each call).
+
     Args:
         pq_dir: Directory containing source float32 .parquet files.
         edf_path: Destination .edf file path.
@@ -259,38 +268,42 @@ def _parquet_to_edf(pq_dir: Path, edf_path: Path,
     labels = [c[3:] for c in ch_cols]
     n_channels = len(labels)
 
-    # Read all data
-    all_data = []
+    # --- Pass 1: streaming min/max per channel (no full dataset in memory) ---
+    ch_min = np.full(n_channels, np.inf)
+    ch_max = np.full(n_channels, -np.inf)
     for f in pq_files:
         t = pq.read_table(str(f), columns=ch_cols)
-        block = np.column_stack([
-            t.column(c).to_numpy().astype(np.float64) for c in ch_cols
-        ])
-        all_data.append(block)
-    data = np.vstack(all_data)  # (total_samples, n_channels)
-    n_samples = data.shape[0]
+        for i, col in enumerate(ch_cols):
+            arr = t.column(col).to_numpy(zero_copy_only=False).astype(np.float64)
+            ch_min[i] = min(ch_min[i], float(arr.min()))
+            ch_max[i] = max(ch_max[i], float(arr.max()))
+    # Guard against flat channels
+    flat = ch_min == ch_max
+    ch_max[flat] = ch_min[flat] + 1.0
 
+    # --- Pass 2: write header then stream partitions into EDF ---
     edf_path.parent.mkdir(parents=True, exist_ok=True)
     writer = pyedflib.EdfWriter(str(edf_path), n_channels, file_type=0)
     try:
         for i, label in enumerate(labels):
-            ch_data = data[:, i]
-            phys_min = float(np.min(ch_data))
-            phys_max = float(np.max(ch_data))
-            if phys_min == phys_max:
-                phys_max = phys_min + 1.0
             writer.setSignalHeader(i, {
                 "label": label,
                 "dimension": "uV",
                 "sample_frequency": sample_freq,
-                "physical_min": phys_min,
-                "physical_max": phys_max,
+                "physical_min": ch_min[i],
+                "physical_max": ch_max[i],
                 "digital_min": -32768,
                 "digital_max": 32767,
                 "transducer": "",
                 "prefilter": "",
             })
-        writer.writeSamples([data[:, i] for i in range(n_channels)])
+        for f in pq_files:
+            t = pq.read_table(str(f), columns=ch_cols)
+            block = [
+                t.column(col).to_numpy(zero_copy_only=False).astype(np.float64)
+                for col in ch_cols
+            ]
+            writer.writeSamples(block)
     finally:
         writer.close()
 
