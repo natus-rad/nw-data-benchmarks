@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+import time
+from typing import Any
+
+import numpy as np
+
+
+BYTES_PER_FLOAT32 = 4
+
+
+def _timed(fn, reps: int = 3) -> tuple[float, Any]:
+    """Run fn() reps times, return (median_seconds, last_result)."""
+    times = []
+    result = None
+    for _ in range(reps):
+        t0 = time.perf_counter()
+        result = fn()
+        times.append(time.perf_counter() - t0)
+    return float(np.median(times)), result
+
+
+def _throughput(n_samples: int, n_channels: int, seconds: float) -> dict:
+    """Compute throughput metrics."""
+    total_bytes = n_samples * n_channels * BYTES_PER_FLOAT32
+    mib = total_bytes / (1024 * 1024)
+    return {
+        "samples": n_samples,
+        "channels": n_channels,
+        "bytes": total_bytes,
+        "mib": round(mib, 3),
+        "mib_per_sec": round(mib / seconds, 3) if seconds > 0 else 0,
+        "samples_per_sec": round(n_samples * n_channels / seconds) if seconds > 0 else 0,
+    }
+
+
+def _full_study_duration_hours(info) -> int:
+    """Return study duration rounded down to the nearest whole hour."""
+    total_sec = (info.end_stamp - info.start_stamp + 1) / info.sample_freq
+    return int(total_sec // 3600)
+
+
+def _chunk_ranges(start_stamp: int, end_stamp: int, chunk_stamps: int):
+    """Yield (chunk_start, chunk_end) stamp ranges."""
+    s = start_stamp
+    while s <= end_stamp:
+        e = min(s + chunk_stamps - 1, end_stamp)
+        yield s, e
+        s = e + 1
+
+
+def _estimate_runs(cfg: dict, selected: list) -> int:
+    """Rough estimate of total benchmark invocations."""
+    n = 0
+    reps = cfg.get("repetitions", 3)
+    for cat_id, _, _ in selected:
+        if cat_id == "random_access":
+            n += len(cfg.get("read_positions", [0, 0.5, 0.75, 0.95])) * 2 * reps
+        elif cat_id == "channel_subset":
+            n += (len(cfg.get("channel_subsets", [4, 10])) + 1) * 2 * reps
+        elif cat_id == "remontage":
+            n += 2 * reps
+        elif cat_id == "filter_pipeline":
+            n += 1
+        elif cat_id == "window_scaling":
+            n += len(cfg.get("window_sizes", [])) * 2 * reps
+        elif cat_id == "compression":
+            n += len(cfg.get("parquet_compression", [])) * reps
+        elif cat_id == "precision_loss":
+            n += 1
+    return n
+
+
+def _print_result(r: dict) -> None:
+    """Pretty-print a single benchmark result."""
+    fmt = r.get("format", "")
+    t = r.get("wall_clock_seconds") or r.get("total_wall_seconds", 0)
+
+    mode = r.get("mode", fmt)
+    parts = [f"    {mode:20s}"]
+    if "read_method" in r:
+        parts.append(f"via={r['read_method']:>5s}")
+    if "position" in r:
+        parts.append(f"pos={r['position']:>4s}")
+    if "channel_subset" in r:
+        parts.append(f"subset={r['channel_subset']}")
+    if "channels" in r and isinstance(r["channels"], str):
+        parts.append(f"ch={r['channels']:>4s}")
+    if "codec" in r:
+        parts.append(f"codec={r['codec']:>8s}")
+    if "window_seconds" in r:
+        parts.append(f"win={r['window_seconds']:>5}s")
+    parts.append(f"time={t:.4f}s")
+    if "avg_wall_per_window" in r:
+        parts.append(f"avg/win={r['avg_wall_per_window']:.3f}s")
+    if "download_seconds" in r:
+        dl_tag = "dl~" if r.get("download_estimated") else "dl="
+        parts.append(f"{dl_tag}{r['download_seconds']:.1f}s")
+    if "mib_per_sec" in r:
+        parts.append(f"tput={r['mib_per_sec']:.1f} MiB/s")
+    if "compression_ratio" in r and r["compression_ratio"] is not None:
+        parts.append(f"ratio={r['compression_ratio']:.1f}x")
+    if "worst_max_abs_error" in r:
+        parts.append(f"worst_err={r['worst_max_abs_error']:.6f}")
+    if "avg_snr_db" in r:
+        parts.append(f"avg_snr={r['avg_snr_db']:.1f}dB")
+
+    print("  ".join(parts))
