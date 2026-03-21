@@ -701,45 +701,90 @@ def _setup_tuned_variants(paths: dict, output_base: Path, info,
 
 def _setup_tuned_parquet(paths, output_base, src_files, ch_cols,
                          label, row_group_size):
-    """Write single consolidated Parquet files with specific row-group size.
+    """Write single consolidated Parquet files with a specific row-group size.
 
     Creates both snappy and lz4 variants for comparison.
+
+    Streams source partitions one at a time through a row-accumulating buffer
+    so that peak memory is bounded by ~2 source partitions rather than the
+    whole dataset.  The buffer is flushed in exact row_group_size slices, which
+    ensures correct row-group boundaries even when source partitions are smaller
+    than the target row-group size (e.g. writing 10m row groups from 5m
+    partitions).  Without this, a naïve per-file write_table() call would
+    produce undersized row groups at every partition boundary, invalidating the
+    Section J comparison.
     """
     import pyarrow as pa
 
-    # Read all source files into one table
-    tables = [pq.read_table(str(f)) for f in src_files]
-    combined = pa.concat_tables(tables)
+    schema = pq.read_schema(str(src_files[0]))
 
-    # Create snappy variant
     key_snappy = f"tuned_pq_{label}"
     out_file_snappy = output_base / f"tuned_pq_{label}.parquet"
-    if not out_file_snappy.exists():
-        print(f"  [convert] tuned Parquet (rg={label}, snappy) ...")
-        pq.write_table(combined, str(out_file_snappy),
-                       compression="snappy",
-                       row_group_size=row_group_size,
-                       write_statistics=True)
-        size_mib = out_file_snappy.stat().st_size / (1024 * 1024)
-        pf = pq.ParquetFile(str(out_file_snappy))
-        print(f"  [convert] {key_snappy}: {size_mib:.1f} MiB, "
-              f"{pf.metadata.num_row_groups} row groups")
-    paths[key_snappy] = out_file_snappy
-
-    # Create lz4 variant
     key_lz4 = f"tuned_pq_lz4_{label}"
     out_file_lz4 = output_base / f"tuned_pq_lz4_{label}.parquet"
-    if not out_file_lz4.exists():
+
+    need_snappy = not out_file_snappy.exists()
+    need_lz4 = not out_file_lz4.exists()
+
+    if need_snappy:
+        print(f"  [convert] tuned Parquet (rg={label}, snappy) ...")
+    if need_lz4:
         print(f"  [convert] tuned Parquet (rg={label}, lz4) ...")
-        pq.write_table(combined, str(out_file_lz4),
-                       compression="lz4",
-                       row_group_size=row_group_size,
-                       write_statistics=True)
-        size_mib = out_file_lz4.stat().st_size / (1024 * 1024)
-        pf = pq.ParquetFile(str(out_file_lz4))
-        print(f"  [convert] {key_lz4}: {size_mib:.1f} MiB, "
-              f"{pf.metadata.num_row_groups} row groups")
-    paths[key_lz4] = out_file_lz4
+
+    if need_snappy or need_lz4:
+        w_snappy = (pq.ParquetWriter(str(out_file_snappy), schema,
+                                     compression="snappy",
+                                     write_statistics=True)
+                    if need_snappy else None)
+        w_lz4 = (pq.ParquetWriter(str(out_file_lz4), schema,
+                                   compression="lz4",
+                                   write_statistics=True)
+                 if need_lz4 else None)
+        try:
+            buf: list[pa.Table] = []
+            buf_rows = 0
+
+            def _flush(table: pa.Table) -> None:
+                if w_snappy:
+                    w_snappy.write_table(table)
+                if w_lz4:
+                    w_lz4.write_table(table)
+
+            for f in src_files:
+                table = pq.read_table(str(f))
+                buf.append(table)
+                buf_rows += table.num_rows
+
+                # Emit complete row groups as soon as the buffer is large enough.
+                # After each iteration the buffer holds at most one row group's
+                # worth of leftover rows (< row_group_size).
+                while buf_rows >= row_group_size:
+                    combined = pa.concat_tables(buf)
+                    _flush(combined.slice(0, row_group_size))
+                    remainder = combined.slice(row_group_size)
+                    buf = [remainder] if remainder.num_rows > 0 else []
+                    buf_rows = remainder.num_rows
+
+            # Write any remaining rows as a final (possibly partial) row group.
+            if buf_rows > 0:
+                _flush(pa.concat_tables(buf))
+        finally:
+            if w_snappy:
+                w_snappy.close()
+            if w_lz4:
+                w_lz4.close()
+
+    # Register paths and print a one-line summary for newly written files.
+    for key, out_file, was_written in (
+        (key_snappy, out_file_snappy, need_snappy),
+        (key_lz4, out_file_lz4, need_lz4),
+    ):
+        if out_file.exists():
+            if was_written:
+                size_mib = out_file.stat().st_size / (1024 * 1024)
+                n_rg = pq.ParquetFile(str(out_file)).metadata.num_row_groups
+                print(f"  [convert] {key}: {size_mib:.1f} MiB, {n_rg} row groups")
+            paths[key] = out_file
 
 
 def _setup_tuned_h5(paths, output_base, src_files, ch_cols,
