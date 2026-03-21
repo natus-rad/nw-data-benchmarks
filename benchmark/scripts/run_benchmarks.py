@@ -15,9 +15,14 @@ if str(REPO_ROOT) not in sys.path:
 from benchmark.core.azure_storage import download_study
 from benchmark.core.bench_utils import _estimate_runs, _print_result
 from benchmark.core.benchmarks import BENCHMARKS
+from benchmark.core.ingest import ingest
 from benchmark.core.remote import bench_remote_query
-from benchmark.core.setup import _setup_h5_variants, _setup_tuned_variants, setup_study
-from benchmark.core.study_info import _study_info, _system_info, load_config
+from benchmark.core.setup import (
+    _setup_h5_variants, _setup_int32_variants,
+    _setup_parquet_compression_variants, _setup_tuned_variants, setup_study,
+)
+from benchmark.core.study_info import StudyInfo, _study_info, _system_info, load_config
+from benchmark.core.variants import generate_variants
 
 
 def _selected_benchmarks(cfg: dict, args: argparse.Namespace) -> list[tuple[str, str, object]]:
@@ -82,18 +87,47 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
 
     for study_cfg in cfg.get("studies", []):
         print(f"\n{'=' * 60}\nStudy: {study_cfg['name']}\n{'=' * 60}")
-        source_type = study_cfg.get("source", "parquet")
-        study_dir = download_study(cfg, study_cfg, args)
-        paths = setup_study(study_dir, cfg, cache_dir, source_type=source_type, study_cfg=study_cfg)
-        info = _study_info(study_dir if source_type == "erd" else paths.get("parquet", study_dir), source_type=source_type, study_cfg=study_cfg)
 
-        raw_name = study_dir.name
-        short_name = raw_name[:40] if len(raw_name) > 40 else raw_name
-        output_base = cache_dir / f"{short_name}_exports"
-        if paths.get("parquet"):
-            _setup_h5_variants(paths, output_base, short_name, info)
-            if "tuned_comparison" in {cat_id for cat_id, _, _ in selected}:
+        if "input" in study_cfg:
+            # ── New universal input path ──────────────────────────
+            input_path = Path(study_cfg["input"])
+            sample_freq = study_cfg.get("sample_freq")
+            canonical_pq, detected_fmt, sample_freq = ingest(input_path, cache_dir, sample_freq)
+            info = StudyInfo.from_parquet(canonical_pq, sample_freq=sample_freq)
+            variant_specs = cfg.get("variants", [])
+            paths = generate_variants(canonical_pq, info, variant_specs, cache_dir)
+            source_type = detected_fmt
+            study_dir = input_path
+
+            # Set up additional variants for Parquet-specific benchmarks (F, H, J).
+            selected_ids = {cat_id for cat_id, _, _ in selected}
+            short_name = study_cfg["name"][:30]
+            output_base = cache_dir / f"{short_name}_exports"
+            output_base.mkdir(parents=True, exist_ok=True)
+
+            if "compression" in selected_ids and paths.get("parquet"):
+                _setup_parquet_compression_variants(
+                    paths, paths["parquet"], output_base, short_name, cfg)
+
+            if "int32_storage" in selected_ids and paths.get("parquet"):
+                _setup_int32_variants(paths, output_base, short_name)
+
+            if "tuned_comparison" in selected_ids and paths.get("parquet"):
                 _setup_tuned_variants(paths, output_base, info, cfg)
+        else:
+            # ── Existing config-driven path (unchanged) ───────────
+            source_type = study_cfg.get("source", "parquet")
+            study_dir = download_study(cfg, study_cfg, args)
+            paths = setup_study(study_dir, cfg, cache_dir, source_type=source_type, study_cfg=study_cfg)
+            info = _study_info(study_dir if source_type == "erd" else paths.get("parquet", study_dir), source_type=source_type, study_cfg=study_cfg)
+
+            raw_name = study_dir.name
+            short_name = raw_name[:40] if len(raw_name) > 40 else raw_name
+            output_base = cache_dir / f"{short_name}_exports"
+            if paths.get("parquet"):
+                _setup_h5_variants(paths, output_base, short_name, info)
+                if "tuned_comparison" in {cat_id for cat_id, _, _ in selected}:
+                    _setup_tuned_variants(paths, output_base, info, cfg)
 
         study_meta = {
             "name": study_cfg["name"],
@@ -119,7 +153,7 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
                 output["benchmarks"].append(result)
                 _print_result(result)
             _save_results(output, out_path)
-            print(f"  [checkpoint → {out_path}]")
+            print(f"  [checkpoint -> {out_path}]")
 
     print(f"\nResults saved to {out_path}")
 

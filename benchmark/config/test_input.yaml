@@ -1,0 +1,38 @@
+# Test config using the new `input:` field to point at cached Parquet data.
+# This should produce equivalent results to the old default.yaml flow.
+
+studies:
+  - name: "suppression_study"
+    input: ".benchmark_cache/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet"
+    sample_freq: 256
+
+benchmarks:
+  - random_access
+  - channel_subset
+  - remontage
+  - filter_pipeline
+  - window_scaling
+
+# Generate the same variants the old flow created.
+variants:
+  - format: hdf5
+    layout: columnar
+    chunk_minutes: 5
+    dtype: float32
+    compression: lz4
+  - format: hdf5
+    layout: rowgroup
+    chunk_minutes: 5
+    dtype: float32
+    compression: lz4
+  - format: edf
+
+# Benchmark parameters (same as default.yaml)
+window_sizes: [10, 30, 60, 300, 900, 1800, 3600]
+channel_subsets: [4, 10]
+read_positions: [0.0, 0.5, 0.75, 0.95]
+default_window: 60
+repetitions: 3
+
+cache_dir: ".benchmark_cache"
+
