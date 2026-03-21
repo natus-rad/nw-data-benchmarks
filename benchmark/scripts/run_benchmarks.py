@@ -1707,7 +1707,11 @@ def bench_precision_loss(info, paths: dict, cfg: dict) -> list[dict]:
             })
             continue
 
-        # EDF quantization: float -> 16-bit int -> float
+        # EDF quantization: float -> 16-bit int -> float.
+        # No clamp needed: phys_min/max are derived from this signal's own
+        # min/max, so (signal - phys_min) / phys_range is in [0, 1] exactly
+        # (IEEE 754 guarantees x/x == 1.0 for finite non-zero x), making the
+        # result in [-32768, 32767] with no possibility of int16 wrap-around.
         digital = np.round((signal - phys_min) / phys_range * 65535 - 32768).astype(np.int16)
         reconstructed = (digital.astype(np.float64) + 32768) / 65535 * phys_range + phys_min
 
