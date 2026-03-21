@@ -2117,8 +2117,8 @@ def bench_remote_query(info, paths: dict, cfg: dict) -> list[dict]:
             print(f"    EDF local read [{ch_label}] ... ", end="", flush=True)
             local_times = []
             for s, e in windows:
-                # Map stamp to sample index
-                start_sample = int((s - info.start_stamp) / 1)  # stamps ≈ samples at 256 Hz
+                # Map stamp to sample index (samplestamp is a zero-based sample counter)
+                start_sample = int(s - info.start_stamp)
                 n_samp = min(int(window_sec * sample_freq), edf_total - start_sample)
                 if start_sample < 0 or n_samp <= 0:
                     continue
