@@ -743,9 +743,9 @@ def _setup_tuned_parquet(paths, output_base, src_files, ch_cols,
 
             def _flush(table: pa.Table) -> None:
                 if w_snappy:
-                    w_snappy.write_table(table)
+                    w_snappy.write_table(table, row_group_size=row_group_size)
                 if w_lz4:
-                    w_lz4.write_table(table)
+                    w_lz4.write_table(table, row_group_size=row_group_size)
 
             for f in src_files:
                 table = pq.read_table(str(f))
