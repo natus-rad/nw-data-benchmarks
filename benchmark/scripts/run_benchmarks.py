@@ -900,15 +900,15 @@ class StudyInfo:
         self.segment_plans = [type("Seg", (), {"last_stamp": end_stamp})()]
 
     @classmethod
-    def from_parquet(cls, pq_dir: Path,
-                     sample_freq: float | None = None) -> "StudyInfo":
+    def from_parquet(cls, pq_dir: Path, sample_freq: float) -> "StudyInfo":
         """Discover study metadata from Parquet files on disk.
 
         Args:
             pq_dir: Directory containing .parquet files.
-            sample_freq: Sampling frequency in Hz. When provided, this value is
-                used directly and stamp-delta inference is skipped. Required when
-                the Parquet samplestamp column does not increment by 1 per sample.
+            sample_freq: Sampling frequency in Hz. Must be provided explicitly —
+                the samplestamp column is an opaque monotonically increasing
+                integer whose unit is not guaranteed, so inference from stamp
+                deltas is unreliable and has been removed.
         """
         files = sorted(pq_dir.glob("*.parquet"))
         if not files:
@@ -924,24 +924,7 @@ class StudyInfo:
         start_stamp = int(first.column("samplestamp").to_numpy().min())
         end_stamp = int(last.column("samplestamp").to_numpy().max())
 
-        if sample_freq is None:
-            # Infer sample frequency from median stamp delta
-            stamps = first.column("samplestamp").to_numpy()
-            if len(stamps) > 100:
-                deltas = np.diff(stamps[:1000])
-                median_delta = np.median(deltas[deltas > 0])
-                # Stamps increment by 1 per sample -> freq = 1/delta * freq
-                # For our data, stamps ARE at sample rate (delta=1 -> 256 Hz typically)
-                if median_delta == 1.0:
-                    freq = 256.0  # default clinical EEG rate
-                else:
-                    freq = 1.0 / median_delta
-            else:
-                freq = 256.0
-        else:
-            freq = float(sample_freq)
-
-        return cls(sample_freq=freq, channel_labels=labels,
+        return cls(sample_freq=float(sample_freq), channel_labels=labels,
                    start_stamp=start_stamp, end_stamp=end_stamp,
                    n_segments=len(files))
 
@@ -954,7 +937,7 @@ def _study_info(study_dir: Path, source_type: str = "parquet",
         study_dir: Path to the Parquet directory (or ERD study folder).
         source_type: ``"parquet"`` or ``"erd"``.
         study_cfg: The per-study config dict. When ``source`` is ``"parquet"``,
-            an optional ``sample_freq`` key overrides stamp-delta inference.
+            ``sample_freq`` is required and must be present in this dict.
             Ignored when ``source`` is ``"erd"`` (the SDK provides the freq).
     """
     if source_type == "erd" and _HAS_NWREADER:
@@ -964,10 +947,15 @@ def _study_info(study_dir: Path, source_type: str = "parquet",
             raw.end_stamp = raw.segment_plans[-1].last_stamp
         return raw
 
-    # Extract optional config override (Parquet source only)
-    cfg_freq = None
-    if study_cfg and "sample_freq" in study_cfg:
-        cfg_freq = float(study_cfg["sample_freq"])
+    # sample_freq is mandatory for Parquet sources
+    if not study_cfg or "sample_freq" not in study_cfg:
+        raise ValueError(
+            "sample_freq must be specified in the study config when source is "
+            "'parquet'. The samplestamp column unit is not guaranteed, so the "
+            "sampling frequency cannot be inferred reliably. Add "
+            "'sample_freq: <Hz>' to the study entry in your config file."
+        )
+    cfg_freq = float(study_cfg["sample_freq"])
 
     # Discover from Parquet files
     pq_dir = study_dir
