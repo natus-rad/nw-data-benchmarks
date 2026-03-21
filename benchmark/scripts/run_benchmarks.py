@@ -1083,7 +1083,10 @@ def _read_h5_rowgroup_window(h5_path: Path, columns: list[str],
         i_start, i_end = _h5_resolve_stamp_range(hf, start_stamp, end_stamp)
         if i_end <= i_start:
             return np.empty((len(columns), 0), dtype=np.float32)
-        col_order = list(hf.attrs["column_order"])
+        col_order = [
+            x.decode("utf-8") if isinstance(x, (bytes, np.bytes_)) else str(x)
+            for x in hf.attrs["column_order"]
+        ]
         col_indices = sorted([col_order.index(c) for c in columns])
         data = hf["data"][i_start:i_end, col_indices]
         # Reorder to match requested column order
