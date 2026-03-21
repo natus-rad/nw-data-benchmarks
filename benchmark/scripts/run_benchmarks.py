@@ -84,7 +84,17 @@ def _get_blob_service_client(cfg: dict, args: argparse.Namespace):
         return BlobServiceClient(account_url=account_url, credential=sas)
 
     # DefaultAzureCredential (az login, managed identity, etc.)
-    from azure.identity import DefaultAzureCredential
+    try:
+        from azure.identity import DefaultAzureCredential
+    except ImportError as exc:
+        raise RuntimeError(
+            "Non-anonymous Azure access without a SAS token requires the 'azure-identity' "
+            "package. Install it with:\n\n"
+            "    pip install azure-identity\n\n"
+            "Alternatively, provide a SAS token via the --sas-token flag or the "
+            "AZURE_STORAGE_SAS_TOKEN environment variable, or set azure.anonymous: true "
+            "in the config if your storage account allows anonymous access."
+        ) from exc
     return BlobServiceClient(account_url=account_url, credential=DefaultAzureCredential())
 
 
