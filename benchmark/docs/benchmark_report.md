@@ -1,6 +1,6 @@
 # Benchmark Report
 
-_Generated from `C:/dev/nw/perforce/NW10_GMA4/Source/sdk/nw-data-benchmarks/benchmark/results/2026-03-21T07-54-46_benchmark_results.json` (run `2026-03-21T07-54-46`)._
+_Generated from `C:/dev/nw/perforce/NW10_GMA4/Source/sdk/nw-data-benchmarks/benchmark/results/2026-03-21T12-01-24_benchmark_results.json` (run `2026-03-21T12-01-24`)._
 
 This report is automatically generated from benchmark result JSON and is intended to replace manual Markdown edits.
 
@@ -13,7 +13,7 @@ The report is generated directly from benchmark result JSON. Sections for catego
 | Study | suppression_study |
 | Channels | 46 |
 | Sample rate | 256.0 Hz |
-| Duration | 12.86 h (11,854,000 samples) |
+| Duration | 12.86 h (11,854,003 samples) |
 | System | Windows 11 / Python 3.12.9 / 12 CPU threads / 31.7 GiB RAM |
 | Categories present | channel_subset, compression, filter_pipeline_full, int32_storage, precision_loss, random_access, remontage, remote_query, sliding_fft_full, tuned_channel_subset, tuned_full_study, tuned_random_access, tuned_window_scaling, window_scaling |
 
@@ -23,18 +23,18 @@ Benchmark rows: **273** across **14** categories.
 
 | Area | Winner | Result |
 | --- | --- | --- |
-| Random access (median 1-minute read) | HDF5 row-group | 0.0454s |
+| Random access (median 1-minute read) | HDF5 columnar | 0.0404s |
 | 4-channel subset | HDF5 columnar | 0.0055s |
-| Full-study filter pipeline | Parquet | 14.83s |
-| Peak window-scaling throughput | Parquet @ 3600s | 307.6 MiB/s |
-| Best tuned full-study read | HDF5 LZ4 (5m) | 12.22s |
+| Full-study filter pipeline | Parquet | 14.20s |
+| Peak window-scaling throughput | Parquet @ 1800s | 378.6 MiB/s |
+| Best tuned full-study read | Parquet LZ4 (20m) | 13.89s |
 
 ## Key Observations
 
-- **Random access:** HDF5 row-group has the lowest median 1-minute read time at 0.0454s, about 1.12× faster than Parquet.
-- **Compression trade-off:** smallest Parquet artifact is zstd_9 at 618.4 MiB, while the fastest 1-minute read is snappy at 0.0464s.
+- **Random access:** HDF5 columnar has the lowest median 1-minute read time at 0.0404s, about 1.07× faster than HDF5 row-group.
+- **Compression trade-off:** smallest Parquet artifact is zstd_9 at 618.4 MiB, while the fastest 1-minute read is snappy at 0.0510s.
 - **Int32 variants:** the most compact measured variant is int32_nanovolt (zstd) at 581.3 MiB; its reported SNR vs float32 is 144.36 dB.
-- **Remote access:** the fastest remote query path in this run is duckdb_remote for 10-20 (19ch) at 4.423s total over 10 windows.
+- **Remote access:** the fastest remote query path in this run is duckdb_remote for 10-20 (19ch) at 4.793s total over 10 windows.
 
 ## A. Random Access
 
@@ -46,14 +46,14 @@ Benchmark rows: **273** across **14** categories.
 
 **Question answered:** How sensitive is each format to where in the study a random read occurs?
 
-HDF5 row-group has the lowest median 1-minute read time across read positions at 0.0454s.
+HDF5 columnar has the lowest median 1-minute read time across read positions at 0.0404s.
 
 | Position | Parquet | HDF5 columnar | HDF5 row-group | EDF |
 | --- | --- | --- | --- | --- |
-| 0% | 0.0541s / 49.8 MiB/s | 0.0378s / 71.2 MiB/s | 0.0461s / 58.5 MiB/s | 0.0782s / 34.4 MiB/s |
-| 50% | 0.0448s / 60.1 MiB/s | 0.0441s / 61.1 MiB/s | 0.0315s / 85.6 MiB/s | 0.0574s / 46.9 MiB/s |
-| 75% | 0.0476s / 56.6 MiB/s | 0.0876s / 30.8 MiB/s | 0.0613s / 44.0 MiB/s | 0.0778s / 34.6 MiB/s |
-| 95% | 0.0641s / 42.1 MiB/s | 0.0864s / 31.2 MiB/s | 0.0447s / 60.3 MiB/s | 0.1198s / 22.5 MiB/s |
+| 0% | 0.0573s / 47.0 MiB/s | 0.0407s / 66.2 MiB/s | 0.0491s / 54.9 MiB/s | 0.0651s / 41.4 MiB/s |
+| 50% | 0.0452s / 59.6 MiB/s | 0.0613s / 44.0 MiB/s | 0.0473s / 56.9 MiB/s | 0.0667s / 40.4 MiB/s |
+| 75% | 0.0603s / 44.7 MiB/s | 0.0336s / 80.2 MiB/s | 0.0396s / 68.1 MiB/s | 0.0729s / 37.0 MiB/s |
+| 95% | 0.0414s / 65.2 MiB/s | 0.0402s / 67.1 MiB/s | 0.0393s / 68.5 MiB/s | 0.0728s / 37.0 MiB/s |
 
 ## B. Channel Subset
 
@@ -65,13 +65,13 @@ HDF5 row-group has the lowest median 1-minute read time across read positions at
 
 **Question answered:** Which formats benefit most when the workload only needs a subset of channels?
 
-4 channels → HDF5 columnar is fastest at 0.0055s. 10 channels → HDF5 columnar is fastest at 0.0152s. 46 channels → HDF5 row-group is fastest at 0.0320s.
+4 channels → HDF5 columnar is fastest at 0.0055s. 10 channels → HDF5 columnar is fastest at 0.0098s. 46 channels → HDF5 row-group is fastest at 0.0348s.
 
 | Channels | Parquet | HDF5 columnar | HDF5 row-group | EDF |
 | --- | --- | --- | --- | --- |
-| 4 | 0.0395s / 5.9 MiB/s | 0.0055s / 42.3 MiB/s | 0.0352s / 6.7 MiB/s | 0.0060s / 38.7 MiB/s |
-| 10 | 0.0447s / 13.1 MiB/s | 0.0152s / 38.5 MiB/s | 0.0352s / 16.7 MiB/s | 0.0192s / 30.5 MiB/s |
-| 46 | 0.0420s / 64.2 MiB/s | 0.0365s / 73.8 MiB/s | 0.0320s / 84.3 MiB/s | 0.0725s / 37.2 MiB/s |
+| 4 | 0.0384s / 6.1 MiB/s | 0.0055s / 42.9 MiB/s | 0.0400s / 5.9 MiB/s | 0.0059s / 39.5 MiB/s |
+| 10 | 0.0383s / 15.3 MiB/s | 0.0098s / 59.7 MiB/s | 0.0264s / 22.2 MiB/s | 0.0149s / 39.2 MiB/s |
+| 46 | 0.0386s / 69.9 MiB/s | 0.0525s / 51.3 MiB/s | 0.0348s / 77.5 MiB/s | 0.0569s / 47.3 MiB/s |
 
 ## C. Re-montage
 
@@ -83,14 +83,14 @@ HDF5 row-group has the lowest median 1-minute read time across read positions at
 
 **Question answered:** Once downstream signal processing is included, how much of total time is storage I/O versus lightweight computation?
 
-Montage is a relatively small fraction of end-to-end time in this benchmark (average 2.1% of total wall time).
+Montage is a relatively small fraction of end-to-end time in this benchmark (average 1.7% of total wall time).
 
 | Format | Read | Montage | Total | Montage share |
 | --- | --- | --- | --- | --- |
-| HDF5 columnar | 0.0419s | 0.0009s | 0.0428s | 2.1% |
-| HDF5 row-group | 0.0437s | 0.0011s | 0.0448s | 2.4% |
-| Parquet | 0.0502s | 0.0014s | 0.0515s | 2.6% |
-| EDF | 0.0727s | 0.0008s | 0.0735s | 1.1% |
+| HDF5 row-group | 0.0295s | 0.0006s | 0.0300s | 1.9% |
+| HDF5 columnar | 0.0326s | 0.0005s | 0.0331s | 1.4% |
+| EDF | 0.0561s | 0.0008s | 0.0569s | 1.4% |
+| Parquet | 0.0591s | 0.0011s | 0.0602s | 1.9% |
 
 ## D.1 Full-Study Filter Pipeline
 
@@ -102,14 +102,14 @@ Montage is a relatively small fraction of end-to-end time in this benchmark (ave
 
 **Question answered:** Which format is best for whole-study offline processing workloads that must read and transform all signal data?
 
-For the full-study read → montage → filter pipeline, Parquet is fastest at 14.83s.
+For the full-study read → montage → filter pipeline, Parquet is fastest at 14.20s.
 
 | Format | Read | Montage | Filter | Total | Throughput |
 | --- | --- | --- | --- | --- | --- |
-| Parquet | 10.51s | 0.6490s | 3.672s | 14.83s | 130.8 MiB/s |
-| HDF5 row-group | 10.54s | 0.6300s | 4.035s | 15.21s | 127.6 MiB/s |
-| HDF5 columnar | 12.31s | 0.7490s | 4.379s | 17.44s | 111.3 MiB/s |
-| EDF | 106.3s | 0.9150s | 5.261s | 112.4s | 17.3 MiB/s |
+| Parquet | 9.989s | 0.6250s | 3.578s | 14.20s | 136.7 MiB/s |
+| HDF5 row-group | 11.98s | 0.7430s | 4.473s | 17.20s | 112.8 MiB/s |
+| HDF5 columnar | 12.73s | 0.7500s | 4.360s | 17.85s | 108.7 MiB/s |
+| EDF | 87.81s | 0.6600s | 4.011s | 92.48s | 21.0 MiB/s |
 
 ## D.2 Sliding FFT
 
@@ -125,10 +125,10 @@ This stage computed 21,596 overlapping FFT windows across the full study.
 
 | Format | Read | Montage | Filter | FFT | Total |
 | --- | --- | --- | --- | --- | --- |
-| HDF5 columnar | 7.907s | 0.6920s | 3.796s | 9.664s | 22.45s |
-| HDF5 row-group | 8.925s | 0.6150s | 3.887s | 9.328s | 23.13s |
-| Parquet | 11.08s | 0.7950s | 4.186s | 10.17s | 26.68s |
-| EDF | 49.06s | 0.6680s | 3.885s | 9.471s | 63.49s |
+| HDF5 columnar | 6.598s | 0.5710s | 3.365s | 8.618s | 19.50s |
+| Parquet | 12.40s | 0.8420s | 4.645s | 11.10s | 29.48s |
+| HDF5 row-group | 11.84s | 0.7970s | 4.659s | 12.03s | 29.81s |
+| EDF | 49.74s | 0.6830s | 3.900s | 9.790s | 64.51s |
 
 ## E. Window Scaling
 
@@ -140,17 +140,17 @@ This stage computed 21,596 overlapping FFT windows across the full study.
 
 **Question answered:** How does each format transition from small random reads to large sustained reads?
 
-Best measured throughput is 307.6 MiB/s from Parquet at a 3600s window.
+Best measured throughput is 378.6 MiB/s from Parquet at a 1800s window.
 
 | Window | Parquet | HDF5 columnar | HDF5 row-group | EDF |
 | --- | --- | --- | --- | --- |
-| 10s | 5.9 MiB/s | 3.4 MiB/s | 10.6 MiB/s | 22.2 MiB/s |
-| 30s | 18.7 MiB/s | 20.1 MiB/s | 29.9 MiB/s | 25.0 MiB/s |
-| 60s | 52.0 MiB/s | 76.4 MiB/s | 83.0 MiB/s | 36.2 MiB/s |
-| 300s | 145.6 MiB/s | 177.1 MiB/s | 124.6 MiB/s | 42.6 MiB/s |
-| 900s | 239.2 MiB/s | 268.8 MiB/s | 119.8 MiB/s | 34.6 MiB/s |
-| 1800s | 216.8 MiB/s | 223.7 MiB/s | 92.1 MiB/s | 34.7 MiB/s |
-| 3600s | 307.6 MiB/s | 275.3 MiB/s | 160.8 MiB/s | 40.7 MiB/s |
+| 10s | 8.9 MiB/s | 9.8 MiB/s | 10.5 MiB/s | 35.4 MiB/s |
+| 30s | 19.8 MiB/s | 22.2 MiB/s | 27.7 MiB/s | 29.1 MiB/s |
+| 60s | 39.5 MiB/s | 40.8 MiB/s | 48.2 MiB/s | 30.3 MiB/s |
+| 300s | 119.3 MiB/s | 156.1 MiB/s | 137.8 MiB/s | 37.5 MiB/s |
+| 900s | 334.1 MiB/s | 264.2 MiB/s | 167.1 MiB/s | 40.8 MiB/s |
+| 1800s | 378.6 MiB/s | 258.5 MiB/s | 158.4 MiB/s | 43.0 MiB/s |
+| 3600s | 209.8 MiB/s | 352.7 MiB/s | 159.1 MiB/s | 36.8 MiB/s |
 
 ## F. Compression
 
@@ -162,15 +162,15 @@ Best measured throughput is 307.6 MiB/s from Parquet at a 3600s window.
 
 **Question answered:** Which Parquet codec gives the best balance between storage efficiency and read performance?
 
-Against a raw float32 baseline of 2,170.5 MiB, the smallest Parquet artifact is zstd_9 at 618.4 MiB. The fastest 1-minute read is snappy at 0.0464s.
+Against a raw float32 baseline of 2,170.5 MiB, the smallest Parquet artifact is zstd_9 at 618.4 MiB. The fastest 1-minute read is snappy at 0.0510s.
 
 | Codec | 1-minute read | Artifact size | Ratio vs raw float32 |
 | --- | --- | --- | --- |
-| zstd_9 | 0.1085s | 618.4 MiB | 3.51× |
-| zstd_3 | 0.0856s | 620.8 MiB | 3.50× |
-| lz4 | 0.0889s | 717.8 MiB | 3.02× |
-| snappy | 0.0464s | 759.1 MiB | 2.86× |
-| none | 0.1024s | 791.0 MiB | 2.74× |
+| zstd_9 | 0.0659s | 618.4 MiB | 3.51× |
+| zstd_3 | 0.0915s | 620.8 MiB | 3.50× |
+| lz4 | 0.0652s | 717.8 MiB | 3.02× |
+| snappy | 0.0510s | 759.1 MiB | 2.86× |
+| none | 0.0919s | 791.0 MiB | 2.74× |
 
 ## G. Precision Loss
 
@@ -222,9 +222,9 @@ The most compact measured storage mode is int32_nanovolt (zstd) at 581.3 MiB.
 
 | Mode | Read method | Codec | 1-minute read | Throughput |
 | --- | --- | --- | --- | --- |
-| int32_nanovolt | numpy | zstd | 0.0568s | 47.4 MiB/s |
-| float32 | — | zstd_3 | 0.0588s | 45.8 MiB/s |
-| int32_calibrated | numpy | zstd | 0.0625s | 43.1 MiB/s |
+| int32_calibrated | numpy | zstd | 0.0554s | 48.6 MiB/s |
+| float32 | — | zstd_3 | 0.0556s | 48.5 MiB/s |
+| int32_nanovolt | arrow | zstd | 0.0822s | 32.8 MiB/s |
 
 ## I. Remote Query
 
@@ -240,12 +240,12 @@ EDF download time in this run is marked as estimated.
 
 | Method | Format | Channel subset | Total time | Avg/window | Throughput |
 | --- | --- | --- | --- | --- | --- |
-| duckdb_remote | Parquet int32 nV snappy | 10-20 (19ch) | 4.423s | 0.4420s | 25.2 MiB/s |
-| full_download_then_read | EDF | 10-20 (19ch) | 13.54s | 0.2630s | — |
-| duckdb_remote | Parquet float32 snappy | 10-20 (19ch) | 15.48s | 1.548s | 7.2 MiB/s |
-| full_download_then_read | EDF | all | 17.66s | 0.6750s | — |
-| duckdb_remote | Parquet float32 snappy | all | 26.09s | 2.609s | 10.3 MiB/s |
-| duckdb_remote | Parquet int32 nV snappy | all | 30.57s | 3.057s | 8.8 MiB/s |
+| duckdb_remote | Parquet int32 nV snappy | 10-20 (19ch) | 4.793s | 0.4790s | 23.2 MiB/s |
+| full_download_then_read | EDF | 10-20 (19ch) | 13.72s | 0.2810s | — |
+| duckdb_remote | Parquet float32 snappy | 10-20 (19ch) | 16.14s | 1.614s | 6.9 MiB/s |
+| full_download_then_read | EDF | all | 18.53s | 0.7630s | — |
+| duckdb_remote | Parquet float32 snappy | all | 25.78s | 2.578s | 10.5 MiB/s |
+| duckdb_remote | Parquet int32 nV snappy | all | 34.50s | 3.450s | 7.8 MiB/s |
 
 ## J. Tuned Format Comparison
 
@@ -263,12 +263,12 @@ This group compares matched block-size variants generated specifically for Bench
 
 | Block size | Parquet snappy | Parquet LZ4 | HDF5 LZ4 |
 | --- | --- | --- | --- |
-| 5m | 0.0669s | 0.0519s | 0.0553s |
-| 10m | 0.0468s | 0.0459s | 0.0916s |
-| 20m | 0.0576s | 0.0822s | 0.1630s |
-| 30m | 0.0739s | 0.0642s | 0.2379s |
-| 60m | 0.0855s | 0.1178s | 0.4937s |
-| 120m | 0.1765s | 0.2043s | 0.9281s |
+| 5m | 0.0664s | 0.0632s | 0.0354s |
+| 10m | 0.0666s | 0.0585s | 0.0644s |
+| 20m | 0.0485s | 0.0588s | 0.1763s |
+| 30m | 0.0552s | 0.0670s | 0.2451s |
+| 60m | 0.0947s | 0.1174s | 0.4301s |
+| 120m | 0.2379s | 0.2804s | 0.8316s |
 
 ### J.2 Channel Subset
 
@@ -282,12 +282,12 @@ This group compares matched block-size variants generated specifically for Bench
 
 | Block size | Parquet snappy | Parquet LZ4 | HDF5 LZ4 |
 | --- | --- | --- | --- |
-| 5m | 0.0549s | 0.0540s | 0.0076s |
-| 10m | 0.0416s | 0.0417s | 0.0124s |
-| 20m | 0.0328s | 0.0364s | 0.0303s |
-| 30m | 0.0513s | 0.0353s | 0.0380s |
-| 60m | 0.0815s | 0.0972s | 0.0980s |
-| 120m | 0.1106s | 0.0759s | 0.2150s |
+| 5m | 0.0485s | 0.0485s | 0.0052s |
+| 10m | 0.0342s | 0.0465s | 0.0104s |
+| 20m | 0.0278s | 0.0354s | 0.0244s |
+| 30m | 0.0355s | 0.0340s | 0.0254s |
+| 60m | 0.0356s | 0.0342s | 0.0494s |
+| 120m | 0.0490s | 0.0441s | 0.1003s |
 
 ### J.3 Peak Window-Scaling Throughput
 
@@ -301,12 +301,12 @@ This group compares matched block-size variants generated specifically for Bench
 
 | Block size | Parquet snappy | Parquet LZ4 | HDF5 LZ4 |
 | --- | --- | --- | --- |
-| 5m | 348.8 MiB/s @ 3600s | 316.8 MiB/s @ 1800s | 326.3 MiB/s @ 3600s |
-| 10m | 355.8 MiB/s @ 3600s | 382.6 MiB/s @ 3600s | 304.0 MiB/s @ 1800s |
-| 20m | 346.6 MiB/s @ 1800s | 327.6 MiB/s @ 3600s | 272.6 MiB/s @ 1800s |
-| 30m | 340.6 MiB/s @ 3600s | 351.6 MiB/s @ 3600s | 221.4 MiB/s @ 3600s |
-| 60m | 340.6 MiB/s @ 3600s | 336.9 MiB/s @ 3600s | 179.4 MiB/s @ 3600s |
-| 120m | 342.1 MiB/s @ 3600s | 332.7 MiB/s @ 3600s | 183.4 MiB/s @ 3600s |
+| 5m | 350.2 MiB/s @ 1800s | 328.3 MiB/s @ 3600s | 304.2 MiB/s @ 3600s |
+| 10m | 333.3 MiB/s @ 3600s | 325.8 MiB/s @ 1800s | 271.0 MiB/s @ 1800s |
+| 20m | 304.8 MiB/s @ 1800s | 310.1 MiB/s @ 1800s | 236.9 MiB/s @ 3600s |
+| 30m | 329.4 MiB/s @ 1800s | 364.2 MiB/s @ 3600s | 242.0 MiB/s @ 3600s |
+| 60m | 307.7 MiB/s @ 3600s | 329.6 MiB/s @ 3600s | 174.7 MiB/s @ 3600s |
+| 120m | 317.5 MiB/s @ 3600s | 347.1 MiB/s @ 3600s | 180.3 MiB/s @ 3600s |
 
 ### J.4 Full-Study Sequential Read
 
@@ -320,11 +320,11 @@ This group compares matched block-size variants generated specifically for Bench
 
 | Block size | Parquet snappy | Parquet LZ4 | HDF5 LZ4 |
 | --- | --- | --- | --- |
-| 5m | 14.59s | 16.00s | 12.22s |
-| 10m | 14.19s | 13.84s | 21.69s |
-| 20m | 14.90s | 12.70s | 28.29s |
-| 30m | 16.11s | 18.40s | 38.64s |
-| 60m | 18.68s | 19.35s | 68.52s |
-| 120m | 29.21s | 28.58s | 126.2s |
+| 5m | 15.19s | 15.31s | 16.80s |
+| 10m | 14.38s | 14.22s | 17.53s |
+| 20m | 15.49s | 13.89s | 28.57s |
+| 30m | 16.16s | 14.48s | 42.81s |
+| 60m | 18.91s | 18.89s | 68.65s |
+| 120m | 29.55s | 30.39s | 144.8s |
 
 Per-variant artifact sizes are not currently recorded in the result JSON, so this generated report limits Benchmark J to performance-derived comparisons.

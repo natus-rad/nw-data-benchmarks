@@ -105,8 +105,18 @@ def validate_results(payload: dict[str, Any], path: Path) -> None:
     if not isinstance(payload["benchmarks"], list) or not payload["benchmarks"]:
         raise ReportGenerationError(f"Results file {path} has no benchmark rows in 'benchmarks'.")
 
-    study_required = ["name", "channels", "sample_freq", "total_stamps", "duration_seconds"]
     study = payload["studies"][0]
+
+    # Back-fill total_stamps if the runner omitted it (older schema or refactor regression).
+    # Write back into payload so render_report() sees the corrected value.
+    # Prefer start_stamp/end_stamp; fall back to duration_seconds * sample_freq.
+    if "total_stamps" not in study:
+        if "start_stamp" in study and "end_stamp" in study:
+            study["total_stamps"] = int(study["end_stamp"]) - int(study["start_stamp"]) + 1
+        elif "duration_seconds" in study and "sample_freq" in study:
+            study["total_stamps"] = round(float(study["duration_seconds"]) * float(study["sample_freq"]))
+
+    study_required = ["name", "channels", "sample_freq", "total_stamps", "duration_seconds"]
     missing = [key for key in study_required if key not in study]
     if missing:
         raise ReportGenerationError(

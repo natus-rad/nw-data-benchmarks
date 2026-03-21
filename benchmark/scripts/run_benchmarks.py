@@ -52,14 +52,25 @@ def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str
     print(f"\nTotal benchmark runs: ~{_estimate_runs(cfg, selected)}")
 
 
-def run_benchmarks(cfg: dict, args: argparse.Namespace) -> dict:
+def _save_results(output: dict, out_path: Path) -> None:
+    """Atomically overwrite the results file with the current output dict."""
+    tmp = out_path.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        json.dump(output, f, indent=2)
+    tmp.replace(out_path)
+
+
+def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
     run_id = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     cache_dir = Path(cfg.get("cache_dir", ".benchmark_cache"))
     cache_dir.mkdir(parents=True, exist_ok=True)
     selected = _selected_benchmarks(cfg, args)
     if args.dry_run:
         _print_dry_run(cfg, args, selected)
-        return {}
+        return
+
+    out_path = Path(args.output) if args.output else Path("benchmark/results") / f"{run_id}_benchmark_results.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
     output = {
         "run_id": run_id,
@@ -90,12 +101,16 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> dict:
             "local_source": str(study_dir),
             "sample_freq": info.sample_freq,
             "channels": len(info.channel_labels),
+            "start_stamp": info.start_stamp,
+            "end_stamp": info.end_stamp,
+            "total_stamps": info.end_stamp - info.start_stamp + 1,
             "duration_seconds": round((info.end_stamp - info.start_stamp + 1) / info.sample_freq, 1),
+            "segments": info.n_segments if hasattr(info, "n_segments") else len(info.segment_plans),
             "paths": {k: str(v) for k, v in paths.items()},
         }
         output["studies"].append(study_meta)
 
-        for cat_id, cat_name, bench_fn in selected:
+        for _, cat_name, bench_fn in selected:
             print(f"\n-- {cat_name} --")
             results = bench_fn(info, paths, cfg, args) if bench_fn is bench_remote_query else bench_fn(info, paths, cfg)
             for result in results:
@@ -103,29 +118,23 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> dict:
                 result["study"] = study_cfg["name"]
                 output["benchmarks"].append(result)
                 _print_result(result)
+            _save_results(output, out_path)
+            print(f"  [checkpoint → {out_path}]")
 
-    return output
+    print(f"\nResults saved to {out_path}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark EEG format operations.")
     parser.add_argument("--config", default="benchmark/config/default.yaml", help="Path to YAML config file")
     parser.add_argument("--categories", nargs="*", help="Benchmark categories to run")
-    parser.add_argument("--output", default=None, help="Output JSON file path (default: benchmark/results/<run_id>.json)")
+    parser.add_argument("--output", default=None, help="Output JSON file path (default: benchmark/results/<run_id>_benchmark_results.json)")
     parser.add_argument("--dry-run", action="store_true", help="Print planned work without downloading or running benchmarks")
     parser.add_argument("--sas-token", default=None, help="Azure Blob SAS token (optional). Overrides AZURE_STORAGE_SAS_TOKEN if provided")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    result = run_benchmarks(cfg, args)
-    if args.dry_run:
-        return
-
-    out_path = Path(args.output) if args.output else Path("benchmark/results") / f"{result['run_id']}.json"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w") as f:
-        json.dump(result, f, indent=2)
-    print(f"\nSaved results to {out_path}")
+    run_benchmarks(cfg, args)
 
 
 if __name__ == "__main__":
