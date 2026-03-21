@@ -1994,7 +1994,8 @@ def _download_edf_from_azure(cfg: dict, edf_blob_path: str,
     return elapsed, local_path
 
 
-def bench_remote_query(info, paths: dict, cfg: dict) -> list[dict]:
+def bench_remote_query(info, paths: dict, cfg: dict,
+                       args: argparse.Namespace | None = None) -> list[dict]:
     """Benchmark I: Remote Parquet (DuckDB) vs Remote EDF (full download + local read).
 
     Simulates querying data around 10 random seizure events, each 10 minutes.
@@ -2097,10 +2098,8 @@ def bench_remote_query(info, paths: dict, cfg: dict) -> list[dict]:
 
         # Simulate download: if blob path exists, actually download; otherwise estimate
         if edf_blob_path:
-            from argparse import Namespace
-            args_ns = Namespace(sas_token=None)
             print(f"    EDF download ({edf_size / 1024 / 1024:.0f} MiB) ... ", end="", flush=True)
-            dl_time, dl_path = _download_edf_from_azure(cfg, edf_blob_path, args_ns)
+            dl_time, dl_path = _download_edf_from_azure(cfg, edf_blob_path, args)
             print(f"{dl_time:.1f}s")
             edf_read_path = dl_path
         else:
@@ -2419,7 +2418,12 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> dict:
         for cat_id, cat_name, bench_fn in selected:
             print(f"\n  --- {cat_name} ---")
             try:
-                cat_results = bench_fn(info, paths, cfg)
+                # bench_remote_query needs CLI args to honour --sas-token for
+                # private container access; other bench functions don't need it.
+                if bench_fn is bench_remote_query:
+                    cat_results = bench_fn(info, paths, cfg, args=args)
+                else:
+                    cat_results = bench_fn(info, paths, cfg)
                 output["benchmarks"].extend(cat_results)
                 for r in cat_results:
                     _print_result(r)
