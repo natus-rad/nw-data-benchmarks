@@ -1987,9 +1987,8 @@ def _download_edf_from_azure(cfg: dict, edf_blob_path: str,
     container_client = client.get_container_client(container)
 
     t0 = time.perf_counter()
-    blob_data = container_client.download_blob(edf_blob_path).readall()
     with open(local_path, "wb") as f:
-        f.write(blob_data)
+        container_client.download_blob(edf_blob_path).readinto(f)
     elapsed = time.perf_counter() - t0
 
     return elapsed, local_path
