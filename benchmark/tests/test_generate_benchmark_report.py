@@ -112,12 +112,33 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
                 },
             ],
         }
-        template = "# Report\n\n${sections}\n"
+        template = "# Report\n\n## J\n\n${j1_results}\n\n${j4_results}${j_notes}\n"
         rendered = render_report(payload, template, Path("benchmark/results/demo.json"))
-        self.assertIn("### J.1 Random Access", rendered)
         self.assertIn("| 5m | 0.0669s | 0.0553s |", rendered)
-        self.assertIn("### J.4 Full-Study Sequential Read", rendered)
         self.assertIn("| 5m | 14.59s | 12.22s |", rendered)
+
+    def test_render_report_supports_per_section_placeholders(self) -> None:
+        payload = {
+            "run_id": "2026-03-21T00-00-00",
+            "system": {"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16},
+            "studies": [
+                {
+                    "name": "demo",
+                    "channels": 46,
+                    "sample_freq": 256.0,
+                    "total_stamps": 11854000,
+                    "duration_seconds": 46304.7,
+                }
+            ],
+            "benchmarks": [
+                {"category": "random_access", "format": "parquet", "position": "0%", "wall_clock_seconds": 0.05, "mib_per_sec": 50.0},
+                {"category": "random_access", "format": "edf", "position": "0%", "wall_clock_seconds": 0.10, "mib_per_sec": 25.0},
+            ],
+        }
+        template = "# Report\n\n## A\n\n${a_results}\n\n## E\n\n${e_results}\n"
+        rendered = render_report(payload, template, Path("benchmark/results/demo.json"))
+        self.assertIn("Parquet has the lowest median 1-minute read time", rendered)
+        self.assertIn("*This category was not present in the input results file.*", rendered)
 
 
 if __name__ == "__main__":

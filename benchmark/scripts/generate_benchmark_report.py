@@ -119,6 +119,7 @@ def render_report(payload: dict[str, Any], template_text: str, source_path: Path
         summary = build_summary(payload)
         observations = build_key_observations(payload)
         sections = build_sections(payload)
+        section_placeholders = build_section_placeholders(payload)
 
         template = Template(template_text)
         return template.substitute(
@@ -130,6 +131,7 @@ def render_report(payload: dict[str, Any], template_text: str, source_path: Path
             summary=summary,
             key_observations=observations,
             sections=sections,
+            **section_placeholders,
         ).rstrip() + "\n"
     except KeyError as exc:
         raise ReportGenerationError(
@@ -262,6 +264,36 @@ def build_sections(payload: dict[str, Any]) -> str:
     ]
     sections.append(section("J. Tuned Format Comparison", tuned_rows, lambda rows, p=payload: render_tuned_comparison(rows, p)))
     return "\n\n".join(sections)
+
+
+def build_section_placeholders(payload: dict[str, Any]) -> dict[str, str]:
+    full_rows = rows_for(payload, "tuned_full_study")
+    return {
+        "a_results": render_section_results(rows_for(payload, "random_access"), render_random_access, payload),
+        "b_results": render_section_results(rows_for(payload, "channel_subset"), render_channel_subset, payload),
+        "c_results": render_section_results(rows_for(payload, "remontage"), render_remontage, payload),
+        "d1_results": render_section_results(rows_for(payload, "filter_pipeline_full"), render_filter_pipeline, payload),
+        "d2_results": render_section_results(rows_for(payload, "sliding_fft_full"), render_sliding_fft, payload),
+        "e_results": render_section_results(rows_for(payload, "window_scaling"), render_window_scaling, payload),
+        "f_results": render_section_results(rows_for(payload, "compression"), render_compression, payload),
+        "g_results": render_section_results(rows_for(payload, "precision_loss"), render_precision_loss, payload),
+        "h_results": render_section_results(rows_for(payload, "int32_storage"), render_int32_storage, payload),
+        "i_results": render_section_results(rows_for(payload, "remote_query"), render_remote_query, payload),
+        "j1_results": render_section_results(rows_for(payload, "tuned_random_access"), lambda rows, _: pivot_table(rows, "block_size", "format", "wall_clock_seconds", "time"), payload),
+        "j2_results": render_section_results(rows_for(payload, "tuned_channel_subset"), lambda rows, _: pivot_table(rows, "block_size", "format", "wall_clock_seconds", "time"), payload),
+        "j3_results": render_section_results(rows_for(payload, "tuned_window_scaling"), lambda rows, _: tuned_peak_table(rows), payload),
+        "j4_results": render_section_results(full_rows, lambda rows, _: pivot_table(rows, "block_size", "format", "wall_clock_seconds", "time"), payload),
+        "j_notes": (
+            "\n\nPer-variant artifact sizes are not currently recorded in the result JSON, so this generated report limits Benchmark J to performance-derived comparisons."
+            if full_rows else ""
+        ),
+    }
+
+
+def render_section_results(rows: list[dict[str, Any]], renderer, payload: dict[str, Any]) -> str:
+    if not rows:
+        return "*This category was not present in the input results file.*"
+    return renderer(rows, payload)
 
 
 def section(title: str, rows: list[dict[str, Any]], renderer) -> str:

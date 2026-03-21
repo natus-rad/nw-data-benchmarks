@@ -38,6 +38,14 @@ Benchmark rows: **273** across **14** categories.
 
 ## A. Random Access
 
+**What it tests:** Repeated all-channel reads of the same 60-second window from different positions in the study.
+
+**What varies:** Read position (`0%`, `50%`, `75%`, `95%`).
+
+**What stays fixed:** Window size, channel count, and baseline format/layout readers.
+
+**Question answered:** How sensitive is each format to where in the study a random read occurs?
+
 HDF5 row-group has the lowest median 1-minute read time across read positions at 0.0454s.
 
 | Position | Parquet | HDF5 columnar | HDF5 row-group | EDF |
@@ -49,6 +57,14 @@ HDF5 row-group has the lowest median 1-minute read time across read positions at
 
 ## B. Channel Subset
 
+**What it tests:** Reads of the same 60-second window while requesting fewer channels.
+
+**What varies:** Number of requested channels.
+
+**What stays fixed:** Read position, window size, and baseline format/layout readers.
+
+**Question answered:** Which formats benefit most when the workload only needs a subset of channels?
+
 4 channels → HDF5 columnar is fastest at 0.0055s. 10 channels → HDF5 columnar is fastest at 0.0152s. 46 channels → HDF5 row-group is fastest at 0.0320s.
 
 | Channels | Parquet | HDF5 columnar | HDF5 row-group | EDF |
@@ -58,6 +74,14 @@ HDF5 row-group has the lowest median 1-minute read time across read positions at
 | 46 | 0.0420s / 64.2 MiB/s | 0.0365s / 73.8 MiB/s | 0.0320s / 84.3 MiB/s | 0.0725s / 37.2 MiB/s |
 
 ## C. Re-montage
+
+**What it tests:** A read followed immediately by bipolar montage computation.
+
+**What varies:** Storage format/layout.
+
+**What stays fixed:** Window size, channel set, and the montage operation itself.
+
+**Question answered:** Once downstream signal processing is included, how much of total time is storage I/O versus lightweight computation?
 
 Montage is a relatively small fraction of end-to-end time in this benchmark (average 2.1% of total wall time).
 
@@ -70,6 +94,14 @@ Montage is a relatively small fraction of end-to-end time in this benchmark (ave
 
 ## D.1 Full-Study Filter Pipeline
 
+**What it tests:** End-to-end full-study read, montage, and digital filtering.
+
+**What varies:** Storage format/layout.
+
+**What stays fixed:** Entire study duration, channel set, filter pipeline, and processing order.
+
+**Question answered:** Which format is best for whole-study offline processing workloads that must read and transform all signal data?
+
 For the full-study read → montage → filter pipeline, Parquet is fastest at 14.83s.
 
 | Format | Read | Montage | Filter | Total | Throughput |
@@ -81,6 +113,14 @@ For the full-study read → montage → filter pipeline, Parquet is fastest at 1
 
 ## D.2 Sliding FFT
 
+**What it tests:** The same full-study read/filter pipeline plus overlapping FFT window computation.
+
+**What varies:** Storage format/layout.
+
+**What stays fixed:** Study duration, preprocessing pipeline, FFT window/stride, and channel set.
+
+**Question answered:** How much does storage choice matter once a heavier downstream spectral-analysis workload is layered on top?
+
 This stage computed 21,596 overlapping FFT windows across the full study.
 
 | Format | Read | Montage | Filter | FFT | Total |
@@ -91,6 +131,14 @@ This stage computed 21,596 overlapping FFT windows across the full study.
 | EDF | 49.06s | 0.6680s | 3.885s | 9.471s | 63.49s |
 
 ## E. Window Scaling
+
+**What it tests:** All-channel reads from the middle of the study while increasing requested window size.
+
+**What varies:** Window size.
+
+**What stays fixed:** Read position, channel count, and baseline format/layout readers.
+
+**Question answered:** How does each format transition from small random reads to large sustained reads?
 
 Best measured throughput is 307.6 MiB/s from Parquet at a 3600s window.
 
@@ -106,6 +154,14 @@ Best measured throughput is 307.6 MiB/s from Parquet at a 3600s window.
 
 ## F. Compression
 
+**What it tests:** Parquet codec tradeoffs between read speed and resulting artifact size.
+
+**What varies:** Codec (`none`, `snappy`, `zstd`, `lz4`).
+
+**What stays fixed:** Signal data, window size, and Parquet layout.
+
+**Question answered:** Which Parquet codec gives the best balance between storage efficiency and read performance?
+
 Against a raw float32 baseline of 2,170.5 MiB, the smallest Parquet artifact is zstd_9 at 618.4 MiB. The fastest 1-minute read is snappy at 0.0464s.
 
 | Codec | 1-minute read | Artifact size | Ratio vs raw float32 |
@@ -117,6 +173,14 @@ Against a raw float32 baseline of 2,170.5 MiB, the smallest Parquet artifact is 
 | none | 0.1024s | 791.0 MiB | 2.74× |
 
 ## G. Precision Loss
+
+**What it tests:** Float32 → EDF 16-bit → float32 round-trip quantization error.
+
+**What varies:** Channel signal statistics.
+
+**What stays fixed:** Window size and round-trip conversion procedure.
+
+**Question answered:** What numeric precision is lost when using EDF-style 16-bit storage instead of float32?
 
 EDF round-trip quantization for a 60s window produced worst-case max absolute error 0.03268992 µV with average SNR 94.15 dB across 46 channels.
 
@@ -131,6 +195,14 @@ Top channels by max absolute error:
 | X2 | 0.00483166 | 0.00278874 | 88.79 |
 
 ## H. Int32 Storage
+
+**What it tests:** Alternative int32-based storage encodings versus float32 for size, precision, and read speed.
+
+**What varies:** Encoding mode, codec, and read path.
+
+**What stays fixed:** Signal data and comparison baseline.
+
+**Question answered:** Can int32 encodings reduce storage cost while preserving acceptable fidelity and performance?
 
 The most compact measured storage mode is int32_nanovolt (zstd) at 581.3 MiB.
 
@@ -156,6 +228,14 @@ The most compact measured storage mode is int32_nanovolt (zstd) at 581.3 MiB.
 
 ## I. Remote Query
 
+**What it tests:** Remote-access workflows for retrieving windows over the network.
+
+**What varies:** Access method and artifact format.
+
+**What stays fixed:** Window count, window duration, and requested channel subsets.
+
+**Question answered:** For remote/cloud access, when is query-in-place better than full-file download first?
+
 EDF download time in this run is marked as estimated.
 
 | Method | Format | Channel subset | Total time | Avg/window | Throughput |
@@ -169,9 +249,17 @@ EDF download time in this run is marked as estimated.
 
 ## J. Tuned Format Comparison
 
-This section compares matched block-size variants generated for Benchmark J.
+This group compares matched block-size variants generated specifically for Benchmark J.
 
 ### J.1 Random Access
+
+**What it tests:** A single 60-second all-channel read at mid-study across tuned block sizes.
+
+**What varies:** On-disk block size and tuned storage variant.
+
+**What stays fixed:** Read position, read size, and channel count.
+
+**Question answered:** Which tuned layout is best for small random-access reads?
 
 | Block size | Parquet snappy | Parquet LZ4 | HDF5 LZ4 |
 | --- | --- | --- | --- |
@@ -184,6 +272,14 @@ This section compares matched block-size variants generated for Benchmark J.
 
 ### J.2 Channel Subset
 
+**What it tests:** A 60-second read of only 4 channels across tuned block sizes.
+
+**What varies:** On-disk block size and tuned storage variant.
+
+**What stays fixed:** Read position, read duration, and requested channel count.
+
+**Question answered:** Which tuned layout best supports selective channel retrieval?
+
 | Block size | Parquet snappy | Parquet LZ4 | HDF5 LZ4 |
 | --- | --- | --- | --- |
 | 5m | 0.0549s | 0.0540s | 0.0076s |
@@ -195,6 +291,14 @@ This section compares matched block-size variants generated for Benchmark J.
 
 ### J.3 Peak Window-Scaling Throughput
 
+**What it tests:** The best sustained throughput observed for each tuned variant across multiple window sizes.
+
+**What varies:** On-disk block size, tuned storage variant, and requested window size.
+
+**What stays fixed:** Channel count and comparison method.
+
+**Question answered:** Which tuned layout scales best as read size grows?
+
 | Block size | Parquet snappy | Parquet LZ4 | HDF5 LZ4 |
 | --- | --- | --- | --- |
 | 5m | 348.8 MiB/s @ 3600s | 316.8 MiB/s @ 1800s | 326.3 MiB/s @ 3600s |
@@ -205,6 +309,14 @@ This section compares matched block-size variants generated for Benchmark J.
 | 120m | 342.1 MiB/s @ 3600s | 332.7 MiB/s @ 3600s | 183.4 MiB/s @ 3600s |
 
 ### J.4 Full-Study Sequential Read
+
+**What it tests:** Reading the entire study chunk-by-chunk using the tuned variants.
+
+**What varies:** On-disk block size and tuned storage variant.
+
+**What stays fixed:** Full-study coverage, channel count, and sequential chunked access pattern.
+
+**Question answered:** Which tuned layout is best for whole-study scans rather than isolated random reads?
 
 | Block size | Parquet snappy | Parquet LZ4 | HDF5 LZ4 |
 | --- | --- | --- | --- |
