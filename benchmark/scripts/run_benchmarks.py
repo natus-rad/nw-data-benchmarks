@@ -1438,7 +1438,6 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
             "filter_seconds": round(t_filt_total, 3),
             **_throughput(total_samples_read, n_channels, t_wall),
         })
-        _print_result(results[-1])
 
     # --- D.2: Sliding-window FFT ---
     fft_window_sec = 10
@@ -1566,7 +1565,6 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
             "fft_seconds": round(t_fft_total, 3),
             **_throughput(total_samples_read, n_channels, t_wall),
         })
-        _print_result(results[-1])
 
     return results
 
@@ -2273,7 +2271,6 @@ def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
                "wall_clock_seconds": round(t, 6),
                **_throughput(n_samples, n_channels, t)}
         results.append(row)
-        _print_result(row)
 
     # --- J.2: Channel subset (4 channels) ---
     print(f"\n  --- J.2: Channel subset (4 ch, {window_sec}s) ---")
@@ -2296,7 +2293,6 @@ def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
                "wall_clock_seconds": round(t, 6),
                **_throughput(n_samples, 4, t)}
         results.append(row)
-        _print_result(row)
 
     # --- J.3: Window scaling ---
     print("\n  --- J.3: Window scaling ---")
@@ -2323,7 +2319,6 @@ def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
                    "wall_clock_seconds": round(t, 6),
                    **_throughput(n_samples, n_channels, t)}
             results.append(row)
-            _print_result(row)
 
     # --- J.4: Full-study sequential read (all channels, chunked) ---
     print("\n  --- J.4: Full-study sequential read ---")
@@ -2348,7 +2343,6 @@ def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
                "wall_clock_seconds": round(t_wall, 3),
                **_throughput(samples_read, n_channels, t_wall)}
         results.append(row)
-        _print_result(row)
 
     return results
 
