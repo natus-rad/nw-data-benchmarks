@@ -126,7 +126,7 @@ def download_study(cfg: dict, study: dict, args: argparse.Namespace) -> Path:
         study_cache = cache_dir / study["name"]
         check_glob = "*.erd"
 
-    if study_cache.exists() and any(study_cache.glob(check_glob)):
+    if study_cache.exists() and any(study_cache.rglob(check_glob)):
         print(f"  [cached] {study['name']} -> {study_cache}")
         return study_cache
 
