@@ -312,8 +312,6 @@ def _setup_parquet_compression_variants(paths: dict, src_dir: Path,
                                         output_base: Path, name: str,
                                         cfg: dict) -> None:
     """Re-compress source Parquet with different codecs for benchmark F."""
-    import pyarrow as pa
-
     src_files = sorted(src_dir.glob("*.parquet"))
     if not src_files:
         return
