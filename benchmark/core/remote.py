@@ -61,14 +61,17 @@ def bench_remote_query(info, paths: dict, cfg: dict,
     container = cfg["azure"]["container"]
 
     rng = np.random.default_rng(42)
-    margin = window_stamps + 1
-    max_start = info.end_stamp - margin
-    if max_start <= info.start_stamp:
+    # Pick random start positions as row indices so we never do stamp arithmetic.
+    # max_row_start is the last row index at which a window of window_stamps rows fits.
+    max_row_start = info.total_rows - window_stamps - 1
+    if max_row_start <= 0:
         print(f"    [skip] Study too short for remote_benchmark window ({window_sec}s).")
         return results
-    random_starts = rng.integers(info.start_stamp, max_start, size=n_points)
-    random_starts.sort()
-    windows = [(int(s), int(s + window_stamps - 1)) for s in random_starts]
+    random_row_starts = np.sort(rng.integers(0, max_row_start + 1, size=n_points))
+    # Convert row indices to actual samplestamps; window ends use stamp arithmetic
+    # only to define a time-domain query range (window_sec seconds wide).
+    random_starts = [info.stamp_at_row(int(i)) for i in random_row_starts]
+    windows = [(s, s + window_stamps - 1) for s in random_starts]
 
     print(f"    {n_points} random windows × {window_sec}s = {n_points * window_sec}s total")
     print(f"    Stamps: {[f'{s}–{e}' for s, e in windows[:3]]} ...")
@@ -158,8 +161,8 @@ def bench_remote_query(info, paths: dict, cfg: dict,
         for ch_label, ch_indices in [("all", None), ("10-20 (19ch)", subset_indices)]:
             print(f"    EDF local read [{ch_label}] ... ", end="", flush=True)
             local_times = []
-            for s, _ in windows:
-                start_sample = int(s - info.start_stamp)
+            for row_start in random_row_starts:
+                start_sample = int(row_start)
                 n_samp = min(int(window_sec * sample_freq), edf_total - start_sample)
                 if start_sample < 0 or n_samp <= 0:
                     continue

@@ -42,7 +42,7 @@ def bench_random_access(info, paths: dict, cfg: dict) -> list[dict]:
     window_sec = cfg.get("default_window", 60)
     window_stamps = int(window_sec * info.sample_freq)
     positions = cfg.get("read_positions", [0.0, 0.5, 0.75, 0.95])
-    total_stamps = info.end_stamp - info.start_stamp
+    total_stamps = info.total_rows
     n_channels = len(info.channel_labels)
 
     edf_path = _edf_file(paths["edf"]) if "edf" in paths else None
@@ -52,7 +52,7 @@ def bench_random_access(info, paths: dict, cfg: dict) -> list[dict]:
 
         for pos in positions:
             label = f"{int(pos * 100)}%"
-            start_stamp = info.start_stamp + int(pos * total_stamps)
+            start_stamp = info.stamp_at_row(int(pos * total_stamps))
             end_stamp = start_stamp + window_stamps - 1
 
             if "parquet" in paths:
@@ -107,7 +107,7 @@ def bench_channel_subset(info, paths: dict, cfg: dict) -> list[dict]:
     window_sec = cfg.get("default_window", 60)
     window_stamps = int(window_sec * info.sample_freq)
     subsets = cfg.get("channel_subsets", [4, 10])
-    mid_stamp = info.start_stamp + (info.end_stamp - info.start_stamp) // 2
+    mid_stamp = info.stamp_at_row(info.total_rows // 2)
     start_stamp = mid_stamp
     end_stamp = mid_stamp + window_stamps - 1
 
@@ -175,7 +175,7 @@ def bench_remontage(info, paths: dict, cfg: dict) -> list[dict]:
     reps = cfg.get("repetitions", 3)
     window_sec = cfg.get("default_window", 60)
     window_stamps = int(window_sec * info.sample_freq)
-    mid_stamp = info.start_stamp + (info.end_stamp - info.start_stamp) // 2
+    mid_stamp = info.stamp_at_row(info.total_rows // 2)
     labels = list(info.channel_labels)
     n_channels = len(labels)
 
@@ -237,8 +237,8 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
     if hours < 1:
         hours = 1
     bench_stamps = int(hours * 3600 * sample_freq)
-    bench_start = info.start_stamp
-    bench_end = bench_start + bench_stamps - 1
+    bench_start = info.stamp_at_row(0)
+    bench_end = info.stamp_at_row(min(bench_stamps - 1, info.total_rows - 1))
     bench_sec = bench_stamps / sample_freq
 
     chunk_sec = 300
@@ -423,10 +423,12 @@ def bench_window_scaling(info, paths: dict, cfg: dict) -> list[dict]:
     reps = cfg.get("repetitions", 3)
     window_sizes = cfg.get("window_sizes", [10, 30, 60, 300, 900, 1800, 3600])
     n_channels = len(info.channel_labels)
-    total_stamps = info.end_stamp - info.start_stamp
+    total_stamps = info.total_rows
 
     edf_path = _edf_file(paths["edf"]) if "edf" in paths else None
     edf_cm = EdfFileReader(edf_path) if edf_path else nullcontext(None)
+    mid_stamp = info.stamp_at_row(total_stamps // 2)
+
     with edf_cm as edf_reader:
         edf_total = edf_reader.total_samples if edf_reader else 0
 
@@ -435,7 +437,6 @@ def bench_window_scaling(info, paths: dict, cfg: dict) -> list[dict]:
             if window_stamps > total_stamps:
                 continue
 
-            mid_stamp = info.start_stamp + total_stamps // 2
             start_stamp = mid_stamp
             end_stamp = start_stamp + window_stamps - 1
 
@@ -490,7 +491,7 @@ def bench_compression(info, paths: dict, cfg: dict) -> list[dict]:
     reps = cfg.get("repetitions", 3)
     window_sec = cfg.get("default_window", 60)
     window_stamps = int(window_sec * info.sample_freq)
-    mid_stamp = info.start_stamp + (info.end_stamp - info.start_stamp) // 2
+    mid_stamp = info.stamp_at_row(info.total_rows // 2)
     start_stamp = mid_stamp
     end_stamp = mid_stamp + window_stamps - 1
     n_channels = len(info.channel_labels)
@@ -535,7 +536,7 @@ def bench_precision_loss(info, paths: dict, cfg: dict) -> list[dict]:
         return results
     window_sec = cfg.get("default_window", 60)
     window_stamps = int(window_sec * info.sample_freq)
-    mid_stamp = info.start_stamp + (info.end_stamp - info.start_stamp) // 2
+    mid_stamp = info.stamp_at_row(info.total_rows // 2)
     start_stamp = mid_stamp
     end_stamp = start_stamp + window_stamps - 1
 
@@ -607,7 +608,7 @@ def bench_int32_storage(info, paths: dict, cfg: dict) -> list[dict]:
     reps = cfg.get("repetitions", 3)
     window_sec = cfg.get("default_window", 60)
     window_stamps = int(window_sec * info.sample_freq)
-    mid_stamp = info.start_stamp + (info.end_stamp - info.start_stamp) // 2
+    mid_stamp = info.stamp_at_row(info.total_rows // 2)
     start_stamp = mid_stamp
     end_stamp = start_stamp + window_stamps - 1
     n_channels = len(info.channel_labels)
@@ -695,8 +696,8 @@ def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
     ch_cols = info.channel_columns
     reps = cfg.get("repetitions", 3)
 
-    total_stamps = info.end_stamp - info.start_stamp + 1
-    mid_stamp = info.start_stamp + total_stamps // 2
+    total_stamps = info.total_rows
+    mid_stamp = info.stamp_at_row(total_stamps // 2)
 
     block_sizes = _get_tuned_block_sizes(cfg, sample_freq)
     variants = []
@@ -756,7 +757,7 @@ def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
     for ws in window_sizes:
         ws_stamps = int(ws * sample_freq)
         s = mid_stamp
-        e = min(mid_stamp + ws_stamps - 1, info.end_stamp)
+        e = info.stamp_at_row(min(total_stamps // 2 + ws_stamps - 1, info.total_rows - 1))
         for key, block_label, codec, path in variants:
             if "pq" in key:
                 t, data = _timed(lambda p=path, ss=s, ee=e: _read_tuned_pq(p, ch_cols, ss, ee), reps)

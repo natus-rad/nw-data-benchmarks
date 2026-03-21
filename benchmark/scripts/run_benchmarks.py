@@ -103,8 +103,8 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
             "channels": len(info.channel_labels),
             "start_stamp": info.start_stamp,
             "end_stamp": info.end_stamp,
-            "total_stamps": info.end_stamp - info.start_stamp + 1,
-            "duration_seconds": round((info.end_stamp - info.start_stamp + 1) / info.sample_freq, 1),
+            "total_stamps": info.total_rows,
+            "duration_seconds": round(info.total_rows / info.sample_freq, 1),
             "segments": info.n_segments if hasattr(info, "n_segments") else len(info.segment_plans),
             "paths": {k: str(v) for k, v in paths.items()},
         }

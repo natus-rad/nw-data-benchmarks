@@ -108,12 +108,11 @@ def validate_results(payload: dict[str, Any], path: Path) -> None:
     study = payload["studies"][0]
 
     # Back-fill total_stamps if the runner omitted it (older schema or refactor regression).
+    # total_stamps is the actual row count of the Parquet dataset — NOT end_stamp minus
+    # start_stamp, which overcounts whenever there are gaps between ERD segments.
     # Write back into payload so render_report() sees the corrected value.
-    # Prefer start_stamp/end_stamp; fall back to duration_seconds * sample_freq.
     if "total_stamps" not in study:
-        if "start_stamp" in study and "end_stamp" in study:
-            study["total_stamps"] = int(study["end_stamp"]) - int(study["start_stamp"]) + 1
-        elif "duration_seconds" in study and "sample_freq" in study:
+        if "duration_seconds" in study and "sample_freq" in study:
             study["total_stamps"] = round(float(study["duration_seconds"]) * float(study["sample_freq"]))
 
     study_required = ["name", "channels", "sample_freq", "total_stamps", "duration_seconds"]
