@@ -1296,15 +1296,19 @@ def bench_remontage(info, paths: dict, cfg: dict) -> list[dict]:
             return matrix, derived, read_sec, montage_sec
 
         times_read, times_mont = [], []
+        matrix = None
         for _ in range(reps):
-            _, derived, r, m = run()
+            matrix, derived, r, m = run()
             times_read.append(r)
             times_mont.append(m)
 
         read_sec = float(np.median(times_read))
         mont_sec = float(np.median(times_mont))
         total = read_sec + mont_sec
-        n_samples = int(window_sec * info.sample_freq)
+        # Use the actual returned sample count, not the requested window size,
+        # so throughput is accurate when the read returns fewer samples (e.g.
+        # at the end of a study or when a format clips to available data).
+        n_samples = matrix.shape[1] if (matrix is not None and matrix.ndim == 2) else 0
         results.append({
             "category": "remontage", "format": fmt,
             "window_seconds": window_sec,
