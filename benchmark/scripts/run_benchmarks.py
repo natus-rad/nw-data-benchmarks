@@ -2107,8 +2107,27 @@ def bench_remote_query(info, paths: dict, cfg: dict,
             dl_time = None
             edf_read_path = edf_path
 
+        # Build the 10-20 channel index list by matching labels so the EDF
+        # subset is consistent with the Parquet subset regardless of channel
+        # order.  Falls back to the first n_subset channels if fewer than
+        # n_subset 10-20 labels are found in the file.
+        ten_twenty_labels = {
+            "Fp1", "Fp2",
+            "F7", "F3", "Fz", "F4", "F8",
+            "T3", "C3", "Cz", "C4", "T4",
+            "T5", "P3", "Pz", "P4", "T6",
+            "O1", "O2",
+        }
+        label_to_idx = {lbl.strip().upper(): i
+                        for i, lbl in enumerate(info.channel_labels)}
+        matched = [label_to_idx[lbl.upper()]
+                   for lbl in ten_twenty_labels
+                   if lbl.upper() in label_to_idx]
+        subset_indices = (matched[:n_subset] if len(matched) >= n_subset
+                          else list(range(min(n_subset, n_channels))))
+
         # Now read the 10 windows from local EDF
-        for ch_label, ch_indices in [("all", None), ("10-20 (19ch)", list(range(min(n_subset, n_channels))))]:
+        for ch_label, ch_indices in [("all", None), ("10-20 (19ch)", subset_indices)]:
             print(f"    EDF local read [{ch_label}] ... ", end="", flush=True)
             local_times = []
             for s, e in windows:
