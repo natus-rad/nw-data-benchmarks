@@ -2040,7 +2040,12 @@ def _make_duckdb_connection(account: str, container: str):
 
 def _duckdb_remote_read(con, az_path: str, columns: list[str],
                         start_stamp: int, end_stamp: int) -> tuple[float, int]:
-    """Query a remote Parquet file via DuckDB Azure extension. Returns (seconds, n_rows)."""
+    """Query a remote Parquet file via DuckDB Azure extension. Returns (seconds, n_rows).
+
+    samplestamp is used only in the WHERE clause, not SELECTed, so callers
+    should not include it in `columns`.  This keeps the result set and the
+    corresponding throughput calculation consistent (all columns are float32).
+    """
     col_list = ", ".join(f'"{c}"' for c in columns)
     # DuckDB azure extension uses az:// protocol
     pq_source = f"az://{az_path}*.parquet"
@@ -2133,7 +2138,10 @@ def bench_remote_query(info, paths: dict, cfg: dict,
 
     for pq_label, pq_az_path in parquet_variants:
         for ch_label, cols in [("all", all_cols), ("10-20 (19ch)", subset_cols)]:
-            query_cols = ["samplestamp"] + list(cols)
+            # samplestamp is used only in the WHERE clause inside
+            # _duckdb_remote_read; exclude it from the SELECT list so the
+            # returned columns are all float32 and _throughput is accurate.
+            query_cols = list(cols)
             times = []
             total_rows = 0
 
