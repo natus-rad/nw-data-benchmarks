@@ -1462,9 +1462,14 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
 
         t_wall_start = time.perf_counter()
 
-        # Read in large chunks, then slide FFT windows within each chunk
+        # Read in large chunks, then slide FFT windows across chunk boundaries.
+        # `tail` carries the leftover pre-filtered samples from the end of the
+        # previous chunk so that windows straddling a chunk boundary are not
+        # missed.  After each iteration tail holds at most
+        # (fft_window_samples - 1) samples — the loop invariant guarantees it.
         read_chunk_sec = 300  # read 5 min at a time
         read_chunk_stamps = int(read_chunk_sec * sample_freq)
+        tail: "np.ndarray | None" = None  # shape (n_channels, k), already filtered
 
         if fmt == "edf":
             edf_pos = 0
@@ -1486,14 +1491,20 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
 
                 total_samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
 
-                n_samp = filtered.shape[1] if filtered.ndim == 2 else 0
+                # Prepend carry-over tail from the previous chunk so windows
+                # that straddle the chunk boundary are included.
+                combined = (np.concatenate([tail, filtered], axis=1)
+                            if tail is not None and tail.shape[1] > 0
+                            else filtered)
+                n_combined = combined.shape[1]
                 t3 = time.perf_counter()
                 pos = 0
-                while pos + fft_window_samples <= n_samp:
-                    np.fft.rfft(filtered[:, pos:pos + fft_window_samples], axis=1)
+                while pos + fft_window_samples <= n_combined:
+                    np.fft.rfft(combined[:, pos:pos + fft_window_samples], axis=1)
                     fft_count += 1
                     pos += fft_stride_samples
                 t_fft_total += time.perf_counter() - t3
+                tail = combined[:, pos:]  # ≤ fft_window_samples-1 samples
 
                 edf_pos += n
         else:
@@ -1516,15 +1527,20 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
 
                 total_samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
 
-                # Slide FFT windows within this chunk
-                n_samp = filtered.shape[1] if filtered.ndim == 2 else 0
+                # Prepend carry-over tail from the previous chunk so windows
+                # that straddle the chunk boundary are included.
+                combined = (np.concatenate([tail, filtered], axis=1)
+                            if tail is not None and tail.shape[1] > 0
+                            else filtered)
+                n_combined = combined.shape[1]
                 t3 = time.perf_counter()
                 pos = 0
-                while pos + fft_window_samples <= n_samp:
-                    np.fft.rfft(filtered[:, pos:pos + fft_window_samples], axis=1)
+                while pos + fft_window_samples <= n_combined:
+                    np.fft.rfft(combined[:, pos:pos + fft_window_samples], axis=1)
                     fft_count += 1
                     pos += fft_stride_samples
                 t_fft_total += time.perf_counter() - t3
+                tail = combined[:, pos:]  # ≤ fft_window_samples-1 samples
 
         t_wall = time.perf_counter() - t_wall_start
 
