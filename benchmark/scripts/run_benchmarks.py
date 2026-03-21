@@ -1783,7 +1783,7 @@ def _read_int32_nanovolt(parquet_dir: Path, columns: list[str],
     )
     if table.num_rows == 0:
         return np.empty((len(columns), 0), dtype=np.float32)
-    scale = np.float32(table.schema.metadata[b"int32_scale_uv"])
+    scale = np.float32(float(table.schema.metadata[b"int32_scale_uv"]))
     # Vectorized: read all columns into a matrix, single scalar multiply
     n_rows = table.num_rows
     matrix = np.empty((len(columns), n_rows), dtype=np.float32)
