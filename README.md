@@ -40,6 +40,12 @@ python benchmark/scripts/run_benchmarks.py
 
 # 3. Run specific categories only
 python benchmark/scripts/run_benchmarks.py --categories random_access channel_subset window_scaling
+
+# 4. Generate the Markdown benchmark report from the latest JSON results
+python benchmark/scripts/generate_benchmark_report.py
+
+# Or generate from a specific results file / custom output path
+python benchmark/scripts/generate_benchmark_report.py --input benchmark/results/<file>.json --output benchmark/docs/benchmark_report.md
 ```
 
 The default configuration downloads a 46-channel, 256 Hz, ~12.9-hour EEG study
@@ -205,7 +211,17 @@ studies:
 ## Output
 
 - **JSON results** → `benchmark/results/` (gitignored, regenerated each run)
-- **Markdown reports** → `benchmark/docs/`
+- **Markdown report template** → `benchmark/docs/benchmark_report.template.md`
+- **Generated Markdown report** → `benchmark/docs/benchmark_report.md`
+
+Generate the report directly from results JSON with:
+
+```bash
+python benchmark/scripts/generate_benchmark_report.py
+```
+
+If `--input` is omitted, the script automatically selects the newest
+`*_benchmark_results.json` file in `benchmark/results/`.
 
 ## Recommended hybrid architecture
 
