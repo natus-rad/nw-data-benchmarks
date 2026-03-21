@@ -1604,6 +1604,12 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
 
         t_wall = time.perf_counter() - t_wall_start
 
+        if fft_count != n_fft_windows:
+            print(
+                f"  [warn] D.2 {fmt}: expected {n_fft_windows} FFT windows, "
+                f"computed {fft_count} (delta {fft_count - n_fft_windows:+d})"
+            )
+
         results.append({
             "category": "sliding_fft_full", "format": fmt,
             "benchmark": "D.2",
@@ -1614,6 +1620,7 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
             "total_samples": total_samples_read,
             "fft_window_sec": fft_window_sec,
             "fft_stride_sec": fft_stride_sec,
+            "fft_windows_expected": n_fft_windows,
             "fft_windows_computed": fft_count,
             "wall_clock_seconds": round(t_wall, 3),
             "read_seconds": round(t_read_total, 3),
