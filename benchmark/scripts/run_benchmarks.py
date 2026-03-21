@@ -513,7 +513,6 @@ def _setup_h5_variants(paths: dict, output_base: Path, name: str, info) -> None:
         return
 
     # Discover channel columns from first file
-    first_table = pq.read_table(str(src_files[0]), columns=[])
     all_cols = [c for c in pq.read_schema(str(src_files[0])).names
                 if c.startswith("ch_")]
     ch_labels = [c[3:] for c in all_cols]  # strip "ch_" prefix
