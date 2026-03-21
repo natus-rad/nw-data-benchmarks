@@ -39,6 +39,13 @@ studies:
     # source: "erd"
     # blob_prefix: "walter_studies_with_trending/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724"
 
+    # --- Sample frequency override (Hz) ---
+    # Required when source is "parquet" and the sampling rate cannot be
+    # inferred from the data (e.g. samplestamp deltas are not 1-per-sample).
+    # When source is "erd" the SDK provides this automatically; this value
+    # is ignored in that case.
+    sample_freq: 256
+
 cache_dir: ".benchmark_cache"
 
 benchmarks:

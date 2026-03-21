@@ -156,18 +156,29 @@ def download_study(cfg: dict, study: dict, args: argparse.Namespace) -> Path:
 # Study setup — convert / derive all format variants
 # ===================================================================
 def setup_study(study_dir: Path, cfg: dict, cache_dir: Path,
-                source_type: str = "parquet") -> dict:
+                source_type: str = "parquet",
+                study_cfg: dict | None = None) -> dict:
     """Set up all format variants for benchmarking. Returns a paths dict.
 
     When source_type is "parquet", study_dir already contains float32 Parquet
     files. EDF and other variants are derived from this data.
     When source_type is "erd", the nwreader SDK converts ERD -> EDF + Parquet.
+
+    Args:
+        study_cfg: The per-study config dict. An optional ``sample_freq`` key
+            is used when converting Parquet -> EDF so the EDF header has the
+            correct sampling rate. Ignored for ERD sources.
     """
     # Shorten directory names to avoid Windows path length issues
     raw_name = study_dir.name
     name = raw_name[:40] if len(raw_name) > 40 else raw_name
     output_base = cache_dir / f"{name}_exports"
     output_base.mkdir(parents=True, exist_ok=True)
+
+    # Extract sample_freq override from study config (Parquet source only)
+    cfg_freq = None
+    if study_cfg and "sample_freq" in study_cfg:
+        cfg_freq = float(study_cfg["sample_freq"])
 
     paths = {"source": study_dir}
 
@@ -180,7 +191,8 @@ def setup_study(study_dir: Path, cfg: dict, cache_dir: Path,
         edf_path = output_base / f"{name}.edf"
         if not edf_path.exists():
             print("  [convert] Parquet -> EDF ...")
-            _parquet_to_edf(study_dir, edf_path)
+            _parquet_to_edf(study_dir, edf_path,
+                            sample_freq=cfg_freq if cfg_freq is not None else 256.0)
         paths["edf"] = edf_path
 
         # Additional Parquet compression variants for benchmark F
@@ -224,8 +236,17 @@ def setup_study(study_dir: Path, cfg: dict, cache_dir: Path,
     return paths
 
 
-def _parquet_to_edf(pq_dir: Path, edf_path: Path) -> None:
-    """Convert float32 Parquet files to a single EDF file."""
+def _parquet_to_edf(pq_dir: Path, edf_path: Path,
+                    sample_freq: float = 256.0) -> None:
+    """Convert float32 Parquet files to a single EDF file.
+
+    Args:
+        pq_dir: Directory containing source float32 .parquet files.
+        edf_path: Destination .edf file path.
+        sample_freq: Sampling frequency in Hz. Defaults to 256. Pass the
+            value from the study config when the source is Parquet so that
+            the EDF header reflects the correct rate.
+    """
     import pyedflib
 
     pq_files = sorted(pq_dir.glob("*.parquet"))
@@ -248,9 +269,6 @@ def _parquet_to_edf(pq_dir: Path, edf_path: Path) -> None:
         all_data.append(block)
     data = np.vstack(all_data)  # (total_samples, n_channels)
     n_samples = data.shape[0]
-
-    # Default to 256 Hz, EDF physical range from data
-    sample_freq = 256
 
     edf_path.parent.mkdir(parents=True, exist_ok=True)
     writer = pyedflib.EdfWriter(str(edf_path), n_channels, file_type=0)
@@ -824,8 +842,16 @@ class StudyInfo:
         self.segment_plans = [type("Seg", (), {"last_stamp": end_stamp})()]
 
     @classmethod
-    def from_parquet(cls, pq_dir: Path) -> "StudyInfo":
-        """Discover study metadata from Parquet files on disk."""
+    def from_parquet(cls, pq_dir: Path,
+                     sample_freq: float | None = None) -> "StudyInfo":
+        """Discover study metadata from Parquet files on disk.
+
+        Args:
+            pq_dir: Directory containing .parquet files.
+            sample_freq: Sampling frequency in Hz. When provided, this value is
+                used directly and stamp-delta inference is skipped. Required when
+                the Parquet samplestamp column does not increment by 1 per sample.
+        """
         files = sorted(pq_dir.glob("*.parquet"))
         if not files:
             raise FileNotFoundError(f"No .parquet files in {pq_dir}")
@@ -840,33 +866,50 @@ class StudyInfo:
         start_stamp = int(first.column("samplestamp").to_numpy().min())
         end_stamp = int(last.column("samplestamp").to_numpy().max())
 
-        # Infer sample frequency from median stamp delta
-        stamps = first.column("samplestamp").to_numpy()
-        if len(stamps) > 100:
-            deltas = np.diff(stamps[:1000])
-            median_delta = np.median(deltas[deltas > 0])
-            # Stamps increment by 1 per sample -> freq = 1/delta * freq
-            # For our data, stamps ARE at sample rate (delta=1 -> 256 Hz typically)
-            if median_delta == 1.0:
-                freq = 256.0  # default clinical EEG rate
+        if sample_freq is None:
+            # Infer sample frequency from median stamp delta
+            stamps = first.column("samplestamp").to_numpy()
+            if len(stamps) > 100:
+                deltas = np.diff(stamps[:1000])
+                median_delta = np.median(deltas[deltas > 0])
+                # Stamps increment by 1 per sample -> freq = 1/delta * freq
+                # For our data, stamps ARE at sample rate (delta=1 -> 256 Hz typically)
+                if median_delta == 1.0:
+                    freq = 256.0  # default clinical EEG rate
+                else:
+                    freq = 1.0 / median_delta
             else:
-                freq = 1.0 / median_delta
+                freq = 256.0
         else:
-            freq = 256.0
+            freq = float(sample_freq)
 
         return cls(sample_freq=freq, channel_labels=labels,
                    start_stamp=start_stamp, end_stamp=end_stamp,
                    n_segments=len(files))
 
 
-def _study_info(study_dir: Path, source_type: str = "parquet") -> StudyInfo:
-    """Get study metadata from Parquet files or via the nwreader SDK."""
+def _study_info(study_dir: Path, source_type: str = "parquet",
+                study_cfg: dict | None = None) -> StudyInfo:
+    """Get study metadata from Parquet files or via the nwreader SDK.
+
+    Args:
+        study_dir: Path to the Parquet directory (or ERD study folder).
+        source_type: ``"parquet"`` or ``"erd"``.
+        study_cfg: The per-study config dict. When ``source`` is ``"parquet"``,
+            an optional ``sample_freq`` key overrides stamp-delta inference.
+            Ignored when ``source`` is ``"erd"`` (the SDK provides the freq).
+    """
     if source_type == "erd" and _HAS_NWREADER:
         raw = inspect_waveforms(str(study_dir), ignore_stc=True,
                                 convert=True, convert_time=True, pad_discont=True)
         if not hasattr(raw, "end_stamp"):
             raw.end_stamp = raw.segment_plans[-1].last_stamp
         return raw
+
+    # Extract optional config override (Parquet source only)
+    cfg_freq = None
+    if study_cfg and "sample_freq" in study_cfg:
+        cfg_freq = float(study_cfg["sample_freq"])
 
     # Discover from Parquet files
     pq_dir = study_dir
@@ -876,7 +919,7 @@ def _study_info(study_dir: Path, source_type: str = "parquet") -> StudyInfo:
             if any(candidate.glob("*.parquet")):
                 pq_dir = candidate
                 break
-    return StudyInfo.from_parquet(pq_dir)
+    return StudyInfo.from_parquet(pq_dir, sample_freq=cfg_freq)
 
 
 def _read_parquet_window(parquet_dir: Path, columns: list[str],
@@ -2294,10 +2337,12 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> dict:
 
         # Setup: convert / derive all format variants
         print("\n  --- Setup ---")
-        paths = setup_study(study_dir, cfg, cache_dir, source_type=source_type)
+        paths = setup_study(study_dir, cfg, cache_dir, source_type=source_type,
+                            study_cfg=study_cfg)
 
         # Get study info (from Parquet files or SDK)
-        info = _study_info(paths.get("parquet", study_dir), source_type)
+        info = _study_info(paths.get("parquet", study_dir), source_type,
+                           study_cfg=study_cfg)
         study_meta = {
             "name": study_cfg["name"],
             "channels": info.n_channels if hasattr(info, "n_channels") else len(info.channel_labels),
