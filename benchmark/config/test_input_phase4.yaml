@@ -1,0 +1,68 @@
+# Phase 4 test config — uses separate parquet_investigations: and
+# tuned_comparison: config sections instead of flat benchmarks list.
+
+studies:
+  - name: "suppression_study"
+    input: ".benchmark_cache/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet"
+    sample_freq: 256
+
+# ─── Core benchmarks (A–E): run on every generated variant ────────
+benchmarks:
+  - random_access
+  - channel_subset
+  - remontage
+  - filter_pipeline
+  - window_scaling
+
+# ─── Variants for core benchmarks ─────────────────────────────────
+variants:
+  - format: hdf5
+    layout: columnar
+    chunk_minutes: 5
+    dtype: float32
+    compression: lz4
+  - format: hdf5
+    layout: rowgroup
+    chunk_minutes: 5
+    dtype: float32
+    compression: lz4
+  - format: edf
+
+# ─── Benchmark parameters ─────────────────────────────────────────
+window_sizes: [10, 30, 60, 300, 900, 1800, 3600]
+channel_subsets: [4, 10]
+read_positions: [0.0, 0.5, 0.75, 0.95]
+default_window: 60
+repetitions: 3
+
+# ─── Parquet-specific investigations (F-I) ─────────────────────────
+parquet_investigations:
+  enabled: true
+  compression:
+    codecs: [none, snappy, zstd, lz4]
+    zstd_level: 3
+  precision_loss: true
+  int32_storage: true
+  remote_query:
+    enabled: false
+
+# ─── Parquet compression variants (used by bench_compression) ──────
+parquet_compression:
+  - codec: "none"
+  - codec: "snappy"
+  - codec: "zstd"
+    level: 3
+  - codec: "lz4"
+
+# ─── Tuned comparison (J) ─────────────────────────────────────────
+tuned_comparison:
+  enabled: true
+  block_sizes_minutes: [5, 10, 20, 30, 60, 120]
+  compression: lz4
+  dtype: float32
+
+# ─── Tuned block sizes (used by _setup_tuned_variants) ─────────────
+tuned_block_sizes_minutes: [5, 10, 20, 30, 60, 120]
+
+cache_dir: ".benchmark_cache"
+

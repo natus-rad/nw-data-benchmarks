@@ -3,39 +3,21 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
+import sys
 from pathlib import Path
 from string import Template
 from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 RESULTS_DIR = REPO_ROOT / "benchmark" / "results"
 TEMPLATE_PATH = REPO_ROOT / "benchmark" / "docs" / "benchmark_report.template.md"
 DEFAULT_OUTPUT = REPO_ROOT / "benchmark" / "docs" / "benchmark_report.md"
 
-FORMAT_LABELS = {
-    "parquet": "Parquet",
-    "edf": "EDF",
-    "h5_columnar": "HDF5 columnar",
-    "h5_rowgroup": "HDF5 row-group",
-    "parquet_snappy": "Parquet snappy",
-    "parquet_lz4": "Parquet LZ4",
-    "hdf5_lz4": "HDF5 LZ4",
-    "parquet_float32_snappy": "Parquet float32 snappy",
-    "parquet_int32_nV_snappy": "Parquet int32 nV snappy",
-}
-
-FORMAT_ORDER = [
-    "parquet",
-    "h5_columnar",
-    "h5_rowgroup",
-    "edf",
-    "parquet_snappy",
-    "parquet_lz4",
-    "hdf5_lz4",
-    "parquet_float32_snappy",
-    "parquet_int32_nV_snappy",
-]
+from benchmark.core.constants import FORMAT_LABELS, FORMAT_ORDER
 
 
 class ReportGenerationError(RuntimeError):
