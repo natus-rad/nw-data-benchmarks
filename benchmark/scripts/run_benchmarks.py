@@ -2570,8 +2570,10 @@ def _estimate_runs(cfg: dict, selected: list) -> int:
             n += len(cfg.get("read_positions", [0, 0.5, 0.75, 0.95])) * 2 * reps
         elif cat_id == "channel_subset":
             n += (len(cfg.get("channel_subsets", [4, 10])) + 1) * 2 * reps
-        elif cat_id in ("remontage", "filter_pipeline"):
+        elif cat_id == "remontage":
             n += 2 * reps
+        elif cat_id == "filter_pipeline":
+            n += 1  # bench_filter_pipeline runs once per format selection
         elif cat_id == "window_scaling":
             n += len(cfg.get("window_sizes", [])) * 2 * reps
         elif cat_id == "compression":
