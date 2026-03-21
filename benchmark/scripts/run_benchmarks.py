@@ -500,41 +500,50 @@ H5_COLUMNAR_CHUNK_SECONDS = 300
 
 
 def _count_total_rows(src_files: list) -> int:
-    """Sum row counts across all source Parquet files."""
+    """Return total row count across all source Parquet files."""
     return sum(pq.ParquetFile(str(f)).metadata.num_rows for f in src_files)
 
 
-def _parquet_rowgroup_chunk_samples(src_files: list, total_rows: int) -> int:
-    """Return the HDF5 chunk size that matches the source Parquet row-group layout.
+def _default_h5_chunk_samples(sample_freq: float, total_rows: int) -> int:
+    """Chunk size for general columnar HDF5: ~5 minutes worth of samples."""
+    if total_rows <= 0:
+        return 1
+    chunk_samples = int(round(H5_COLUMNAR_CHUNK_SECONDS * sample_freq))
+    return max(1, min(chunk_samples, total_rows))
 
-    Reads every row-group size from the Parquet metadata.  If they are uniform
-    (ignoring the expected partial final row group), returns that size.  If they
-    genuinely vary, falls back to the modal (most-common) size and prints a
-    warning.  Result is always clamped to total_rows.
+
+def _parquet_rowgroup_chunk_samples(src_files: list, total_rows: int) -> int:
+    """Choose HDF5 row-group chunk size from actual source Parquet metadata.
+
+    If all Parquet row groups are uniform, use that exact size.
+    If they vary, use the most common size and warn.
     """
-    rg_sizes = []
+    if total_rows <= 0:
+        return 1
+
+    rg_sizes: list[int] = []
     for f in src_files:
-        meta = pq.ParquetFile(str(f)).metadata
+        pf = pq.ParquetFile(str(f))
+        meta = pf.metadata
         for i in range(meta.num_row_groups):
-            rg_sizes.append(meta.row_group(i).num_rows)
+            rg_sizes.append(int(meta.row_group(i).num_rows))
 
     if not rg_sizes:
-        return max(1, total_rows)
+        return 1
 
-    unique = set(rg_sizes)
+    unique = sorted(set(rg_sizes))
     if len(unique) == 1:
-        return min(rg_sizes[0], total_rows)
+        return min(unique[0], total_rows)
 
-    # A partial final row group is expected — if all full groups agree, use that.
-    full_sizes = rg_sizes[:-1] if len(rg_sizes) > 1 else rg_sizes
-    if len(set(full_sizes)) == 1:
-        return min(full_sizes[0], total_rows)
+    # Fall back to the modal row-group size when source files are not uniform.
+    counts: dict[int, int] = {}
+    for sz in rg_sizes:
+        counts[sz] = counts.get(sz, 0) + 1
+    mode_size = max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
 
-    # Genuinely mixed sizes — fall back to the mode and warn.
-    mode_size = max(set(rg_sizes), key=rg_sizes.count)
     print(
         "  [warn] Source Parquet row-group sizes are not uniform: "
-        f"{sorted(unique)}. Using modal size {mode_size} for h5_rowgroup."
+        f"{unique}. Using modal size {mode_size} for h5_rowgroup."
     )
     return min(mode_size, total_rows)
 
@@ -542,36 +551,25 @@ def _parquet_rowgroup_chunk_samples(src_files: list, total_rows: int) -> int:
 def _setup_h5_variants(paths: dict, output_base: Path, name: str, info) -> None:
     """Create two HDF5 layouts from the cached Parquet float32 snappy data.
 
-    Layout 1 — h5_columnar: one 1D dataset per channel under /channels/, plus
-               /samplestamp.  Chunked by *time* (~H5_COLUMNAR_CHUNK_SECONDS per
-               chunk), LZ4 compressed.  Chunk size scales with sample_freq so
-               the ~5-minute boundary is preserved at any sample rate.
-
-    Layout 2 — h5_rowgroup: single 2D dataset (samples × channels) chunked to
-               match the *actual* Parquet row-group boundaries read from the
-               source metadata, LZ4 compressed.  This keeps the "row-group-
-               aligned" claim honest at any sample rate.
+    Layout 1 — column-oriented: one 1D dataset per channel under /channels/,
+               plus /samplestamp. Chunked by time (~5 minutes), LZ4 compressed.
+    Layout 2 — row-group-aligned: single 2D dataset (samples × channels)
+               chunked to match actual Parquet row-group boundaries, LZ4 compressed.
     """
     src_path = paths["parquet"]
     src_files = sorted(src_path.glob("*.parquet"))
     if not src_files:
         return
 
-    # Discover channel columns from first file
     all_cols = [c for c in pq.read_schema(str(src_files[0])).names
                 if c.startswith("ch_")]
-    ch_labels = [c[3:] for c in all_cols]  # strip "ch_" prefix
+    ch_labels = [c[3:] for c in all_cols]
     n_channels = len(all_cols)
     sample_freq = info.sample_freq
-
-    # Compute both chunk sizes once so each write function receives a concrete
-    # value derived from its own policy rather than a shared global constant.
     total_rows = _count_total_rows(src_files)
-    columnar_chunk = min(
-        int(round(H5_COLUMNAR_CHUNK_SECONDS * sample_freq)),
-        max(1, total_rows),
-    )
-    rowgroup_chunk = _parquet_rowgroup_chunk_samples(src_files, total_rows)
+
+    columnar_chunk_samples = _default_h5_chunk_samples(sample_freq, total_rows)
+    rowgroup_chunk_samples = _parquet_rowgroup_chunk_samples(src_files, total_rows)
 
     for layout in ("h5_columnar", "h5_rowgroup"):
         h5_path = output_base / f"{name}.{layout}.h5"
@@ -589,9 +587,19 @@ def _setup_h5_variants(paths: dict, output_base: Path, name: str, info) -> None:
             hf.attrs["n_channels"] = n_channels
 
             if layout == "h5_columnar":
-                _write_h5_columnar(hf, src_files, all_cols, columnar_chunk, total_rows)
+                hf.attrs["chunk_samples"] = columnar_chunk_samples
+                hf.attrs["chunk_policy"] = "time_seconds"
+                hf.attrs["chunk_seconds"] = H5_COLUMNAR_CHUNK_SECONDS
+                _write_h5_columnar(
+                    hf, src_files, all_cols, chunk_size=columnar_chunk_samples
+                )
             else:
-                _write_h5_rowgroup(hf, src_files, all_cols, n_channels, rowgroup_chunk, total_rows)
+                hf.attrs["chunk_samples"] = rowgroup_chunk_samples
+                hf.attrs["chunk_policy"] = "parquet_rowgroup"
+                _write_h5_rowgroup(
+                    hf, src_files, all_cols, n_channels,
+                    chunk_size=rowgroup_chunk_samples,
+                )
 
         paths[layout] = h5_path
         size_mib = h5_path.stat().st_size / (1024 * 1024)
@@ -617,18 +625,14 @@ def _build_chunk_index(stamps_ds: h5py.Dataset) -> np.ndarray:
 
 
 def _write_h5_columnar(hf: h5py.File, src_files: list, all_cols: list[str],
-                       chunk_size: int, total_rows: int) -> None:
+                       chunk_size: int) -> None:
     """Layout 1: one 1D dataset per channel, LZ4 compressed.
-
-    chunk_size is H5_COLUMNAR_CHUNK_SECONDS * sample_freq (rounded, clamped),
-    computed by the caller so the ~5-minute boundary holds at any sample rate.
 
     Stores samplestamp as a dataset and builds a chunk-level stamp index
     so readers can skip irrelevant chunks (like Parquet row-group stats).
     """
-    hf.attrs["chunk_policy"] = "time_seconds"
-    hf.attrs["chunk_seconds"] = H5_COLUMNAR_CHUNK_SECONDS
-    hf.attrs["chunk_samples"] = chunk_size
+    total_rows = _count_total_rows(src_files)
+    chunk_size = max(1, min(int(chunk_size), total_rows if total_rows > 0 else 1))
 
     grp = hf.create_group("channels")
     ch_datasets = {}
@@ -664,17 +668,13 @@ def _write_h5_columnar(hf: h5py.File, src_files: list, all_cols: list[str],
 
 def _write_h5_rowgroup(hf: h5py.File, src_files: list,
                        all_cols: list[str], n_channels: int,
-                       chunk_size: int, total_rows: int) -> None:
+                       chunk_size: int) -> None:
     """Layout 2: single 2D dataset (samples × channels), row-group-aligned chunks.
-
-    chunk_size is derived from the actual Parquet row-group metadata by
-    _parquet_rowgroup_chunk_samples(), so HDF5 chunk boundaries match source
-    Parquet row-group boundaries at any sample rate.
 
     Same chunk index approach as columnar layout.
     """
-    hf.attrs["chunk_policy"] = "parquet_rowgroup"
-    hf.attrs["chunk_samples"] = chunk_size
+    total_rows = _count_total_rows(src_files)
+    chunk_size = max(1, min(int(chunk_size), total_rows if total_rows > 0 else 1))
 
     data_ds = hf.create_dataset(
         "data", shape=(total_rows, n_channels), dtype=np.float32,
