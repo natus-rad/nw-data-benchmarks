@@ -1,5 +1,6 @@
 import argparse
 import io
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -175,6 +176,122 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
             self.assertEqual(paths["parquet"], canonical)
             self.assertFalse(output_base.exists())
+
+    def test_save_results_retries_after_transient_permission_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "results.json"
+            attempts = {"count": 0}
+            real_replace = Path.replace
+
+            def flaky_replace(self, target):
+                attempts["count"] += 1
+                if attempts["count"] < 3:
+                    raise PermissionError("transient lock")
+                return real_replace(self, target)
+
+            with patch.object(Path, "replace", new=flaky_replace), \
+                 patch.object(run_benchmarks.time, "sleep") as mock_sleep:
+                run_benchmarks._save_results({"ok": True}, out_path)
+
+            self.assertEqual(attempts["count"], 3)
+            self.assertEqual(json.loads(out_path.read_text(encoding="utf-8")), {"ok": True})
+            self.assertEqual(mock_sleep.call_count, 2)
+
+    def test_runner_generates_report_by_default(self):
+        def fake_bench(_info, _paths, _cfg):
+            return [{
+                "category": "random_access",
+                "format": "parquet",
+                "position": "0%",
+                "wall_clock_seconds": 0.5,
+                "mib_per_sec": 10.0,
+            }]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            results_path = tmp_path / "results.json"
+            cfg = {
+                "cache_dir": str(tmp_path / "cache"),
+                "studies": [{"name": "demo", "input": "demo.edf", "sample_freq": 256}],
+                "benchmarks": ["random_access"],
+            }
+            args = argparse.Namespace(
+                config="benchmark/config/default.yaml",
+                categories=None,
+                output=str(results_path),
+                dry_run=False,
+                no_report=False,
+                sas_token=None,
+            )
+            info = SimpleNamespace(
+                sample_freq=256.0,
+                channel_labels=["Fp1"],
+                start_stamp=0,
+                end_stamp=1,
+                total_rows=2,
+                n_segments=1,
+                segment_plans=[SimpleNamespace(last_stamp=1)],
+            )
+
+            with patch.object(run_benchmarks, "_selected_benchmarks", return_value=[("random_access", "Random Access", fake_bench)]), \
+                 patch.object(run_benchmarks, "resolve_input_path", return_value=Path("demo.edf")), \
+                 patch.object(run_benchmarks, "ingest", return_value=(Path("demo_canonical"), "edf", 256.0)), \
+                 patch.object(run_benchmarks.StudyInfo, "from_parquet", return_value=info), \
+                 patch.object(run_benchmarks, "generate_variants", return_value={"parquet": Path("demo_canonical")}), \
+                 patch.object(run_benchmarks, "_system_info", return_value={"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16}), \
+                 patch.object(run_benchmarks, "generate_report", return_value=(tmp_path / "report.md", tmp_path / "report.html")) as mock_generate_report:
+                run_benchmarks.run_benchmarks(cfg, args)
+
+            self.assertTrue(results_path.exists())
+            mock_generate_report.assert_called_once_with(results_path, html=True)
+
+    def test_runner_skips_report_when_no_report_requested(self):
+        def fake_bench(_info, _paths, _cfg):
+            return [{
+                "category": "random_access",
+                "format": "parquet",
+                "position": "0%",
+                "wall_clock_seconds": 0.5,
+                "mib_per_sec": 10.0,
+            }]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            results_path = tmp_path / "results.json"
+            cfg = {
+                "cache_dir": str(tmp_path / "cache"),
+                "studies": [{"name": "demo", "input": "demo.edf", "sample_freq": 256}],
+                "benchmarks": ["random_access"],
+            }
+            args = argparse.Namespace(
+                config="benchmark/config/default.yaml",
+                categories=None,
+                output=str(results_path),
+                dry_run=False,
+                no_report=True,
+                sas_token=None,
+            )
+            info = SimpleNamespace(
+                sample_freq=256.0,
+                channel_labels=["Fp1"],
+                start_stamp=0,
+                end_stamp=1,
+                total_rows=2,
+                n_segments=1,
+                segment_plans=[SimpleNamespace(last_stamp=1)],
+            )
+
+            with patch.object(run_benchmarks, "_selected_benchmarks", return_value=[("random_access", "Random Access", fake_bench)]), \
+                 patch.object(run_benchmarks, "resolve_input_path", return_value=Path("demo.edf")), \
+                 patch.object(run_benchmarks, "ingest", return_value=(Path("demo_canonical"), "edf", 256.0)), \
+                 patch.object(run_benchmarks.StudyInfo, "from_parquet", return_value=info), \
+                 patch.object(run_benchmarks, "generate_variants", return_value={"parquet": Path("demo_canonical")}), \
+                 patch.object(run_benchmarks, "_system_info", return_value={"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16}), \
+                 patch.object(run_benchmarks, "generate_report") as mock_generate_report:
+                run_benchmarks.run_benchmarks(cfg, args)
+
+            self.assertTrue(results_path.exists())
+            mock_generate_report.assert_not_called()
 
 
 if __name__ == "__main__":

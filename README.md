@@ -38,14 +38,20 @@ pip install -r requirements.txt
 # 2. Run benchmarks (downloads ~1 GB sample data from Azure on first run)
 python benchmark/scripts/run_benchmarks.py
 
+#    This also generates benchmark/docs/benchmark_report.md and .html by default.
+#    Use --no-report if you only want the JSON results file.
+
 # 3. Run specific categories only
 python benchmark/scripts/run_benchmarks.py --categories random_access channel_subset window_scaling
 
-# 4. Generate the Markdown benchmark report from the latest JSON results
+# 4. Regenerate the Markdown benchmark report from the latest JSON results
 python benchmark/scripts/generate_benchmark_report.py
 
 # Or generate from a specific results file / custom output path
 python benchmark/scripts/generate_benchmark_report.py --input benchmark/results/<file>.json --output benchmark/docs/benchmark_report.md
+
+# Or generate Markdown + HTML explicitly from the standalone script
+python benchmark/scripts/generate_benchmark_report.py --html
 ```
 
 The default configuration downloads a 46-channel, 256 Hz, ~12.9-hour EEG study
@@ -243,7 +249,10 @@ the config includes the matching `azure:` settings.
 - **Markdown report template** → `benchmark/docs/benchmark_report.template.md`
 - **Generated Markdown report** → `benchmark/docs/benchmark_report.md`
 
-Generate the report directly from results JSON with:
+`run_benchmarks.py` now generates the Markdown + HTML report automatically at
+the end of a successful run. Use `--no-report` to skip that post-processing.
+
+You can also regenerate the report directly from results JSON with:
 
 ```bash
 python benchmark/scripts/generate_benchmark_report.py

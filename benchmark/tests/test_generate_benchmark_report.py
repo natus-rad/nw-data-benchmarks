@@ -4,6 +4,7 @@ from pathlib import Path
 
 from benchmark.scripts.generate_benchmark_report import (
     ReportGenerationError,
+    generate_report,
     latest_results_file,
     render_report,
 )
@@ -139,6 +140,37 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         rendered = render_report(payload, template, Path("benchmark/results/demo.json"))
         self.assertIn("Parquet has the lowest median 1-minute read time", rendered)
         self.assertIn("*This category was not present in the input results file.*", rendered)
+
+    def test_generate_report_writes_markdown_and_html(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_path = root / "demo_benchmark_results.json"
+            template_path = root / "report.template.md"
+            output_path = root / "report.md"
+            input_path.write_text(
+                """
+                {
+                  \"run_id\": \"2026-03-21T00-00-00\",
+                  \"system\": {\"os\": \"Windows\", \"python\": \"3.12\", \"cpu_count\": 8, \"ram_gb\": 16},
+                  \"studies\": [{\"name\": \"demo\", \"channels\": 2, \"sample_freq\": 100.0, \"total_stamps\": 1000, \"duration_seconds\": 10.0}],
+                  \"benchmarks\": [{\"category\": \"random_access\", \"format\": \"parquet\", \"position\": \"0%\", \"wall_clock_seconds\": 0.5, \"mib_per_sec\": 10.0}]
+                }
+                """.strip(),
+                encoding="utf-8",
+            )
+            template_path.write_text("# Report\n\n${overview}\n", encoding="utf-8")
+
+            report_md, report_html = generate_report(
+                input_path,
+                output_path=output_path,
+                template_path=template_path,
+                html=True,
+            )
+
+            self.assertEqual(report_md, output_path.resolve())
+            self.assertEqual(report_html, output_path.with_suffix(".html").resolve())
+            self.assertTrue(report_md.exists())
+            self.assertTrue(report_html.exists())
 
 
 if __name__ == "__main__":

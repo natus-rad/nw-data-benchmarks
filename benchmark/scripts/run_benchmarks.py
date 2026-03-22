@@ -6,6 +6,7 @@ import argparse
 import datetime
 import json
 import sys
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -24,6 +25,11 @@ from benchmark.core.setup import (
 )
 from benchmark.core.study_info import StudyInfo, _system_info, load_config
 from benchmark.core.variants import generate_variants
+from benchmark.scripts.generate_benchmark_report import generate_report
+
+
+_RESULT_SAVE_RETRIES = 10
+_RESULT_SAVE_RETRY_DELAY_SECONDS = 0.2
 
 
 def _selected_benchmarks(cfg: dict, args: argparse.Namespace) -> list[tuple[str, str, object]]:
@@ -91,15 +97,32 @@ def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str
 
     print(f"\nWindow sizes: {cfg.get('window_sizes', [])}")
     print(f"Repetitions: {cfg.get('repetitions', 3)}")
+    report_mode = "skip (--no-report)" if getattr(args, "no_report", False) else "auto-generate Markdown + HTML report"
+    print(f"Report: {report_mode}")
     print(f"\nTotal benchmark runs: ~{_estimate_runs(cfg, selected)}")
 
 
 def _save_results(output: dict, out_path: Path) -> None:
     """Atomically overwrite the results file with the current output dict."""
     tmp = out_path.with_suffix(".tmp")
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2)
-    tmp.replace(out_path)
+    last_exc: PermissionError | None = None
+    for attempt in range(_RESULT_SAVE_RETRIES):
+        try:
+            tmp.replace(out_path)
+            return
+        except PermissionError as exc:
+            last_exc = exc
+            if attempt == _RESULT_SAVE_RETRIES - 1:
+                break
+            time.sleep(_RESULT_SAVE_RETRY_DELAY_SECONDS)
+
+    raise PermissionError(
+        f"Unable to replace results file '{out_path}' after {_RESULT_SAVE_RETRIES} attempts. "
+        "Another process may be temporarily locking the file (editor preview, antivirus, "
+        "indexer, etc.)."
+    ) from last_exc
 
 
 def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
@@ -207,6 +230,11 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
             print(f"  [checkpoint -> {out_path}]")
 
     print(f"\nResults saved to {out_path}")
+    if not getattr(args, "no_report", False):
+        report_md, report_html = generate_report(out_path, html=True)
+        print(f"Markdown report: {report_md}")
+        if report_html is not None:
+            print(f"HTML report: {report_html}")
 
 
 def main() -> None:
@@ -215,6 +243,7 @@ def main() -> None:
     parser.add_argument("--categories", nargs="*", help="Benchmark categories to run")
     parser.add_argument("--output", default=None, help="Output JSON file path (default: benchmark/results/<run_id>_benchmark_results.json)")
     parser.add_argument("--dry-run", action="store_true", help="Print planned work without downloading or running benchmarks")
+    parser.add_argument("--no-report", action="store_true", help="Skip the default post-run Markdown+HTML report generation")
     parser.add_argument("--sas-token", default=None, help="Azure Blob SAS token (optional). Overrides AZURE_STORAGE_SAS_TOKEN if provided")
     args = parser.parse_args()
 

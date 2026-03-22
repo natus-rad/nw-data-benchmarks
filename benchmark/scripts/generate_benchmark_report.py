@@ -895,22 +895,45 @@ def render_html(md_text: str) -> str:
     )
 
 
+def generate_report(input_path: Path,
+                    output_path: Path = DEFAULT_OUTPUT,
+                    template_path: Path = TEMPLATE_PATH,
+                    html: bool = False) -> tuple[Path, Path | None]:
+    """Generate Markdown (and optionally HTML) report artifacts from results."""
+    input_path = input_path.resolve()
+    payload = load_results(input_path)
+    try:
+        template_text = template_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ReportGenerationError(
+            f"Unable to read template file {template_path}: {exc}"
+        ) from exc
+
+    rendered = render_report(payload, template_text, input_path)
+    output_path = output_path.resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(rendered, encoding="utf-8")
+
+    html_path = None
+    if html:
+        html_path = output_path.with_suffix(".html")
+        html_path.write_text(render_html(rendered), encoding="utf-8")
+
+    return output_path, html_path
+
+
 def main() -> int:
     args = parse_args()
     try:
         input_path = args.input.resolve() if args.input else latest_results_file(RESULTS_DIR)
-        payload = load_results(input_path)
-        try:
-            template_text = args.template.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise ReportGenerationError(f"Unable to read template file {args.template}: {exc}") from exc
-        rendered = render_report(payload, template_text, input_path)
-        output_path = args.output.resolve()
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(rendered, encoding="utf-8")
-        if args.html:
-            html_path = output_path.with_suffix(".html")
-            html_path.write_text(render_html(rendered), encoding="utf-8")
+        output_path, html_path = generate_report(
+            input_path,
+            output_path=args.output,
+            template_path=args.template,
+            html=args.html,
+        )
+        print(f"Markdown report: {output_path}")
+        if html_path is not None:
             print(f"HTML report: {html_path}")
     except ReportGenerationError as exc:
         print(f"Error: {exc}")
