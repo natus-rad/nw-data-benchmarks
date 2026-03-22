@@ -1,9 +1,14 @@
-# Test config using the new `input:` field to point at cached Parquet data.
-# This should produce equivalent results to the old default.yaml flow.
+# Test config using `input:` with the public remote Azure Parquet dataset.
+# Running this from an empty cache should download the dataset automatically.
+
+azure:
+  storage_account: "nwcsandboxstorage"
+  container: "waveforms"
+  anonymous: true
 
 studies:
   - name: "suppression_study"
-    input: ".benchmark_cache/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet"
+    input: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"
     sample_freq: 256
 
 benchmarks:
@@ -13,7 +18,7 @@ benchmarks:
   - filter_pipeline
   - window_scaling
 
-# Generate the same variants the old flow created.
+# Generate a representative local benchmark set from the downloaded canonical Parquet.
 variants:
   - format: hdf5
     layout: columnar
@@ -27,7 +32,7 @@ variants:
     compression: lz4
   - format: edf
 
-# Benchmark parameters (same as default.yaml)
+# Benchmark parameters
 window_sizes: [10, 30, 60, 300, 900, 1800, 3600]
 channel_subsets: [4, 10]
 read_positions: [0.0, 0.5, 0.75, 0.95]

@@ -13,6 +13,12 @@
 #
 # Remote inputs are downloaded into the configured `cache_dir` using the
 # dataset's leaf name, then ingested from that cached local copy.
+# If that cached remote input already exists, it is reused and not
+# downloaded again.
+#
+# Note: directory-style remote inputs are currently treated as cached when
+# `.download_complete` exists and at least one cached file remains. That is
+# a fast cache-hit heuristic, not a full sync/repair check against Azure.
 #
 # AZURE AUTHENTICATION
 # --------------------

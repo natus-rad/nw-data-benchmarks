@@ -108,19 +108,45 @@ Data is cached locally in `.benchmark_cache/` after the first download.
 
 Edit `benchmark/config/default.yaml` to:
 
-- Point to different study data (Parquet URL or local path)
+- Point `studies[].input` at different study data (local path or remote Azure blob path/URL)
 - Select which benchmarks to run
 - Adjust window sizes, channel subsets, repetitions
 
+`benchmark/config/default.yaml` is the built-in example that uses the same
+public remote Azure Parquet dataset we have been benchmarking against.
+
 ### Using your own data
 
-Set `source: "parquet"` and provide a `remote_parquet_url` or `local_path`:
+Set `input:` to either:
+
+- a local file or directory, or
+- a remote Azure blob path/URL in the configured container
+
+If you use a remote input, your config also needs an `azure:` block with the
+storage account, container, and auth mode. `benchmark/config/default.yaml`
+already shows a working public-anonymous example.
+
+For the public remote Parquet dataset shape we've been using:
+
+```yaml
+azure:
+  storage_account: "nwcsandboxstorage"
+  container: "waveforms"
+  anonymous: true
+
+studies:
+  - name: "my_study"
+    input: "parquet/my_study_folder/"
+    sample_freq: 256
+```
+
+For a local Parquet directory:
 
 ```yaml
 studies:
   - name: "my_study"
-    source: "parquet"
-    remote_parquet_url: "parquet/my_study_folder/"
+    input: "/path/to/my_study.parquet"
+    sample_freq: 256
 ```
 
 Parquet files must have `samplestamp` (int64) and `ch_<label>` (float32) columns.
@@ -189,24 +215,27 @@ Then point the config at your local files:
 ```yaml
 studies:
   - name: "my_study"
-    source: "parquet"
-    local_path: "/path/to/directory/containing/my_study.parquet"
+    input: "/path/to/directory/containing/my_study.parquet"
+    sample_freq: 256
 ```
 
 The benchmark suite will derive EDF and additional HDF5/Parquet variants
-(different block sizes, compression codecs) automatically from the source
-Parquet data.
+(different block sizes, compression codecs) automatically from the input
+data after it is ingested into canonical Parquet.
 
 ### Using native NeuroWorks data (optional)
 
-If the `nwreader` SDK is installed, you can start from ERD format:
+If the `nwreader` SDK is installed, you can start from an ERD study directory:
 
 ```yaml
 studies:
   - name: "my_study"
-    source: "erd"
-    blob_prefix: "path/to/erd/study"
+    input: "/path/to/erd/study"
 ```
+
+Remote ERD/HDF5/EDF inputs can also be given via Azure blob paths/URLs as long
+the referenced blob or prefix exists in the configured storage container and
+the config includes the matching `azure:` settings.
 
 ## Output
 

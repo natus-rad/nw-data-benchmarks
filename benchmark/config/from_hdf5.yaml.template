@@ -4,6 +4,7 @@
 # Copy this file, edit the input path, and comment out anything you
 # don't need. Every available field and option is shown below.
 #
+# The input can be a local HDF5 file or a remote Azure blob path/URL.
 # Supported HDF5 layouts:
 #   Columnar:  /channels/<label> datasets + optional /samplestamp
 #   Rowgroup:  /data matrix (N, C) + optional /samplestamp
@@ -15,10 +16,22 @@
 #   python benchmark/scripts/run_benchmarks.py --config my_config.yaml
 # ═══════════════════════════════════════════════════════════════════
 
+# --- Azure (required only for remote inputs) ------------------------
+# Uncomment/edit this section if `studies[].input` points to Azure blob
+# storage instead of a local HDF5 file.
+# Remote inputs are cached under `cache_dir` and reused on later runs.
+# For directory-style inputs, cache reuse is currently based on a
+# `.download_complete` marker plus at least one cached file; it is not a
+# full sync/repair pass against Azure.
+azure:
+  storage_account: "nwcsandboxstorage"
+  container: "waveforms"
+  anonymous: true
+
 # --- Input ----------------------------------------------------------
 studies:
   - name: "my_hdf5_recording"
-    input: "/path/to/my_recording.h5"      # <-- EDIT THIS (.h5, .hdf5, .he5)
+    input: "/path/to/my_recording.h5"      # <-- EDIT THIS (local file or Azure blob path/URL)
     # sample_freq: 256                      # Optional if HDF5 has sample_freq attribute
 
 # --- Core Benchmarks ------------------------------------------------

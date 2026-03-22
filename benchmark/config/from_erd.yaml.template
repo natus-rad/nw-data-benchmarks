@@ -4,19 +4,31 @@
 # Copy this file, edit the input path, and comment out anything you
 # don't need. Every available field and option is shown below.
 #
-# The input must be a directory containing .erd file(s) and the
-# corresponding .ent, .snc, .stc sidecar files. The ERD reader
-# extracts channels, samplestamps, and sample_freq from metadata
-# automatically.
+# The input can be a local ERD study directory or a remote Azure blob
+# prefix/URL containing the .erd file(s) and corresponding .ent, .snc,
+# .stc sidecar files. The ERD reader extracts channels, samplestamps,
+# and sample_freq from metadata automatically.
 #
 # Usage:
 #   python benchmark/scripts/run_benchmarks.py --config my_config.yaml
 # ═══════════════════════════════════════════════════════════════════
 
+# --- Azure (required only for remote inputs) ------------------------
+# Uncomment/edit this section if `studies[].input` points to Azure blob
+# storage instead of a local ERD study directory.
+# Remote inputs are cached under `cache_dir` and reused on later runs.
+# For directory-style inputs, cache reuse is currently based on a
+# `.download_complete` marker plus at least one cached file; it is not a
+# full sync/repair pass against Azure.
+azure:
+  storage_account: "nwcsandboxstorage"
+  container: "waveforms"
+  anonymous: true
+
 # --- Input ----------------------------------------------------------
 studies:
   - name: "my_erd_recording"
-    input: "/path/to/my_erd_directory/"     # <-- EDIT THIS (directory with .erd files)
+    input: "/path/to/my_erd_directory/"     # <-- EDIT THIS (local dir or Azure blob prefix/URL)
     # sample_freq: 256                      # Optional: read from ERD metadata if omitted
 
 # --- Core Benchmarks ------------------------------------------------

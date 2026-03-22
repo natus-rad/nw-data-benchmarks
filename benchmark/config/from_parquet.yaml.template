@@ -4,19 +4,31 @@
 # Copy this file, edit the input path, and comment out anything you
 # don't need. Every available field and option is shown below.
 #
-# The input can be a single .parquet file or a directory of Parquet
-# part files. The data must have float32 channel columns and an int64
-# samplestamp column. If it already matches the canonical schema,
-# ingest links to it directly (no copy).
+# The input can be a local .parquet file / directory of Parquet part
+# files, or a remote Azure blob path/URL to that dataset. The data must
+# have float32 channel columns and an int64 samplestamp column. If it
+# already matches the canonical schema, ingest links to it directly.
 #
 # Usage:
 #   python benchmark/scripts/run_benchmarks.py --config my_config.yaml
 # ═══════════════════════════════════════════════════════════════════
 
+# --- Azure (required only for remote inputs) ------------------------
+# Uncomment/edit this section if `studies[].input` points to Azure blob
+# storage instead of a local file/directory.
+# Remote inputs are cached under `cache_dir` and reused on later runs.
+# For directory-style inputs, cache reuse is currently based on a
+# `.download_complete` marker plus at least one cached file; it is not a
+# full sync/repair pass against Azure.
+azure:
+  storage_account: "nwcsandboxstorage"
+  container: "waveforms"
+  anonymous: true
+
 # --- Input ----------------------------------------------------------
 studies:
   - name: "my_parquet_recording"
-    input: "/path/to/my_recording.parquet"  # <-- EDIT THIS (file or directory)
+    input: "/path/to/my_recording.parquet"  # <-- EDIT THIS (local file/dir or Azure blob path/URL)
     sample_freq: 256                        # Required: sample rate in Hz
 
 # --- Core Benchmarks ------------------------------------------------

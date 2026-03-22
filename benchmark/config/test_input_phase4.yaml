@@ -1,9 +1,15 @@
 # Phase 4 test config — uses separate parquet_investigations: and
 # tuned_comparison: config sections instead of flat benchmarks list.
+# Uses the public remote Azure Parquet dataset via `input:`.
+
+azure:
+  storage_account: "nwcsandboxstorage"
+  container: "waveforms"
+  anonymous: true
 
 studies:
   - name: "suppression_study"
-    input: ".benchmark_cache/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet"
+    input: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"
     sample_freq: 256
 
 # ─── Core benchmarks (A–E): run on every generated variant ────────

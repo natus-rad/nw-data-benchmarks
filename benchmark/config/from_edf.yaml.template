@@ -8,12 +8,25 @@
 #   python benchmark/scripts/run_benchmarks.py --config my_config.yaml
 # ═══════════════════════════════════════════════════════════════════
 
+# --- Azure (required only for remote inputs) ------------------------
+# Uncomment/edit this section if `studies[].input` points to Azure blob
+# storage instead of a local EDF file.
+# Remote inputs are cached under `cache_dir` and reused on later runs.
+# For directory-style inputs, cache reuse is currently based on a
+# `.download_complete` marker plus at least one cached file; it is not a
+# full sync/repair pass against Azure.
+azure:
+  storage_account: "nwcsandboxstorage"
+  container: "waveforms"
+  anonymous: true
+
 # --- Input ----------------------------------------------------------
-# The input EDF file is ingested into a canonical Parquet file during
-# setup. All variants are then generated from that canonical Parquet.
+# The input EDF can be a local file or a remote Azure blob path/URL.
+# It is ingested into canonical Parquet during setup, and all variants
+# are then generated from that canonical Parquet.
 studies:
   - name: "my_edf_recording"
-    input: "/path/to/my_recording.edf"     # <-- EDIT THIS
+    input: "/path/to/my_recording.edf"     # <-- EDIT THIS (local file or Azure blob path/URL)
     sample_freq: 256                        # Required for EDF input
 
 # --- Core Benchmarks ------------------------------------------------
