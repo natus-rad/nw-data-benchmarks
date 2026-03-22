@@ -164,10 +164,9 @@ def _ingest_edf(edf_path: Path, out_dir: Path,
         total = edf.total_samples
         freq = sample_freq or edf.sample_frequency
         labels = edf.signal_labels
-        n_channels = len(labels)
 
-        # Read all data
-        data = edf.read_digital_signals(0, total)  # shape: (n_channels, total)
+        # Read all data (physical values in µV via EdfFileReader.read_all_channels)
+        data = edf.read_all_channels()  # shape: (n_channels, total)
 
     stamps = np.arange(total, dtype=np.int64)
     columns = {"samplestamp": pa.array(stamps)}

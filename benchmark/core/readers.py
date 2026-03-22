@@ -58,6 +58,13 @@ class EdfFileReader:
     def n_channels(self) -> int:
         return len(self.signal_labels)
 
+    @property
+    def sample_frequency(self) -> float:
+        """Get sample frequency of the first channel (all channels have same freq in EDF)."""
+        if self._reader is None:
+            raise RuntimeError("EdfFileReader must be used as a context manager.")
+        return float(self._reader.getSampleFrequency(0))
+
     def read_window(self, start_sample: int, n_samples: int,
                     channel_indices: list[int] | None = None) -> np.ndarray:
         if self._reader is None:
@@ -67,6 +74,15 @@ class EdfFileReader:
         for ch in indices:
             rows.append(self._reader.readSignal(ch, start=start_sample, n=n_samples, digital=False))
         return np.vstack(rows).astype(np.float32, copy=False)
+
+    def read_all_channels(self) -> np.ndarray:
+        """Read all channels for the entire file. Returns (n_channels, total_samples) array."""
+        if self._reader is None:
+            raise RuntimeError("EdfFileReader must be used as a context manager.")
+        rows = []
+        for ch in range(self._reader.signals_in_file):
+            rows.append(self._reader.readSignal(ch, start=0, n=self.total_samples, digital=False))
+        return np.array(rows, dtype=np.float32)
 
 
 def _read_edf_window(edf_path: Path, start_sample: int, n_samples: int,
