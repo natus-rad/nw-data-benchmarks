@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import statistics
 import sys
 from pathlib import Path
@@ -47,6 +48,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=TEMPLATE_PATH,
         help="Markdown template path. Defaults to benchmark/docs/benchmark_report.template.md.",
+    )
+    parser.add_argument(
+        "--html",
+        action="store_true",
+        default=False,
+        help="Also generate an HTML report alongside the Markdown output.",
     )
     return parser.parse_args()
 
@@ -307,10 +314,10 @@ def tuned_placeholder_specs() -> list[dict[str, Any]]:
             lambda rows, _: pivot_table(rows, "block_size", "format", "wall_clock_seconds", "time"),
         ),
         section_spec(
-            "J.3 Peak Window-Scaling Throughput",
+            "J.3 Throughput vs Window Size",
             "j3_results",
             "tuned_window_scaling",
-            lambda rows, _: tuned_peak_table(rows),
+            lambda rows, _: tuned_window_scaling_table(rows),
         ),
         section_spec(
             "J.4 Full-Study Sequential Read",
@@ -568,7 +575,7 @@ def render_tuned_comparison(payload: dict[str, Any]) -> str:
         sections.append("### J.2 Channel Subset\n\n" + pivot_table(subset_rows, "block_size", "format", "wall_clock_seconds", "time"))
     scaling_rows = rows_for(payload, "tuned_window_scaling")
     if scaling_rows:
-        sections.append("### J.3 Peak Window-Scaling Throughput\n\n" + tuned_peak_table(scaling_rows))
+        sections.append("### J.3 Throughput vs Window Size\n\n" + tuned_window_scaling_table(scaling_rows))
     full_rows = rows_for(payload, "tuned_full_study")
     if full_rows:
         sections.append("### J.4 Full-Study Sequential Read\n\n" + pivot_table(full_rows, "block_size", "format", "wall_clock_seconds", "time"))
@@ -597,22 +604,34 @@ def pivot_table(rows: list[dict[str, Any]], row_key: str, col_key: str, value_ke
     return markdown_table(["Block size", *[label(column) for column in columns]], body)
 
 
-def tuned_peak_table(rows: list[dict[str, Any]]) -> str:
+def tuned_window_scaling_table(rows: list[dict[str, Any]]) -> str:
+    """Build a window-size × format table for J.3.
+
+    Rows are window sizes (the actual scaling axis).
+    Columns are formats.
+    Each cell shows the best throughput across all block sizes for that
+    window × format combination, with the winning block size annotated.
+    """
     columns = formats_in_rows(rows)
-    block_sizes = sorted({row["block_size"] for row in rows}, key=block_sort_key)
+    window_sizes = sorted({row["window_seconds"] for row in rows})
     body = []
-    for block_size in block_sizes:
-        pivot_rows = [row for row in rows if row["block_size"] == block_size]
-        by_format = {fmt: [row for row in pivot_rows if row["format"] == fmt] for fmt in columns}
-        cells = [str(block_size)]
+    for ws in window_sizes:
+        ws_rows = [row for row in rows if row["window_seconds"] == ws]
+        by_format = {fmt: [r for r in ws_rows if r["format"] == fmt] for fmt in columns}
+        cells = [f"{ws}s"]
         for fmt in columns:
-            if not by_format[fmt]:
+            fmt_rows = by_format.get(fmt, [])
+            if not fmt_rows:
                 cells.append("—")
                 continue
-            best = max(by_format[fmt], key=lambda row: row["mib_per_sec"])
-            cells.append(f"{format_rate(best['mib_per_sec'])} @ {best['window_seconds']}s")
+            best = max(fmt_rows, key=lambda r: r["mib_per_sec"])
+            cells.append(f"{format_rate(best['mib_per_sec'])} ({best['block_size']} block)")
         body.append(cells)
-    return markdown_table(["Block size", *[label(column) for column in columns]], body)
+    note = (
+        "Each cell shows the best throughput across all block sizes tested for that "
+        "window × format combination, with the winning block size in parentheses."
+    )
+    return note + "\n\n" + markdown_table(["Window", *[label(c) for c in columns]], body)
 
 
 def rows_for(payload: dict[str, Any], category: str) -> list[dict[str, Any]]:
@@ -713,6 +732,169 @@ def block_sort_key(value: str) -> int:
     return 10_000
 
 
+_HTML_CSS = """
+:root{
+  --bg:#0f1117;--surface:#1a1d27;--surface2:#22263a;--border:#2e3250;
+  --accent:#6c8ef5;--accent2:#a78bfa;--green:#34d399;
+  --text:#e2e8f0;--muted:#94a3b8;--code-bg:#111827;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:15px/1.75 'Segoe UI',system-ui,sans-serif}
+.layout{display:grid;grid-template-columns:240px 1fr;max-width:1280px;margin:0 auto;min-height:100vh}
+nav.toc{position:sticky;top:0;height:100vh;overflow-y:auto;padding:32px 18px;
+  border-right:1px solid var(--border);background:var(--surface);font-size:.82rem}
+nav.toc h2{color:var(--muted);font-size:.75rem;font-weight:700;letter-spacing:.1em;
+  text-transform:uppercase;margin-bottom:14px}
+nav.toc a{display:block;color:var(--muted);text-decoration:none;padding:3px 0;
+  border-left:2px solid transparent;padding-left:10px;line-height:1.4}
+nav.toc a.sub{color:var(--text);padding-left:22px;font-size:.78rem}
+nav.toc a:hover{border-left-color:var(--accent);color:var(--accent)}
+.page{padding:48px 52px 100px;max-width:900px}
+h1{font-size:2rem;font-weight:700;color:var(--accent);margin:0 0 6px}
+.subtitle{color:var(--muted);font-size:.88rem;margin-bottom:36px}
+h2{font-size:1.3rem;font-weight:600;color:var(--accent2);
+  margin:52px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+h3{font-size:1rem;font-weight:600;color:#c4b5fd;margin:32px 0 10px}
+p{margin:10px 0}
+strong{color:#f1f5f9}
+em{color:var(--muted);font-style:italic}
+code{background:var(--code-bg);color:#7dd3fc;padding:1px 5px;border-radius:4px;
+  font:12px/1.5 'Cascadia Code','Fira Code',monospace}
+ul,ol{margin:10px 0 10px 28px}
+li{margin:4px 0}
+table{width:100%;border-collapse:collapse;margin:18px 0;font-size:.88rem}
+th{background:var(--surface2);color:var(--accent);text-align:left;
+  padding:9px 14px;border:1px solid var(--border);font-weight:600}
+td{padding:8px 14px;border:1px solid var(--border);vertical-align:top;
+  font-variant-numeric:tabular-nums}
+tr:hover td{background:var(--surface2)}
+td.win{color:var(--green);font-weight:600}
+td.na{color:var(--muted);font-style:italic}
+"""
+
+_HTML_SCRIPT = """
+const obs=new IntersectionObserver(es=>{es.forEach(e=>{
+  const a=document.querySelector('nav.toc a[href="#'+e.target.id+'"]');
+  if(a){a.style.borderLeftColor=e.isIntersecting?'var(--accent)':'transparent';
+       a.style.color=e.isIntersecting?'var(--accent)':'';}
+});},{rootMargin:'-10% 0px -80% 0px'});
+document.querySelectorAll('h2[id],h3[id]').forEach(h=>obs.observe(h));
+"""
+
+
+def _html_esc(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _html_inline(s: str) -> str:
+    s = _html_esc(s)
+    s = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', s)
+    s = re.sub(r'_(.+?)_', r'<em>\1</em>', s)
+    s = re.sub(r'`(.+?)`', r'<code>\1</code>', s)
+    return s
+
+
+def _html_slug(s: str) -> str:
+    return re.sub(r'[^a-z0-9]+', '-', s.lower()).strip('-')
+
+
+def _html_table(lines: list[str]) -> str:
+    rows = [[c.strip() for c in line.strip().strip('|').split('|')] for line in lines]
+    if len(rows) < 2:
+        return ""
+    header, _, *body = rows
+    html = ['<table><thead><tr>']
+    for h in header:
+        html.append(f'<th>{_html_inline(h)}</th>')
+    html.append('</tr></thead><tbody>')
+    for row in body:
+        # Highest MiB/s in row = winner (green)
+        tput_nums = []
+        for i, cell in enumerate(row[1:], 1):
+            m = re.search(r'^([\d.]+)\s*MiB/s', cell)
+            if m:
+                tput_nums.append((float(m.group(1)), i))
+        # Lowest bare seconds (e.g. "0.045s") = winner
+        time_nums = []
+        for i, cell in enumerate(row[1:], 1):
+            m = re.search(r'^([\d.]+)s$', cell.strip())
+            if m:
+                time_nums.append((float(m.group(1)), i))
+        win_idx = (
+            max(tput_nums, key=lambda x: x[0])[1] if tput_nums
+            else min(time_nums, key=lambda x: x[0])[1] if time_nums
+            else -1
+        )
+        html.append('<tr>')
+        for i, cell in enumerate(row):
+            cls = ' class="win"' if i == win_idx else ''
+            if cell in ('—', '*not available*') or 'not present' in cell.lower():
+                cls = ' class="na"'
+            html.append(f'<td{cls}>{_html_inline(cell)}</td>')
+        html.append('</tr>')
+    html.append('</tbody></table>')
+    return ''.join(html)
+
+
+def render_html(md_text: str) -> str:
+    """Convert a rendered benchmark Markdown report to a self-contained HTML page."""
+    lines = md_text.splitlines()
+    sections: list[tuple[str, str, bool]] = []  # (anchor, label, is_sub)
+    body: list[str] = []
+    h1_text = ''
+    subtitle_text = ''
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith('# ') and not line.startswith('## '):
+            h1_text = line[2:].strip(); i += 1; continue
+        if line.startswith('## '):
+            text = line[3:].strip(); anc = _html_slug(text)
+            sections.append((anc, text, False))
+            body.append(f'<h2 id="{anc}">{_html_inline(text)}</h2>'); i += 1; continue
+        if line.startswith('### '):
+            text = line[4:].strip(); anc = _html_slug(text)
+            sections.append((anc, text, True))
+            body.append(f'<h3 id="{anc}">{_html_inline(text)}</h3>'); i += 1; continue
+        if line.startswith('_') and 'Generated from' in line and not subtitle_text:
+            subtitle_text = _html_inline(line.strip('_').strip()); i += 1; continue
+        if line.startswith('|'):
+            tbl_lines = []
+            while i < len(lines) and lines[i].startswith('|'):
+                tbl_lines.append(lines[i]); i += 1
+            body.append(_html_table(tbl_lines)); continue
+        if line.startswith('- '):
+            items = []
+            while i < len(lines) and lines[i].startswith('- '):
+                items.append(f'<li>{_html_inline(lines[i][2:])}</li>'); i += 1
+            body.append('<ul>' + ''.join(items) + '</ul>'); continue
+        if not line.strip(): i += 1; continue
+        body.append(f'<p>{_html_inline(line)}</p>'); i += 1
+
+    toc = ['<nav class="toc"><h2>Contents</h2>']
+    for anc, lbl, is_sub in sections:
+        cls = ' class="sub"' if is_sub else ''
+        toc.append(f'<a href="#{anc}"{cls}>{_html_esc(lbl)}</a>')
+    toc.append('</nav>')
+
+    return (
+        f'<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">\n'
+        f'<meta name="viewport" content="width=device-width,initial-scale=1">\n'
+        f'<title>Benchmark Report &mdash; nw-data-benchmarks</title>\n'
+        f'<style>{_HTML_CSS}</style></head>\n'
+        f'<body><div class="layout">\n'
+        f'{"".join(toc)}\n'
+        f'<div class="page">\n'
+        f'<h1>{_html_esc(h1_text)}</h1>\n'
+        f'<p class="subtitle">{subtitle_text}</p>\n'
+        f'{"".join(body)}\n'
+        f'</div></div>\n'
+        f'<script>{_HTML_SCRIPT}</script>\n'
+        f'</body></html>'
+    )
+
+
 def main() -> int:
     args = parse_args()
     try:
@@ -726,6 +908,10 @@ def main() -> int:
         output_path = args.output.resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(rendered, encoding="utf-8")
+        if args.html:
+            html_path = output_path.with_suffix(".html")
+            html_path.write_text(render_html(rendered), encoding="utf-8")
+            print(f"HTML report: {html_path}")
     except ReportGenerationError as exc:
         print(f"Error: {exc}")
         return 1

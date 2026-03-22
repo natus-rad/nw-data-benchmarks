@@ -166,15 +166,15 @@ ${j1_results}
 
 ${j2_results}
 
-### J.3 Peak Window-Scaling Throughput
+### J.3 Throughput vs Window Size
 
-**What it tests:** The best sustained throughput observed for each tuned variant across multiple window sizes.
+**What it tests:** How read throughput for each format scales as the requested window grows, from small random reads (10s) to large sequential reads (3600s).
 
-**What varies:** On-disk block size, tuned storage variant, and requested window size.
+**What varies:** Requested window size and tuned storage format.
 
-**What stays fixed:** Channel count and comparison method.
+**What stays fixed:** Channel count, read position (mid-study), and comparison method. The best-performing block size is selected per cell.
 
-**Question answered:** Which tuned layout scales best as read size grows?
+**Question answered:** Which tuned format scales best as the read window grows?
 
 ${j3_results}
 
