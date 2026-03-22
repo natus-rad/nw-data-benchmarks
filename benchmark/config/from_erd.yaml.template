@@ -1,0 +1,113 @@
+# ═══════════════════════════════════════════════════════════════════
+# ERD Input -- Benchmark Config Template
+# ═══════════════════════════════════════════════════════════════════
+# Copy this file, edit the input path, and comment out anything you
+# don't need. Every available field and option is shown below.
+#
+# The input must be a directory containing .erd file(s) and the
+# corresponding .ent, .snc, .stc sidecar files. The ERD reader
+# extracts channels, samplestamps, and sample_freq from metadata
+# automatically.
+#
+# Usage:
+#   python benchmark/scripts/run_benchmarks.py --config my_config.yaml
+# ═══════════════════════════════════════════════════════════════════
+
+# --- Input ----------------------------------------------------------
+studies:
+  - name: "my_erd_recording"
+    input: "/path/to/my_erd_directory/"     # <-- EDIT THIS (directory with .erd files)
+    # sample_freq: 256                      # Optional: read from ERD metadata if omitted
+
+# --- Core Benchmarks ------------------------------------------------
+benchmarks:
+  - random_access                           # A: Windowed read at various file positions
+  - channel_subset                          # B: Read a subset of channels (columnar advantage)
+  - remontage                               # C: Read + bipolar montage computation
+  - filter_pipeline                         # D: Full-study chunked read + bandpass/notch DSP
+  - window_scaling                          # E: Throughput vs window size (10s to 1hr)
+
+# --- Output Variants ------------------------------------------------
+# Each entry generates one file from the canonical Parquet and runs
+# all core benchmarks on it. Comment out or duplicate entries as needed.
+variants:
+  - format: parquet
+    row_group_minutes: 5
+    dtype: float32
+    compression: lz4
+
+  - format: parquet
+    row_group_minutes: 30
+    dtype: float32
+    compression: lz4
+
+  - format: parquet
+    row_group_minutes: 60
+    dtype: float32
+    compression: lz4
+
+  - format: hdf5
+    layout: columnar
+    chunk_minutes: 5
+    dtype: float32
+    compression: lz4
+
+  - format: hdf5
+    layout: columnar
+    chunk_minutes: 30
+    dtype: float32
+    compression: lz4
+
+  - format: hdf5
+    layout: columnar
+    chunk_minutes: 60
+    dtype: float32
+    compression: lz4
+
+  - format: hdf5
+    layout: rowgroup
+    chunk_minutes: 30
+    dtype: float32
+    compression: lz4
+
+  - format: edf                             # Always 16-bit quantized
+
+# --- Benchmark Parameters -------------------------------------------
+repetitions: 3
+default_window: 60
+window_sizes: [10, 30, 60, 300, 900, 1800, 3600]
+read_positions: [0.0, 0.5, 0.75, 0.95]
+channel_subsets: [4, 10]
+
+# --- Parquet-Specific Investigations (optional) ---------------------
+parquet_investigations:
+  enabled: true
+  compression:
+    codecs: [none, snappy, zstd, lz4]
+    zstd_level: 3
+  precision_loss: true
+  int32_storage: true
+  remote_query:
+    enabled: false
+    remote_url: "https://your-storage.blob.core.windows.net/container/file.parquet"
+
+parquet_compression:
+  - codec: "none"
+  - codec: "snappy"
+  - codec: "zstd"
+    level: 3
+  - codec: "lz4"
+
+# --- Tuned Comparison (optional) ------------------------------------
+tuned_comparison:
+  enabled: true
+  block_sizes_minutes: [5, 10, 20, 30, 60, 120]
+  compression: lz4
+  dtype: float32
+
+tuned_block_sizes_minutes: [5, 10, 20, 30, 60, 120]
+
+# --- Output ---------------------------------------------------------
+cache_dir: ".benchmark_cache"
+# output: "results/my_benchmark_results.json"
+

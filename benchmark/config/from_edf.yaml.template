@@ -1,0 +1,139 @@
+# ═══════════════════════════════════════════════════════════════════
+# EDF Input -- Benchmark Config Template
+# ═══════════════════════════════════════════════════════════════════
+# Copy this file, edit the input path, and comment out anything you
+# don't need. Every available field and option is shown below.
+#
+# Usage:
+#   python benchmark/scripts/run_benchmarks.py --config my_config.yaml
+# ═══════════════════════════════════════════════════════════════════
+
+# --- Input ----------------------------------------------------------
+# The input EDF file is ingested into a canonical Parquet file during
+# setup. All variants are then generated from that canonical Parquet.
+studies:
+  - name: "my_edf_recording"
+    input: "/path/to/my_recording.edf"     # <-- EDIT THIS
+    sample_freq: 256                        # Required for EDF input
+
+# --- Core Benchmarks ------------------------------------------------
+# These run on every generated variant listed below.
+# Comment out any you don't need.
+benchmarks:
+  - random_access                           # A: Windowed read at various file positions
+  - channel_subset                          # B: Read a subset of channels (columnar advantage)
+  - remontage                               # C: Read + bipolar montage computation
+  - filter_pipeline                         # D: Full-study chunked read + bandpass/notch DSP
+  - window_scaling                          # E: Throughput vs window size (10s to 1hr)
+
+# --- Output Variants ------------------------------------------------
+# Each entry generates one file from the canonical Parquet and runs
+# all core benchmarks on it. Include one of each type so you can see
+# what's available. Comment out or duplicate entries as needed.
+#
+# Omit this section entirely (or leave empty) to benchmark only the
+# canonical Parquet with no additional variants.
+variants:
+  # Parquet variants -- tune row_group_minutes, dtype, compression
+  - format: parquet
+    row_group_minutes: 5                    # Row group size in minutes of data
+    dtype: float32                          # float32 | int32
+    compression: lz4                        # lz4 | snappy | zstd | none
+
+  - format: parquet
+    row_group_minutes: 30
+    dtype: float32
+    compression: lz4
+
+  - format: parquet
+    row_group_minutes: 60
+    dtype: float32
+    compression: lz4
+
+  # HDF5 columnar variants -- tune chunk_minutes, dtype, compression
+  - format: hdf5
+    layout: columnar                        # columnar | rowgroup
+    chunk_minutes: 5                        # Chunk size in minutes of data
+    dtype: float32                          # float32
+    compression: lz4                        # lz4 | gzip | none
+
+  - format: hdf5
+    layout: columnar
+    chunk_minutes: 30
+    dtype: float32
+    compression: lz4
+
+  - format: hdf5
+    layout: columnar
+    chunk_minutes: 60
+    dtype: float32
+    compression: lz4
+
+  # HDF5 rowgroup variant -- single matrix layout
+  - format: hdf5
+    layout: rowgroup
+    chunk_minutes: 30
+    dtype: float32
+    compression: lz4
+
+  # EDF variant -- always 16-bit quantized, no tunable parameters
+  - format: edf
+
+# --- Benchmark Parameters -------------------------------------------
+repetitions: 3                              # Timing repetitions per measurement
+default_window: 60                          # Default window size in seconds
+window_sizes: [10, 30, 60, 300, 900, 1800, 3600]  # For window_scaling benchmark
+read_positions: [0.0, 0.5, 0.75, 0.95]     # File positions for random_access (0.0=start, 1.0=end)
+channel_subsets: [4, 10]                    # Number of channels for channel_subset benchmark
+
+# --- Parquet-Specific Investigations (optional) ---------------------
+# These are separate from core benchmarks. They generate their own
+# internal variants from the canonical Parquet and produce separate
+# result entries. Comment out the entire section to disable.
+parquet_investigations:
+  enabled: true
+
+  # F: Codec comparison -- reads the same window from Parquet files
+  # compressed with each codec and compares read speed.
+  compression:
+    codecs: [none, snappy, zstd, lz4]       # Codecs to compare
+    zstd_level: 3                            # Zstd compression level
+
+  # G: Precision loss -- compares float32 Parquet values against
+  # 16-bit EDF quantized values. Generates an EDF from canonical Parquet.
+  precision_loss: true
+
+  # H: Int32 storage -- compares float32 vs int32 calibrated vs int32
+  # nanovolt Parquet variants for read speed.
+  int32_storage: true
+
+  # I: Remote query -- DuckDB queries against a remote Azure Parquet URL.
+  # Requires a publicly accessible or SAS-token URL.
+  remote_query:
+    enabled: false
+    remote_url: "https://your-storage.blob.core.windows.net/container/file.parquet"
+
+# Compression codec list used by the bench_compression benchmark function.
+parquet_compression:
+  - codec: "none"
+  - codec: "snappy"
+  - codec: "zstd"
+    level: 3
+  - codec: "lz4"
+
+# --- Tuned Comparison (optional) ------------------------------------
+# J: Generates matched Parquet and HDF5 variants at each block size,
+# then compares read performance head-to-head. Comment out to disable.
+tuned_comparison:
+  enabled: true
+  block_sizes_minutes: [5, 10, 20, 30, 60, 120]  # Block sizes to compare
+  compression: lz4
+  dtype: float32
+
+# Block size list used by the _setup_tuned_variants function.
+tuned_block_sizes_minutes: [5, 10, 20, 30, 60, 120]
+
+# --- Output ---------------------------------------------------------
+cache_dir: ".benchmark_cache"               # Where generated files are stored
+# output: "results/my_benchmark_results.json"  # Optional: override output path
+
