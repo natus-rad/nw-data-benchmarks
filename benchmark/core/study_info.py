@@ -9,13 +9,6 @@ import psutil
 import pyarrow.parquet as pq
 import yaml
 
-_HAS_NWREADER = False
-try:
-    from nwreader.waveform_convert import inspect_waveforms
-    _HAS_NWREADER = True
-except ImportError:
-    pass
-
 
 def load_config(path: str) -> dict:
     with open(path, "r") as f:
@@ -33,7 +26,7 @@ def _system_info() -> dict:
 
 
 class StudyInfo:
-    """Study metadata — discovered from Parquet files or from the nwreader SDK."""
+    """Study metadata discovered from canonical/benchmark Parquet files."""
 
     def __init__(self, sample_freq: float, channel_labels: list[str],
                  start_stamp: int, end_stamp: int, n_segments: int = 1,
@@ -58,12 +51,12 @@ class StudyInfo:
 
         Uses the full samplestamp array loaded during from_parquet() setup —
         O(1) array lookup, no disk I/O at call time, correct regardless of gaps.
-
-        Falls back to ``start_stamp + idx`` when the array is unavailable
-        (e.g. objects built from the nwreader ERD path).
         """
         if self._stamps is None:
-            return self.start_stamp + idx
+            raise RuntimeError(
+                "StudyInfo.stamp_at_row() requires Parquet-backed samplestamps. "
+                "Construct StudyInfo via StudyInfo.from_parquet()."
+            )
         return int(self._stamps[idx])
 
     @classmethod
@@ -96,45 +89,3 @@ class StudyInfo:
         )
         obj._stamps = stamps
         return obj
-
-
-def _study_info(study_dir: Path, source_type: str = "parquet",
-                study_cfg: dict | None = None) -> StudyInfo:
-    """Get study metadata from Parquet files or via the nwreader SDK."""
-    if source_type == "erd" and _HAS_NWREADER:
-        raw = inspect_waveforms(
-            str(study_dir), ignore_stc=True, convert=True,
-            convert_time=True, pad_discont=True,
-        )
-        if not hasattr(raw, "end_stamp"):
-            raw.end_stamp = raw.segment_plans[-1].last_stamp
-        # total_rows must come from actual sample counts, never from stamp arithmetic.
-        if not hasattr(raw, "total_rows") or raw.total_rows is None:
-            total = sum(
-                plan.n_samples for plan in raw.segment_plans
-                if hasattr(plan, "n_samples")
-            )
-            if total == 0:
-                raise RuntimeError(
-                    "Cannot determine total row count from nwreader segment plans. "
-                    "segment_plans must expose n_samples. Stamp arithmetic will not be used."
-                )
-            raw.total_rows = total
-        return raw
-
-    if not study_cfg or "sample_freq" not in study_cfg:
-        raise ValueError(
-            "sample_freq must be specified in the study config when source is "
-            "'parquet'. The samplestamp column unit is not guaranteed, so the "
-            "sampling frequency cannot be inferred reliably. Add "
-            "'sample_freq: <Hz>' to the study entry in your config file."
-        )
-    cfg_freq = float(study_cfg["sample_freq"])
-
-    pq_dir = study_dir
-    if not any(pq_dir.glob("*.parquet")):
-        for candidate in Path(study_dir).parent.glob("*_exports/parquet_*"):
-            if any(candidate.glob("*.parquet")):
-                pq_dir = candidate
-                break
-    return StudyInfo.from_parquet(pq_dir, sample_freq=cfg_freq)

@@ -4,21 +4,21 @@
 # Compares read performance, compression, and precision across EDF, HDF5,
 # and Apache Parquet for clinical EEG / PSG data at scale.
 #
-# DATA SOURCE OPTIONS
-# -------------------
-# Option A (no SDK required):
-#   Set source: "parquet" and provide a remote_parquet_url pointing to
-#   float32 Parquet files in Azure Blob. All other formats (EDF, HDF5,
-#   int32 variants) are derived from this Parquet data locally.
+# INPUT MODEL
+# -----------
+# Each study must define `input:` pointing to either:
+#   - a local file or directory in a supported format (.edf, .h5/.hdf5,
+#     .parquet file/dir, or ERD directory), or
+#   - a remote Azure blob path/URL for public data we already host.
 #
-# Option B (requires nwreader SDK):
-#   Set source: "erd" and provide a blob_prefix pointing to native
-#   NeuroWorks ERD study folders. The SDK converts ERD -> EDF + Parquet.
+# Remote inputs are downloaded into the configured `cache_dir` using the
+# dataset's leaf name, then ingested from that cached local copy.
 #
 # AZURE AUTHENTICATION
 # --------------------
-#   The default storage account uses anonymous (public) read access.
-#   No credentials needed. For private containers:
+#   Azure settings are only needed for the remote-query benchmark section
+#   further below. The default storage account uses anonymous (public) read
+#   access. For private containers:
 #     1. Run `az login` (uses DefaultAzureCredential)
 #     2. Set AZURE_STORAGE_SAS_TOKEN env var
 #     3. Pass --sas-token on the command line
@@ -31,21 +31,19 @@ azure:
 studies:
   - name: "suppression_study"
 
-    # --- Option A: start from remote Parquet (no SDK needed) ---
-    source: "parquet"
-    remote_parquet_url: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"
-
-    # --- Option B: start from ERD (requires nwreader SDK) ---
-    # source: "erd"
-    # blob_prefix: "walter_studies_with_trending/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724"
+    # --- Universal input path ---
+    # This can be either a local path or a remote Azure blob prefix/URL.
+    # The default points at the public Parquet dataset we've been using.
+    input: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"
 
     # --- Sample frequency (Hz) ---
-    # Required when source is "parquet". The samplestamp column is an opaque
-    # monotonically increasing integer whose unit is not guaranteed, so the
-    # sampling rate cannot be inferred reliably and must be stated explicitly.
-    # When source is "erd" the SDK provides this automatically and this value
-    # is ignored.
+    # Required for EDF inputs. Optional for HDF5 / ERD when the source metadata
+    # can provide it. For Parquet inputs, keep specifying it explicitly unless
+    # your workflow guarantees the samplestamp unit matches the sampling rate.
     sample_freq: 256
+
+    # If you enable the remote_query benchmark below, also update its Azure
+    # paths so they refer to the same study as this input.
 
 cache_dir: ".benchmark_cache"
 
