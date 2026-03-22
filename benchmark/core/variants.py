@@ -22,21 +22,20 @@ from .study_info import StudyInfo
 
 def generate_variants(canonical_pq: Path, info: StudyInfo,
                       variant_specs: list[dict],
-                      cache_dir: Path) -> dict[str, Path]:
+                      output_base: Path) -> dict[str, Path]:
     """Generate all configured variants from canonical Parquet.
 
     Returns a ``paths`` dict with keys the benchmark functions expect.
     If no variants are specified, returns just ``{"parquet": canonical_pq}``.
     """
-    output_base = cache_dir / f"{canonical_pq.name}_variants"
-    output_base.mkdir(parents=True, exist_ok=True)
-
     paths: dict[str, Path] = {}
 
     if not variant_specs:
         # No variants configured — benchmark the canonical Parquet only.
         paths["parquet"] = canonical_pq
         return paths
+
+    output_base.mkdir(parents=True, exist_ok=True)
 
     # Track how many of each format we've seen for labeling.
     fmt_counts: dict[str, int] = {}
@@ -100,6 +99,7 @@ def _generate_parquet_variant(canonical_pq: Path, output_base: Path,
         print(f"  [cached] {key}")
     else:
         print(f"  [variant] Parquet ({label}) ...")
+        output_base.mkdir(parents=True, exist_ok=True)
         src_files = sorted(canonical_pq.glob("*.parquet"))
         schema = pq.read_schema(str(src_files[0]))
 
@@ -166,6 +166,7 @@ def _generate_hdf5_variant(canonical_pq: Path, output_base: Path,
         print(f"  [cached] {key}")
     else:
         print(f"  [variant] HDF5 {layout} ({label}) ...")
+        output_base.mkdir(parents=True, exist_ok=True)
         src_files = sorted(canonical_pq.glob("*.parquet"))
         schema = pq.read_schema(str(src_files[0]))
         ch_cols = [c for c in schema.names if c.startswith("ch_")]

@@ -442,6 +442,7 @@ def _setup_tuned_parquet(paths, output_base, src_files, ch_cols,
         print(f"  [convert] tuned Parquet (rg={label}, lz4) ...")
 
     if need_snappy or need_lz4:
+        output_base.mkdir(parents=True, exist_ok=True)
         w_snappy = (
             pq.ParquetWriter(str(out_file_snappy), schema, compression="snappy", write_statistics=True)
             if need_snappy else None
@@ -503,6 +504,7 @@ def _setup_tuned_h5(paths, output_base, src_files, ch_cols,
         return
 
     print(f"  [convert] tuned HDF5 columnar (chunk={label}, LZ4) ...")
+    output_base.mkdir(parents=True, exist_ok=True)
     total_rows = sum(pq.ParquetFile(str(f)).metadata.num_rows for f in src_files)
     cs = min(chunk_samples, total_rows)
 

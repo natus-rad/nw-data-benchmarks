@@ -7,7 +7,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pyarrow as pa
+import pyarrow.parquet as pq
+
 from benchmark.core import azure_storage, bench_utils, benchmarks, readers, remote, setup, signal, study_info
+from benchmark.core.study_info import StudyInfo
+from benchmark.core.variants import generate_variants
 from benchmark.core.remote import bench_remote_query
 import benchmark.scripts.run_benchmarks as run_benchmarks
 
@@ -149,6 +154,27 @@ class BenchmarkRefactorTests(unittest.TestCase):
             self.assertEqual((resolved / "_metadata_json" / "waveform_meta.json").read_bytes(), b"{}")
             self.assertFalse((resolved / "_metadata_json").is_file())
             self.assertTrue((resolved / ".download_complete").exists())
+
+    def test_generate_variants_skips_empty_output_dir_when_no_variants(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            canonical = tmp_path / "demo_canonical"
+            canonical.mkdir()
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2], type=pa.float32()),
+                }),
+                canonical / "part_00000.parquet",
+                compression="snappy",
+            )
+            info = StudyInfo.from_parquet(canonical, sample_freq=256)
+            output_base = tmp_path / "demo_study_variants"
+
+            paths = generate_variants(canonical, info, [], output_base)
+
+            self.assertEqual(paths["parquet"], canonical)
+            self.assertFalse(output_base.exists())
 
 
 if __name__ == "__main__":

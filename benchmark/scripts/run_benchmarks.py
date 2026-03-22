@@ -128,14 +128,12 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
         sample_freq = study_cfg.get("sample_freq")
         canonical_pq, detected_fmt, sample_freq = ingest(input_path, cache_dir, sample_freq)
         info = StudyInfo.from_parquet(canonical_pq, sample_freq=sample_freq)
+        short_name = study_cfg["name"][:30]
+        output_base = cache_dir / f"{short_name}_variants"
         variant_specs = cfg.get("variants", [])
-        paths = generate_variants(canonical_pq, info, variant_specs, cache_dir)
+        paths = generate_variants(canonical_pq, info, variant_specs, output_base)
         source_type = detected_fmt
         study_dir = input_path
-
-        short_name = study_cfg["name"][:30]
-        output_base = cache_dir / f"{short_name}_exports"
-        output_base.mkdir(parents=True, exist_ok=True)
 
         pq_inv = cfg.get("parquet_investigations", {})
         if pq_inv.get("enabled") and paths.get(FormatKey.PARQUET):
