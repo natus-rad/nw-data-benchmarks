@@ -36,22 +36,22 @@ git clone <repo-url> && cd nw-data-benchmarks
 pip install -r requirements.txt
 
 # 2. Run benchmarks (downloads ~1 GB sample data from Azure on first run)
-python benchmark/scripts/run_benchmarks.py
+python -m benchmark.scripts.run_benchmarks
 
 #    This also generates benchmark/docs/benchmark_report.md and .html by default.
 #    Use --no-report if you only want the JSON results file.
 
 # 3. Run specific categories only
-python benchmark/scripts/run_benchmarks.py --categories random_access channel_subset window_scaling
+python -m benchmark.scripts.run_benchmarks --categories random_access channel_subset window_scaling
 
 # 4. Regenerate the Markdown benchmark report from the latest JSON results
-python benchmark/scripts/generate_benchmark_report.py
+python -m benchmark.scripts.generate_benchmark_report
 
 # Or generate from a specific results file / custom output path
-python benchmark/scripts/generate_benchmark_report.py --input benchmark/results/<file>.json --output benchmark/docs/benchmark_report.md
+python -m benchmark.scripts.generate_benchmark_report --input benchmark/results/<file>.json --output benchmark/docs/benchmark_report.md
 
-# Or generate Markdown + HTML explicitly from the standalone script
-python benchmark/scripts/generate_benchmark_report.py --html
+# Or generate Markdown + HTML explicitly
+python -m benchmark.scripts.generate_benchmark_report --html
 ```
 
 The default configuration downloads a 46-channel, 256 Hz, ~12.9-hour EEG study
@@ -256,7 +256,7 @@ the end of a successful run. Use `--no-report` to skip that post-processing.
 You can also regenerate the report directly from results JSON with:
 
 ```bash
-python benchmark/scripts/generate_benchmark_report.py
+python -m benchmark.scripts.generate_benchmark_report
 ```
 
 If `--input` is omitted, the script automatically selects the newest

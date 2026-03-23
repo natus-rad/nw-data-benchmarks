@@ -4,21 +4,25 @@ import argparse
 import json
 import re
 import statistics
-import sys
 from pathlib import Path
 from string import Template
 from typing import Any
 
+try:
+    from benchmark.core.constants import FORMAT_LABELS, FORMAT_ORDER
+except ModuleNotFoundError as exc:
+    if exc.name == "benchmark" and __package__ in (None, ""):
+        raise SystemExit(
+            "Run this CLI as a module from the repository root: "
+            "python -m benchmark.scripts.generate_benchmark_report"
+        ) from exc
+    raise
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
 RESULTS_DIR = REPO_ROOT / "benchmark" / "results"
 TEMPLATE_PATH = REPO_ROOT / "benchmark" / "docs" / "benchmark_report.template.md"
 DEFAULT_OUTPUT = REPO_ROOT / "benchmark" / "docs" / "benchmark_report.md"
-
-from benchmark.core.constants import FORMAT_LABELS, FORMAT_ORDER
 
 
 class ReportGenerationError(RuntimeError):
@@ -159,7 +163,6 @@ def build_overview(study: dict[str, Any], system: dict[str, Any], categories: se
 
 
 def build_summary(payload: dict[str, Any]) -> str:
-    study = payload["studies"][0]
     rows = []
 
     random_rows = rows_for(payload, "random_access")
@@ -995,29 +998,46 @@ def render_html(md_text: str) -> str:
     while i < len(lines):
         line = lines[i]
         if line.startswith('# ') and not line.startswith('## '):
-            h1_text = line[2:].strip(); i += 1; continue
+            h1_text = line[2:].strip()
+            i += 1
+            continue
         if line.startswith('## '):
-            text = line[3:].strip(); anc = _html_slug(text)
+            text = line[3:].strip()
+            anc = _html_slug(text)
             sections.append((anc, text, False))
-            body.append(f'<h2 id="{anc}">{_html_inline(text)}</h2>'); i += 1; continue
+            body.append(f'<h2 id="{anc}">{_html_inline(text)}</h2>')
+            i += 1
+            continue
         if line.startswith('### '):
-            text = line[4:].strip(); anc = _html_slug(text)
+            text = line[4:].strip()
+            anc = _html_slug(text)
             sections.append((anc, text, True))
-            body.append(f'<h3 id="{anc}">{_html_inline(text)}</h3>'); i += 1; continue
+            body.append(f'<h3 id="{anc}">{_html_inline(text)}</h3>')
+            i += 1
+            continue
         if line.startswith('_') and 'Generated from' in line and not subtitle_text:
-            subtitle_text = _html_inline(line.strip('_').strip()); i += 1; continue
+            subtitle_text = _html_inline(line.strip('_').strip())
+            i += 1
+            continue
         if line.startswith('|'):
             tbl_lines = []
             while i < len(lines) and lines[i].startswith('|'):
-                tbl_lines.append(lines[i]); i += 1
-            body.append(_html_table(tbl_lines)); continue
+                tbl_lines.append(lines[i])
+                i += 1
+            body.append(_html_table(tbl_lines))
+            continue
         if line.startswith('- '):
             items = []
             while i < len(lines) and lines[i].startswith('- '):
-                items.append(f'<li>{_html_inline(lines[i][2:])}</li>'); i += 1
-            body.append('<ul>' + ''.join(items) + '</ul>'); continue
-        if not line.strip(): i += 1; continue
-        body.append(f'<p>{_html_inline(line)}</p>'); i += 1
+                items.append(f'<li>{_html_inline(lines[i][2:])}</li>')
+                i += 1
+            body.append('<ul>' + ''.join(items) + '</ul>')
+            continue
+        if not line.strip():
+            i += 1
+            continue
+        body.append(f'<p>{_html_inline(line)}</p>')
+        i += 1
 
     toc = ['<nav class="toc"><h2>Contents</h2>']
     for anc, lbl, is_sub in sections:

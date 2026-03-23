@@ -10,37 +10,42 @@ import sys
 import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from benchmark.core.azure_storage import resolve_input_path
-from benchmark.core.bench_utils import _estimate_runs, _print_result
-from benchmark.core.benchmarks import BENCHMARKS
-from benchmark.core.config_helpers import (
-    get_canonical_parquet_cfg,
-    get_parquet_compression_variants,
-    get_remote_query_cfg,
-    normalize_config,
-    selected_categories,
-    get_tuned_block_sizes_minutes,
-    get_tuned_chunk_sec,
-    get_tuned_hdf5_compression,
-    get_tuned_parquet_codecs,
-    is_investigation_enabled,
-    tuned_parquet_key,
-    validate_config,
-)
-from benchmark.core.constants import Category, FormatKey, InputFormat
-from benchmark.core.ingest import _canonical_file, _detect_format, _recover_sample_freq, ingest
-from benchmark.core.remote import bench_remote_query
-from benchmark.core.setup import (
-    _setup_int32_variants,
-    _setup_parquet_compression_variants, _setup_tuned_variants,
-)
-from benchmark.core.study_info import StudyInfo, _system_info, load_config
-from benchmark.core.variants import _safe_id, _spec_hash as _variant_spec_hash, generate_variants
-from benchmark.scripts.generate_benchmark_report import generate_report
+try:
+    from benchmark.core.azure_storage import resolve_input_path
+    from benchmark.core.bench_utils import _estimate_runs, _print_result
+    from benchmark.core.benchmarks import BENCHMARKS
+    from benchmark.core.config_helpers import (
+        get_canonical_parquet_cfg,
+        get_parquet_compression_variants,
+        get_remote_query_cfg,
+        normalize_config,
+        selected_categories,
+        get_tuned_block_sizes_minutes,
+        get_tuned_chunk_sec,
+        get_tuned_hdf5_compression,
+        get_tuned_parquet_codecs,
+        is_investigation_enabled,
+        tuned_parquet_key,
+        validate_config,
+    )
+    from benchmark.core.constants import Category, FormatKey, InputFormat
+    from benchmark.core.ingest import _canonical_file, _detect_format, _recover_sample_freq, ingest
+    from benchmark.core.remote import bench_remote_query
+    from benchmark.core.setup import (
+        _setup_int32_variants,
+        _setup_parquet_compression_variants,
+        _setup_tuned_variants,
+    )
+    from benchmark.core.study_info import StudyInfo, _system_info, load_config
+    from benchmark.core.variants import _safe_id, _spec_hash as _variant_spec_hash, generate_variants
+    from benchmark.scripts.generate_benchmark_report import generate_report
+except ModuleNotFoundError as exc:
+    if exc.name == "benchmark" and __package__ in (None, ""):
+        raise SystemExit(
+            "Run this CLI as a module from the repository root: "
+            "python -m benchmark.scripts.run_benchmarks"
+        ) from exc
+    raise
 
 
 _RESULT_SAVE_RETRIES = 10
@@ -621,4 +626,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
