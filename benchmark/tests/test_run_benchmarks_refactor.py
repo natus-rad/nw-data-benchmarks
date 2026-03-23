@@ -225,17 +225,17 @@ class BenchmarkRefactorTests(unittest.TestCase):
         })
 
         self.assertEqual(cfg["canonical_parquet"]["id"], "canonical")
-        self.assertEqual(cfg["canonical_parquet"]["write_row_groups_per_chunk"], 1)
-        self.assertEqual(cfg["canonical_parquet"]["variant_read_batch_rows"], 65_536)
+        self.assertEqual(cfg["canonical_parquet"]["chunk_writer_max_rowgroups"], 1)
+        self.assertEqual(cfg["canonical_parquet"]["chunk_reader_max_rows"], 65_536)
         self.assertFalse(cfg["benchmarks"]["core"]["random_access"]["include_canonical"])
 
     def test_validate_config_rejects_non_positive_canonical_streaming_knobs(self):
-        cfg = normalize_config({"canonical_parquet": {"write_row_groups_per_chunk": 0}})
-        with self.assertRaisesRegex(ValueError, "canonical_parquet.write_row_groups_per_chunk"):
+        cfg = normalize_config({"canonical_parquet": {"chunk_writer_max_rowgroups": 0}})
+        with self.assertRaisesRegex(ValueError, "canonical_parquet.chunk_writer_max_rowgroups"):
             validate_config(cfg)
 
-        cfg = normalize_config({"canonical_parquet": {"variant_read_batch_rows": -1}})
-        with self.assertRaisesRegex(ValueError, "canonical_parquet.variant_read_batch_rows"):
+        cfg = normalize_config({"canonical_parquet": {"chunk_reader_max_rows": -1}})
+        with self.assertRaisesRegex(ValueError, "canonical_parquet.chunk_reader_max_rows"):
             validate_config(cfg)
 
     def test_validate_config_rejects_canonical_id_collision(self):
@@ -297,7 +297,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
                     canonical_cfg={
                         "compression": "snappy",
                         "row_group_minutes": 1,
-                        "write_row_groups_per_chunk": 3,
+                        "chunk_writer_max_rowgroups": 3,
                     },
                     study_name="demo",
                 )
@@ -834,7 +834,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
             self.assertEqual(pq.read_table(paths["variant__pq_stream"]).num_rows, 5)
 
-    def test_generate_variants_uses_configured_variant_read_batch_rows(self):
+    def test_generate_variants_uses_configured_chunk_reader_max_rows(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             canonical = tmp_path / "demo_canonical"
@@ -867,7 +867,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
                     info,
                     [{"id": "pq_stream", "format": "parquet", "row_group_minutes": 1, "compression": "lz4"}],
                     tmp_path / "variants",
-                    canonical_cfg={"variant_read_batch_rows": 2},
+                    canonical_cfg={"chunk_reader_max_rows": 2},
                 )
 
             self.assertEqual(captured, [2])
@@ -948,7 +948,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
             self.assertEqual(len(created_writers[0].headers), 2)
             self.assertTrue(created_writers[0].blocks)
 
-    def test_generate_variants_passes_variant_read_batch_rows_to_edf_conversion(self):
+    def test_generate_variants_passes_chunk_reader_max_rows_to_edf_conversion(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             canonical = tmp_path / "demo_canonical"
@@ -972,7 +972,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
                     info,
                     [{"id": "edf_stream", "format": "edf"}],
                     tmp_path / "variants",
-                    canonical_cfg={"variant_read_batch_rows": 7},
+                    canonical_cfg={"chunk_reader_max_rows": 7},
                 )
 
             self.assertEqual(mock_convert.call_args.kwargs["batch_rows"], 7)

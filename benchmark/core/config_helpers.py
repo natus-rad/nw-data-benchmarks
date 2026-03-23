@@ -20,8 +20,8 @@ DEFAULT_CANONICAL_PARQUET = {
     "id": "canonical",
     "compression": "snappy",
     "row_group_minutes": 30,
-    "write_row_groups_per_chunk": 1,
-    "variant_read_batch_rows": 65_536,
+    "chunk_writer_max_rowgroups": 1,
+    "chunk_reader_max_rows": 65_536,
 }
 
 
@@ -136,9 +136,14 @@ def normalize_config(cfg: dict | None) -> dict:
         tuned["enabled"] = _enabled_from_legacy(legacy_categories, Category.TUNED_COMPARISON)
         baseline["enabled"] = _enabled_from_legacy(legacy_categories, Category.BASELINE_COMPARISON)
 
+    canonical_cfg = _dict_or_empty(cfg.get("canonical_parquet"))
+    if "write_row_groups_per_chunk" in canonical_cfg and "chunk_writer_max_rowgroups" not in canonical_cfg:
+        canonical_cfg = {**canonical_cfg, "chunk_writer_max_rowgroups": canonical_cfg["write_row_groups_per_chunk"]}
+    if "variant_read_batch_rows" in canonical_cfg and "chunk_reader_max_rows" not in canonical_cfg:
+        canonical_cfg = {**canonical_cfg, "chunk_reader_max_rows": canonical_cfg["variant_read_batch_rows"]}
     cfg["canonical_parquet"] = {
         **DEFAULT_CANONICAL_PARQUET,
-        **_dict_or_empty(cfg.get("canonical_parquet")),
+        **canonical_cfg,
     }
     cfg["benchmarks"] = {
         "common": common,
@@ -167,7 +172,7 @@ def validate_config(cfg: dict) -> None:
     canonical_id = canonical_cfg.get("id")
     if not isinstance(canonical_id, str) or not canonical_id.strip():
         raise ValueError("canonical_parquet.id must define a non-empty string")
-    for field in ("row_group_minutes", "write_row_groups_per_chunk", "variant_read_batch_rows"):
+    for field in ("row_group_minutes", "chunk_writer_max_rowgroups", "chunk_reader_max_rows"):
         value = canonical_cfg.get(field)
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"canonical_parquet.{field} must be a positive integer")
@@ -272,7 +277,12 @@ def selected_categories(cfg: dict) -> list[str]:
 
 
 def get_canonical_parquet_cfg(cfg: dict) -> dict:
-    return {**DEFAULT_CANONICAL_PARQUET, **_dict_or_empty(cfg.get("canonical_parquet"))}
+    canonical_cfg = _dict_or_empty(cfg.get("canonical_parquet"))
+    if "write_row_groups_per_chunk" in canonical_cfg and "chunk_writer_max_rowgroups" not in canonical_cfg:
+        canonical_cfg = {**canonical_cfg, "chunk_writer_max_rowgroups": canonical_cfg["write_row_groups_per_chunk"]}
+    if "variant_read_batch_rows" in canonical_cfg and "chunk_reader_max_rows" not in canonical_cfg:
+        canonical_cfg = {**canonical_cfg, "chunk_reader_max_rows": canonical_cfg["variant_read_batch_rows"]}
+    return {**DEFAULT_CANONICAL_PARQUET, **canonical_cfg}
 
 
 def get_repetitions(cfg: dict) -> int:
