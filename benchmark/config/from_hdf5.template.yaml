@@ -13,7 +13,7 @@
 # generated automatically during ingest.
 #
 # Usage:
-#   python benchmark/scripts/run_benchmarks.py --config my_config.yaml
+#   python -m benchmark.scripts.run_benchmarks --config my_config.yaml
 # ═══════════════════════════════════════════════════════════════════
 
 cache_dir: ".benchmark_cache"  # Local cache for downloaded inputs, canonical Parquet, and generated artifacts.
