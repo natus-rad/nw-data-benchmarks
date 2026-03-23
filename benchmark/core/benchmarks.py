@@ -4,7 +4,14 @@ from contextlib import nullcontext
 import numpy as np
 
 from .bench_utils import _chunk_ranges, _full_study_duration_hours, _throughput, _timed
-from .config_helpers import get_parquet_compression_variants, is_investigation_enabled
+from .config_helpers import (
+    get_parquet_compression_variants,
+    get_tuned_chunk_sec,
+    get_tuned_hdf5_compression,
+    get_tuned_parquet_codecs,
+    is_investigation_enabled,
+    tuned_parquet_key,
+)
 from .readers import (
     EdfFileReader,
     _edf_file,
@@ -710,17 +717,17 @@ def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
     mid_stamp = info.stamp_at_row(total_stamps // 2)
 
     block_sizes = _get_tuned_block_sizes(cfg, sample_freq)
+    parquet_codecs = get_tuned_parquet_codecs(cfg)
+    hdf5_compression = get_tuned_hdf5_compression(cfg)
     variants = []
     for label in block_sizes:
-        pq_key_snappy = f"tuned_pq_{label}"
-        pq_key_lz4 = f"tuned_pq_lz4_{label}"
+        for codec in parquet_codecs:
+            pq_key = tuned_parquet_key(codec, label)
+            if pq_key in paths:
+                variants.append((pq_key, label, f"parquet_{codec}", paths[pq_key]))
         h5_key = f"tuned_h5_{label}"
-        if pq_key_snappy in paths:
-            variants.append((pq_key_snappy, label, "parquet_snappy", paths[pq_key_snappy]))
-        if pq_key_lz4 in paths:
-            variants.append((pq_key_lz4, label, "parquet_lz4", paths[pq_key_lz4]))
         if h5_key in paths:
-            variants.append((h5_key, label, "hdf5_lz4", paths[h5_key]))
+            variants.append((h5_key, label, f"hdf5_{hdf5_compression}", paths[h5_key]))
 
     if not variants:
         print("    [skip] No tuned variants found.")
@@ -783,7 +790,7 @@ def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
             })
 
     print("\n  --- J.4: Full-study sequential read ---")
-    chunk_sec = 300
+    chunk_sec = get_tuned_chunk_sec(cfg)
     chunk_stamps = int(chunk_sec * sample_freq)
     bench_start = info.start_stamp
     bench_end = info.end_stamp

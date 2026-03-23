@@ -20,6 +20,9 @@ from benchmark.core.config_helpers import (
     get_parquet_compression_variants,
     get_remote_query_cfg,
     get_tuned_block_sizes_minutes,
+    get_tuned_chunk_sec,
+    get_tuned_hdf5_compression,
+    get_tuned_parquet_codecs,
     is_investigation_enabled,
 )
 from benchmark.core.constants import Category, FormatKey
@@ -99,7 +102,13 @@ def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str
             )
 
     if Category.TUNED_COMPARISON in selected_ids:
-        print(f"\nTuned comparison: block_sizes_minutes={get_tuned_block_sizes_minutes(cfg)}")
+        print(
+            "\nTuned comparison: "
+            f"block_sizes_minutes={get_tuned_block_sizes_minutes(cfg)} "
+            f"parquet_codecs={get_tuned_parquet_codecs(cfg)} "
+            f"hdf5_compression={get_tuned_hdf5_compression(cfg)} "
+            f"chunk_sec={get_tuned_chunk_sec(cfg)}"
+        )
 
     print(f"\nWindow sizes: {cfg.get('window_sizes', [])}")
     print(f"Repetitions: {cfg.get('repetitions', 3)}")

@@ -134,6 +134,9 @@ parquet_investigations:
 
 tuned_comparison:
   block_sizes_minutes: [5, 10, 20, 30, 60, 120]  # Block sizes in minutes for benchmark J; benchmarks list controls whether J runs
+  parquet_codecs: [snappy, lz4]                  # Tuned Parquet codecs to generate for benchmark J
+  hdf5_compression: lz4                          # Only lz4 is currently supported for tuned HDF5 variants
+  chunk_sec: 300                                 # Sequential chunk size in seconds for J.4 full-study reads
 
 # --- Output ---------------------------------------------------------
 cache_dir: ".benchmark_cache"               # Where generated files are stored

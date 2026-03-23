@@ -8,7 +8,13 @@ import hdf5plugin
 import numpy as np
 import pyarrow.parquet as pq
 
-from .config_helpers import get_parquet_compression_variants, get_tuned_block_sizes_minutes
+from .config_helpers import (
+    get_parquet_compression_variants,
+    get_tuned_block_sizes_minutes,
+    get_tuned_hdf5_compression,
+    get_tuned_parquet_codecs,
+    tuned_parquet_key,
+)
 from .parquet_paths import list_parquet_files
 from .study_info import StudyInfo
 
@@ -430,49 +436,43 @@ def _setup_tuned_variants(paths: dict, output_base: Path, info: StudyInfo,
     schema = pq.read_schema(str(src_files[0]))
     ch_cols = [c for c in schema.names if c.startswith("ch_")]
     block_sizes = _get_tuned_block_sizes(cfg, info.sample_freq)
+    parquet_codecs = get_tuned_parquet_codecs(cfg)
+    hdf5_compression = get_tuned_hdf5_compression(cfg)
 
     for label, block_samples in block_sizes.items():
-        _setup_tuned_parquet(paths, output_base, src_files, ch_cols, label, block_samples)
-        _setup_tuned_h5(paths, output_base, src_files, ch_cols, label, block_samples, info)
+        _setup_tuned_parquet(paths, output_base, src_files, ch_cols, label, block_samples, parquet_codecs)
+        _setup_tuned_h5(paths, output_base, src_files, ch_cols, label, block_samples, info, hdf5_compression)
 
 
 def _setup_tuned_parquet(paths, output_base, src_files, ch_cols,
-                         label, row_group_size):
+                         label, row_group_size, codecs):
     """Write single consolidated Parquet files with a specific row-group size."""
     import pyarrow as pa
 
     schema = pq.read_schema(str(src_files[0]))
-    key_snappy = f"tuned_pq_{label}"
-    out_file_snappy = output_base / f"tuned_pq_{label}.parquet"
-    key_lz4 = f"tuned_pq_lz4_{label}"
-    out_file_lz4 = output_base / f"tuned_pq_lz4_{label}.parquet"
+    variants = []
+    for codec in codecs:
+        key = tuned_parquet_key(codec, label)
+        out_file = output_base / f"{key}.parquet"
+        need_write = not out_file.exists()
+        if need_write:
+            print(f"  [convert] tuned Parquet (rg={label}, {codec}) ...")
+        variants.append((codec, key, out_file, need_write))
 
-    need_snappy = not out_file_snappy.exists()
-    need_lz4 = not out_file_lz4.exists()
-    if need_snappy:
-        print(f"  [convert] tuned Parquet (rg={label}, snappy) ...")
-    if need_lz4:
-        print(f"  [convert] tuned Parquet (rg={label}, lz4) ...")
-
-    if need_snappy or need_lz4:
+    if any(need_write for _, _, _, need_write in variants):
         output_base.mkdir(parents=True, exist_ok=True)
-        w_snappy = (
-            pq.ParquetWriter(str(out_file_snappy), schema, compression="snappy", write_statistics=True)
-            if need_snappy else None
-        )
-        w_lz4 = (
-            pq.ParquetWriter(str(out_file_lz4), schema, compression="lz4", write_statistics=True)
-            if need_lz4 else None
-        )
+        writers = {
+            key: pq.ParquetWriter(str(out_file), schema, compression=codec, write_statistics=True)
+            for codec, key, out_file, need_write in variants
+            if need_write
+        }
         try:
             buf: list[pa.Table] = []
             buf_rows = 0
 
             def _flush(table: pa.Table) -> None:
-                if w_snappy:
-                    w_snappy.write_table(table, row_group_size=row_group_size)
-                if w_lz4:
-                    w_lz4.write_table(table, row_group_size=row_group_size)
+                for writer in writers.values():
+                    writer.write_table(table, row_group_size=row_group_size)
 
             for f in src_files:
                 table = pq.read_table(str(f))
@@ -489,15 +489,10 @@ def _setup_tuned_parquet(paths, output_base, src_files, ch_cols,
             if buf_rows > 0:
                 _flush(pa.concat_tables(buf))
         finally:
-            if w_snappy:
-                w_snappy.close()
-            if w_lz4:
-                w_lz4.close()
+            for writer in writers.values():
+                writer.close()
 
-    for key, out_file, was_written in (
-        (key_snappy, out_file_snappy, need_snappy),
-        (key_lz4, out_file_lz4, need_lz4),
-    ):
+    for codec, key, out_file, was_written in variants:
         if out_file.exists():
             if was_written:
                 size_mib = out_file.stat().st_size / (1024 * 1024)
@@ -509,8 +504,10 @@ def _setup_tuned_parquet(paths, output_base, src_files, ch_cols,
 
 
 def _setup_tuned_h5(paths, output_base, src_files, ch_cols,
-                    label, chunk_samples, info):
+                    label, chunk_samples, info, compression):
     """Write an HDF5 columnar file with a specific chunk size."""
+    if compression != "lz4":
+        raise ValueError("tuned_comparison.hdf5_compression currently supports only lz4")
     key = f"tuned_h5_{label}"
     out_file = output_base / f"tuned_h5_{label}.h5"
     if out_file.exists():
@@ -518,7 +515,7 @@ def _setup_tuned_h5(paths, output_base, src_files, ch_cols,
         print(f"  [cached] {key} -> {out_file}")
         return
 
-    print(f"  [convert] tuned HDF5 columnar (chunk={label}, LZ4) ...")
+    print(f"  [convert] tuned HDF5 columnar (chunk={label}, {compression.upper()}) ...")
     output_base.mkdir(parents=True, exist_ok=True)
     total_rows = sum(pq.ParquetFile(str(f)).metadata.num_rows for f in src_files)
     cs = min(chunk_samples, total_rows)

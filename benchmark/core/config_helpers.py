@@ -9,6 +9,9 @@ DEFAULT_PARQUET_COMPRESSION_VARIANTS = [
 ]
 
 DEFAULT_TUNED_BLOCK_MINUTES = [5, 10, 20, 30, 60, 120]
+DEFAULT_TUNED_PARQUET_CODECS = ["snappy", "lz4"]
+DEFAULT_TUNED_HDF5_COMPRESSION = "lz4"
+DEFAULT_TUNED_CHUNK_SEC = 300
 
 
 def get_parquet_investigations(cfg: dict) -> dict:
@@ -51,3 +54,28 @@ def get_tuned_block_sizes_minutes(cfg: dict) -> list:
     if minutes is None:
         return list(DEFAULT_TUNED_BLOCK_MINUTES)
     return list(minutes)
+
+
+def get_tuned_parquet_codecs(cfg: dict) -> list[str]:
+    section = get_tuned_comparison_cfg(cfg)
+    codecs = section.get("parquet_codecs")
+    if codecs is None:
+        return list(DEFAULT_TUNED_PARQUET_CODECS)
+    return list(codecs)
+
+
+def get_tuned_hdf5_compression(cfg: dict) -> str:
+    section = get_tuned_comparison_cfg(cfg)
+    compression = section.get("hdf5_compression", DEFAULT_TUNED_HDF5_COMPRESSION)
+    if compression != "lz4":
+        raise ValueError("tuned_comparison.hdf5_compression currently supports only lz4")
+    return compression
+
+
+def get_tuned_chunk_sec(cfg: dict) -> int:
+    section = get_tuned_comparison_cfg(cfg)
+    return int(section.get("chunk_sec", DEFAULT_TUNED_CHUNK_SEC))
+
+
+def tuned_parquet_key(codec: str, label: str) -> str:
+    return f"tuned_pq_{label}" if codec == "snappy" else f"tuned_pq_{codec}_{label}"

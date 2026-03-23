@@ -13,7 +13,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from benchmark.core import azure_storage, bench_utils, benchmarks, readers, remote, setup, signal, study_info
-from benchmark.core.config_helpers import get_parquet_compression_variants, get_tuned_block_sizes_minutes
+from benchmark.core.config_helpers import (
+    get_parquet_compression_variants,
+    get_tuned_block_sizes_minutes,
+    get_tuned_chunk_sec,
+    get_tuned_hdf5_compression,
+    get_tuned_parquet_codecs,
+)
 from benchmark.core.study_info import StudyInfo
 from benchmark.core.variants import generate_variants
 from benchmark.core.remote import bench_remote_query
@@ -116,11 +122,19 @@ class BenchmarkRefactorTests(unittest.TestCase):
                     "variants": [{"codec": "snappy"}],
                 },
             },
-            "tuned_comparison": {"block_sizes_minutes": [7, 15]},
+            "tuned_comparison": {
+                "block_sizes_minutes": [7, 15],
+                "parquet_codecs": ["lz4"],
+                "hdf5_compression": "lz4",
+                "chunk_sec": 123,
+            },
         }
 
         self.assertEqual(get_parquet_compression_variants(cfg), [{"codec": "snappy"}])
         self.assertEqual(get_tuned_block_sizes_minutes(cfg), [7, 15])
+        self.assertEqual(get_tuned_parquet_codecs(cfg), ["lz4"])
+        self.assertEqual(get_tuned_hdf5_compression(cfg), "lz4")
+        self.assertEqual(get_tuned_chunk_sec(cfg), 123)
 
     def test_resolve_input_path_downloads_remote_prefix(self):
         class FakeDownload:
@@ -374,6 +388,72 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
             self.assertTrue((tmp_path / "variants" / "parquet_int32_calibrated_zstd.parquet").exists())
             self.assertTrue((tmp_path / "variants" / "parquet_int32_nanovolt_snappy.parquet").exists())
+
+    def test_setup_tuned_variants_respects_configured_codecs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            src_file = tmp_path / "single.parquet"
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2], type=pa.float32()),
+                }),
+                src_file,
+                compression="snappy",
+            )
+            info = StudyInfo.from_parquet(src_file, sample_freq=256)
+            paths = {"parquet": src_file}
+            cfg = {
+                "tuned_comparison": {
+                    "block_sizes_minutes": [5],
+                    "parquet_codecs": ["lz4"],
+                    "hdf5_compression": "lz4",
+                }
+            }
+
+            setup._setup_tuned_variants(paths, tmp_path / "variants", info, cfg)
+
+            self.assertTrue((tmp_path / "variants" / "tuned_pq_lz4_5m.parquet").exists())
+            self.assertFalse((tmp_path / "variants" / "tuned_pq_5m.parquet").exists())
+            self.assertTrue((tmp_path / "variants" / "tuned_h5_5m.h5").exists())
+            self.assertIn("tuned_pq_lz4_5m", paths)
+            self.assertNotIn("tuned_pq_5m", paths)
+
+    def test_bench_tuned_comparison_uses_configured_chunk_sec(self):
+        info = SimpleNamespace(
+            sample_freq=2.0,
+            channel_labels=["Fp1"],
+            channel_columns=["ch_Fp1"],
+            total_rows=20,
+            stamp_at_row=lambda row: row,
+            start_stamp=0,
+            end_stamp=19,
+        )
+        cfg = {
+            "repetitions": 1,
+            "default_window": 1,
+            "window_sizes": [1],
+            "tuned_comparison": {
+                "block_sizes_minutes": [5],
+                "parquet_codecs": ["lz4"],
+                "hdf5_compression": "lz4",
+                "chunk_sec": 7,
+            },
+        }
+        paths = {
+            "tuned_pq_lz4_5m": Path("dummy.parquet"),
+            "tuned_h5_5m": Path("dummy.h5"),
+        }
+
+        with patch.object(benchmarks, "_timed", return_value=(0.1, np.zeros((1, 2), dtype=np.float32))), \
+             patch.object(benchmarks, "_read_tuned_pq", return_value=np.zeros((1, 2), dtype=np.float32)), \
+             patch.object(benchmarks, "_read_h5_columnar_window", return_value=np.zeros((1, 2), dtype=np.float32)), \
+             patch.object(benchmarks, "_chunk_ranges", return_value=[(0, 13)]) as mock_chunk_ranges:
+            benchmarks.bench_tuned_comparison(info, paths, cfg)
+
+        self.assertEqual(mock_chunk_ranges.call_count, 2)
+        for call in mock_chunk_ranges.call_args_list:
+            self.assertEqual(call.args, (0, 19, 14))
 
     def test_bench_compression_uses_nested_variants_and_enabled_flag(self):
         with tempfile.TemporaryDirectory() as tmp:
