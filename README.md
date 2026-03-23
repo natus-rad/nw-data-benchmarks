@@ -291,7 +291,7 @@ Based on benchmark results, a production system should use:
 ## Requirements
 
 - Python 3.10+
-- pyarrow 23+ (tested on 23.0.1)
+- pyarrow (tested with 23.0.1; see `requirements.txt` for supported versions)
 - See `requirements.txt` for full dependency list
 - ~5 GB disk for cache (source data + derived format variants)
 

@@ -43,6 +43,12 @@ def _spec_hash(payload: dict) -> str:
     return hashlib.sha1(encoded).hexdigest()[:10]
 
 
+def _decode_hdf5_label(label: object) -> str:
+    if isinstance(label, (bytes, np.bytes_)):
+        return label.decode("utf-8")
+    return str(label)
+
+
 def _row_group_size(sample_freq: float, row_group_minutes: int | None) -> int | None:
     if not row_group_minutes:
         return None
@@ -187,7 +193,7 @@ def _ingest_hdf5(h5_path: Path, out_file: Path,
         elif "data" in hf and len(hf["data"].shape) == 2:
             total_rows = hf["data"].shape[0]
             if "channel_labels" in hf.attrs:
-                labels = list(hf.attrs["channel_labels"])
+                labels = [_decode_hdf5_label(lbl) for lbl in hf.attrs["channel_labels"]]
             else:
                 labels = [str(i) for i in range(hf["data"].shape[1])]
             data_matrix = hf["data"][:].astype(np.float32)

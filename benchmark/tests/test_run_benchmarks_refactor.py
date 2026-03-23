@@ -287,6 +287,29 @@ class BenchmarkRefactorTests(unittest.TestCase):
             self.assertEqual(sample_freq, 256.0)
             self.assertEqual(pq.read_schema(canonical_file).names, ["samplestamp", "ch_0", "ch_1"])
 
+    def test_ingest_hdf5_matrix_decodes_byte_channel_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            h5_file = tmp_path / "input.h5"
+            with h5py.File(str(h5_file), "w") as hf:
+                hf.attrs["sample_freq"] = 256.0
+                hf.attrs["channel_labels"] = np.array([b"Fp1", b"C3"], dtype="S3")
+                hf.create_dataset(
+                    "data",
+                    data=np.array([[0.1, 1.1], [0.2, 1.2]], dtype=np.float32),
+                )
+
+            canonical_file, detected_fmt, sample_freq = ingest(
+                h5_file,
+                tmp_path / "cache",
+                canonical_cfg={"compression": "snappy", "row_group_minutes": 30},
+                study_name="demo",
+            )
+
+            self.assertEqual(detected_fmt, "hdf5")
+            self.assertEqual(sample_freq, 256.0)
+            self.assertEqual(pq.read_schema(canonical_file).names, ["samplestamp", "ch_Fp1", "ch_C3"])
+
     def test_runner_rejects_no_variant_direct_source_erd_core_runs(self):
         cfg = {
             "studies": [{"name": "demo", "input": "demo.erd"}],
