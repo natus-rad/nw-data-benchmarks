@@ -225,7 +225,18 @@ class BenchmarkRefactorTests(unittest.TestCase):
         })
 
         self.assertEqual(cfg["canonical_parquet"]["id"], "canonical")
+        self.assertEqual(cfg["canonical_parquet"]["write_row_groups_per_chunk"], 1)
+        self.assertEqual(cfg["canonical_parquet"]["variant_read_batch_rows"], 65_536)
         self.assertFalse(cfg["benchmarks"]["core"]["random_access"]["include_canonical"])
+
+    def test_validate_config_rejects_non_positive_canonical_streaming_knobs(self):
+        cfg = normalize_config({"canonical_parquet": {"write_row_groups_per_chunk": 0}})
+        with self.assertRaisesRegex(ValueError, "canonical_parquet.write_row_groups_per_chunk"):
+            validate_config(cfg)
+
+        cfg = normalize_config({"canonical_parquet": {"variant_read_batch_rows": -1}})
+        with self.assertRaisesRegex(ValueError, "canonical_parquet.variant_read_batch_rows"):
+            validate_config(cfg)
 
     def test_validate_config_rejects_canonical_id_collision(self):
         cfg = normalize_config({
@@ -264,6 +275,35 @@ class BenchmarkRefactorTests(unittest.TestCase):
             self.assertEqual(canonical_file.suffix, ".parquet")
             self.assertRegex(canonical_file.name, r"^suppression_study_canonical_[0-9a-f]{10}\.parquet$")
             self.assertTrue(canonical_file.exists())
+
+    def test_ingest_uses_configured_canonical_write_chunk_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            parquet_file = tmp_path / "input.parquet"
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2], type=pa.float32()),
+                }),
+                parquet_file,
+                compression="snappy",
+            )
+
+            with patch("benchmark.core.ingest._rewrite_parquet_input", return_value=2) as mock_rewrite:
+                ingest(
+                    parquet_file,
+                    tmp_path / "cache",
+                    sample_freq=2,
+                    canonical_cfg={
+                        "compression": "snappy",
+                        "row_group_minutes": 1,
+                        "write_row_groups_per_chunk": 3,
+                    },
+                    study_name="demo",
+                )
+
+            self.assertEqual(mock_rewrite.call_args.args[3], 120)
+            self.assertEqual(mock_rewrite.call_args.args[4], 360)
 
     def test_ingest_hdf5_matrix_fallback_labels_avoid_double_prefix(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -794,6 +834,44 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
             self.assertEqual(pq.read_table(paths["variant__pq_stream"]).num_rows, 5)
 
+    def test_generate_variants_uses_configured_variant_read_batch_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            canonical = tmp_path / "demo_canonical"
+            canonical.mkdir()
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1, 2], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2, 0.3], type=pa.float32()),
+                }),
+                canonical / "part_00000.parquet",
+                compression="snappy",
+            )
+            info = StudyInfo.from_parquet(canonical, sample_freq=1)
+            captured = []
+
+            def fake_iter(src_files, *, columns=None, batch_rows=None):
+                captured.append(batch_rows)
+                table = pa.table({
+                    "samplestamp": pa.array([0, 1, 2], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2, 0.3], type=pa.float32()),
+                })
+                if columns is not None:
+                    yield pa.table({name: table.column(name) for name in columns})
+                else:
+                    yield table
+
+            with patch("benchmark.core.variants._iter_parquet_tables", side_effect=fake_iter):
+                generate_variants(
+                    canonical,
+                    info,
+                    [{"id": "pq_stream", "format": "parquet", "row_group_minutes": 1, "compression": "lz4"}],
+                    tmp_path / "variants",
+                    canonical_cfg={"variant_read_batch_rows": 2},
+                )
+
+            self.assertEqual(captured, [2])
+
     def test_generate_variants_streams_hdf5_variants_without_read_table(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -869,6 +947,35 @@ class BenchmarkRefactorTests(unittest.TestCase):
             self.assertEqual(len(created_writers), 1)
             self.assertEqual(len(created_writers[0].headers), 2)
             self.assertTrue(created_writers[0].blocks)
+
+    def test_generate_variants_passes_variant_read_batch_rows_to_edf_conversion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            canonical = tmp_path / "demo_canonical"
+            canonical.mkdir()
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2], type=pa.float32()),
+                }),
+                canonical / "part_00000.parquet",
+                compression="snappy",
+            )
+            info = StudyInfo.from_parquet(canonical, sample_freq=1)
+
+            def fake_parquet_to_edf(_src, out_file, sample_freq=256.0, batch_rows=None):
+                out_file.write_bytes(b"edf")
+
+            with patch("benchmark.core.variants._parquet_to_edf", side_effect=fake_parquet_to_edf) as mock_convert:
+                generate_variants(
+                    canonical,
+                    info,
+                    [{"id": "edf_stream", "format": "edf"}],
+                    tmp_path / "variants",
+                    canonical_cfg={"variant_read_batch_rows": 7},
+                )
+
+            self.assertEqual(mock_convert.call_args.kwargs["batch_rows"], 7)
 
     def test_study_info_from_parquet_accepts_single_file_path(self):
         with tempfile.TemporaryDirectory() as tmp:

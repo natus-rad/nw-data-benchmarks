@@ -79,7 +79,8 @@ def _write_streamed_parquet(writer: pq.ParquetWriter, tables, row_group_size: in
 
 def generate_variants(canonical_pq: Path, info: StudyInfo,
                       variant_specs: list[dict],
-                      output_base: Path) -> dict[str, Path]:
+                      output_base: Path,
+                      canonical_cfg: dict | None = None) -> dict[str, Path]:
     """Generate all configured variants from canonical Parquet.
 
     Returns a ``paths`` dict with keys the benchmark functions expect.
@@ -93,6 +94,9 @@ def generate_variants(canonical_pq: Path, info: StudyInfo,
     if not variant_specs:
         return paths
 
+    canonical_cfg = canonical_cfg or {}
+    variant_read_batch_rows = max(1, int(canonical_cfg.get("variant_read_batch_rows", 65_536)))
+
     print("  Generating test variants (skip if cached)...")
     output_base.mkdir(parents=True, exist_ok=True)
 
@@ -101,11 +105,11 @@ def generate_variants(canonical_pq: Path, info: StudyInfo,
         variant_id = spec["id"]
 
         if fmt == "parquet":
-            _generate_parquet_variant(canonical_pq, output_base, info, spec, variant_id, index, paths)
+            _generate_parquet_variant(canonical_pq, output_base, info, spec, variant_id, index, paths, variant_read_batch_rows)
         elif fmt == "hdf5":
-            _generate_hdf5_variant(canonical_pq, output_base, info, spec, variant_id, index, paths)
+            _generate_hdf5_variant(canonical_pq, output_base, info, spec, variant_id, index, paths, variant_read_batch_rows)
         elif fmt == "edf":
-            _generate_edf_variant(canonical_pq, output_base, info, spec, variant_id, index, paths)
+            _generate_edf_variant(canonical_pq, output_base, info, spec, variant_id, index, paths, variant_read_batch_rows)
         else:
             print(f"  [warn] Unknown variant format: {fmt}, skipping")
 
@@ -114,7 +118,8 @@ def generate_variants(canonical_pq: Path, info: StudyInfo,
 
 def _generate_parquet_variant(canonical_pq: Path, output_base: Path,
                               info: StudyInfo, spec: dict, variant_id: str,
-                              sort_index: int, paths: dict) -> None:
+                              sort_index: int, paths: dict,
+                              variant_read_batch_rows: int) -> None:
     """Re-partition canonical Parquet with specified row group size and codec."""
     rg_minutes = spec.get("row_group_minutes", 5)
     compression = spec.get("compression", "lz4")
@@ -146,7 +151,7 @@ def _generate_parquet_variant(canonical_pq: Path, output_base: Path,
         try:
             _write_streamed_parquet(
                 writer,
-                _iter_parquet_tables(src_files, batch_rows=row_group_size),
+                _iter_parquet_tables(src_files, batch_rows=variant_read_batch_rows),
                 row_group_size,
             )
         finally:
@@ -162,7 +167,8 @@ def _generate_parquet_variant(canonical_pq: Path, output_base: Path,
 
 def _generate_hdf5_variant(canonical_pq: Path, output_base: Path,
                             info: StudyInfo, spec: dict, variant_id: str,
-                            sort_index: int, paths: dict) -> None:
+                            sort_index: int, paths: dict,
+                            variant_read_batch_rows: int) -> None:
     """Write HDF5 variant from canonical Parquet."""
     layout = spec.get("layout", "columnar")
     chunk_minutes = spec.get("chunk_minutes", 5)
@@ -219,7 +225,7 @@ def _generate_hdf5_variant(canonical_pq: Path, output_base: Path,
                     chunks=(cs,), **hdf5plugin.LZ4(),
                 )
                 offset = 0
-                for table in _iter_parquet_tables(src_files, columns=["samplestamp"] + ch_cols, batch_rows=cs):
+                for table in _iter_parquet_tables(src_files, columns=["samplestamp"] + ch_cols, batch_rows=variant_read_batch_rows):
                     n = table.num_rows
                     stamp_ds[offset:offset + n] = table.column("samplestamp").to_numpy()
                     for col in ch_cols:
@@ -239,7 +245,7 @@ def _generate_hdf5_variant(canonical_pq: Path, output_base: Path,
                 )
                 hf.attrs["column_order"] = ch_cols
                 offset = 0
-                for table in _iter_parquet_tables(src_files, columns=["samplestamp"] + ch_cols, batch_rows=cs):
+                for table in _iter_parquet_tables(src_files, columns=["samplestamp"] + ch_cols, batch_rows=variant_read_batch_rows):
                     n = table.num_rows
                     stamp_ds[offset:offset + n] = table.column("samplestamp").to_numpy()
                     block = np.column_stack([
@@ -265,7 +271,8 @@ def _generate_hdf5_variant(canonical_pq: Path, output_base: Path,
 
 def _generate_edf_variant(canonical_pq: Path, output_base: Path,
                            info: StudyInfo, spec: dict, variant_id: str,
-                           sort_index: int, paths: dict) -> None:
+                           sort_index: int, paths: dict,
+                           variant_read_batch_rows: int) -> None:
     """Write EDF variant from canonical Parquet."""
     spec_token = _spec_hash({"id": variant_id, "format": "edf"})
     key = f"variant__{variant_id}"
@@ -275,7 +282,7 @@ def _generate_edf_variant(canonical_pq: Path, output_base: Path,
         print(f"  [cached] {key}")
     else:
         print(f"  [variant] EDF ({variant_id}) ...")
-        _parquet_to_edf(canonical_pq, out_file, sample_freq=info.sample_freq)
+        _parquet_to_edf(canonical_pq, out_file, sample_freq=info.sample_freq, batch_rows=variant_read_batch_rows)
         size_mib = out_file.stat().st_size / (1024 * 1024)
         print(f"  [variant] {variant_id}: {size_mib:.1f} MiB")
 

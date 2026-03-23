@@ -507,7 +507,7 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
         short_name = study_cfg["name"][:30]
         output_base = cache_dir / f"{short_name}_variants"
         variant_specs = cfg.get("variants", [])
-        paths = generate_variants(canonical_pq, info, variant_specs, output_base)
+        paths = generate_variants(canonical_pq, info, variant_specs, output_base, canonical_cfg=get_canonical_parquet_cfg(cfg))
         paths.update(_baseline_input_paths(input_path, detected_fmt))
         paths["__source_target__"] = _source_target(input_path, detected_fmt)
         paths["__canonical_target__"] = _canonical_target(canonical_pq, cfg)

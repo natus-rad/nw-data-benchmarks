@@ -20,7 +20,8 @@ from .study_info import StudyInfo
 
 
 def _parquet_to_edf(pq_dir: Path, edf_path: Path,
-                    sample_freq: float = 256.0) -> None:
+                    sample_freq: float = 256.0,
+                    batch_rows: int | None = None) -> None:
     """Convert float32 Parquet files to a single EDF file."""
     import pyedflib
 
@@ -32,7 +33,7 @@ def _parquet_to_edf(pq_dir: Path, edf_path: Path,
     ch_cols = [c for c in schema.names if c.startswith("ch_")]
     labels = [c[3:] for c in ch_cols]
     n_channels = len(labels)
-    batch_rows = max(int(np.ceil(float(sample_freq))) * 30, 1)
+    batch_rows = max(1, int(batch_rows)) if batch_rows else max(int(np.ceil(float(sample_freq))) * 30, 1)
 
     ch_min = np.full(n_channels, np.inf)
     ch_max = np.full(n_channels, -np.inf)

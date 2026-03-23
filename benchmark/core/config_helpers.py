@@ -20,6 +20,8 @@ DEFAULT_CANONICAL_PARQUET = {
     "id": "canonical",
     "compression": "snappy",
     "row_group_minutes": 30,
+    "write_row_groups_per_chunk": 1,
+    "variant_read_batch_rows": 65_536,
 }
 
 
@@ -165,6 +167,10 @@ def validate_config(cfg: dict) -> None:
     canonical_id = canonical_cfg.get("id")
     if not isinstance(canonical_id, str) or not canonical_id.strip():
         raise ValueError("canonical_parquet.id must define a non-empty string")
+    for field in ("row_group_minutes", "write_row_groups_per_chunk", "variant_read_batch_rows"):
+        value = canonical_cfg.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise ValueError(f"canonical_parquet.{field} must be a positive integer")
 
     variants = cfg.get("variants", []) or []
     ids: list[str] = []

@@ -58,6 +58,8 @@ canonical_parquet:
   id: canonical
   compression: snappy
   row_group_minutes: 30
+  write_row_groups_per_chunk: 1  # Buffer this many canonical row groups before each streamed write flush.
+  variant_read_batch_rows: 65536 # Rows to read at a time from canonical Parquet when generating variants.
 
 # User-declared benchmark targets generated from canonical Parquet.
 # `id` must be unique and stable; it is also used in reports and cache naming.
@@ -65,6 +67,13 @@ variants:
   - id: pq_30m_lz4
     format: parquet
     row_group_minutes: 30
+    compression: lz4
+
+  - id: hdf5_col_30m
+    format: hdf5
+    layout: columnar
+    chunk_minutes: 30
+    dtype: float32
     compression: lz4
 
 # Benchmark families are grouped by purpose:

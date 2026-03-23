@@ -55,6 +55,14 @@ def _row_group_size(sample_freq: float, row_group_minutes: int | None) -> int | 
     return max(1, int(float(sample_freq) * 60 * int(row_group_minutes)))
 
 
+def _write_chunk_rows(row_group_size: int | None,
+                      write_row_groups_per_chunk: int | None) -> int | None:
+    if row_group_size is None:
+        return None
+    groups = int(write_row_groups_per_chunk) if write_row_groups_per_chunk else 1
+    return max(1, int(row_group_size) * max(1, groups))
+
+
 def _canonical_file(cache_dir: Path, input_path: Path, fmt: str,
                     sample_freq: float, canonical_cfg: dict,
                     study_name: str | None = None) -> Path:
@@ -65,6 +73,7 @@ def _canonical_file(cache_dir: Path, input_path: Path, fmt: str,
         "canonical": {
             "compression": canonical_cfg.get("compression", "snappy"),
             "row_group_minutes": canonical_cfg.get("row_group_minutes", 30),
+            "write_row_groups_per_chunk": canonical_cfg.get("write_row_groups_per_chunk", 1),
         },
     }
     token = _spec_hash(payload)
@@ -91,9 +100,12 @@ def _hdf5_batch_rows(total_rows: int, row_group_size: int | None,
 
 
 def _write_streamed_tables(tables, out_file: Path, compression: str,
-                           row_group_size: int | None) -> int:
+                           row_group_size: int | None,
+                           write_chunk_rows: int | None = None) -> int:
     out_file.parent.mkdir(parents=True, exist_ok=True)
-    target_rows = int(row_group_size) if row_group_size and int(row_group_size) > 0 else None
+    target_rows = int(write_chunk_rows) if write_chunk_rows and int(write_chunk_rows) > 0 else None
+    if target_rows is None and row_group_size and int(row_group_size) > 0:
+        target_rows = int(row_group_size)
     writer = None
     pending: list[pa.Table] = []
     pending_rows = 0
@@ -115,18 +127,39 @@ def _write_streamed_tables(tables, out_file: Path, compression: str,
                 pending_rows += length
                 start += length
                 if pending_rows >= target_rows:
-                    merged = pa.concat_tables(pending)
-                    writer.write_table(merged, row_group_size=merged.num_rows)
+                    merged = pending[0] if len(pending) == 1 else pa.concat_tables(pending)
+                    if row_group_size is not None:
+                        writer.write_table(merged, row_group_size=row_group_size)
+                    else:
+                        writer.write_table(merged)
                     pending = []
                     pending_rows = 0
 
         if writer is not None and pending_rows > 0:
-            merged = pa.concat_tables(pending)
-            writer.write_table(merged, row_group_size=merged.num_rows)
+            merged = pending[0] if len(pending) == 1 else pa.concat_tables(pending)
+            if row_group_size is not None:
+                writer.write_table(merged, row_group_size=row_group_size)
+            else:
+                writer.write_table(merged)
     finally:
         if writer is not None:
             writer.close()
     return total_rows
+
+
+def _iter_parquet_input_tables(src_path: Path, batch_rows: int | None = None):
+    src_files = list_parquet_files(src_path)
+    if not src_files:
+        raise ValueError(f"No Parquet files found under {src_path}")
+    for src_file in src_files:
+        parquet_file = pq.ParquetFile(str(src_file))
+        schema = parquet_file.schema_arrow
+        if batch_rows is None:
+            batches = parquet_file.iter_batches()
+        else:
+            batches = parquet_file.iter_batches(batch_size=batch_rows)
+        for batch in batches:
+            yield pa.Table.from_batches([batch], schema=schema)
 
 
 def _hdf5_stamp_source(hf):
@@ -215,27 +248,15 @@ def _iter_edf_tables(edf, row_group_size: int | None):
 
 
 def _rewrite_parquet_input(src_path: Path, out_file: Path, compression: str,
-                           row_group_size: int | None) -> int:
-    src_files = list_parquet_files(src_path)
-    if not src_files:
-        raise ValueError(f"No Parquet files found under {src_path}")
-    out_file.parent.mkdir(parents=True, exist_ok=True)
-    writer = None
-    total_rows = 0
-    try:
-        for src_file in src_files:
-            parquet_file = pq.ParquetFile(str(src_file))
-            schema = parquet_file.schema_arrow
-            if writer is None:
-                writer = pq.ParquetWriter(str(out_file), schema, compression=compression)
-            for batch in parquet_file.iter_batches():
-                table = pa.Table.from_batches([batch], schema=schema)
-                total_rows += table.num_rows
-                writer.write_table(table, row_group_size=row_group_size)
-    finally:
-        if writer is not None:
-            writer.close()
-    return total_rows
+                           row_group_size: int | None,
+                           write_chunk_rows: int | None = None) -> int:
+    return _write_streamed_tables(
+        _iter_parquet_input_tables(src_path, batch_rows=write_chunk_rows),
+        out_file,
+        compression,
+        row_group_size,
+        write_chunk_rows=write_chunk_rows,
+    )
 
 
 def ingest(input_path: Path, cache_dir: Path,
@@ -271,14 +292,18 @@ def ingest(input_path: Path, cache_dir: Path,
     print(f"  [ingest] {fmt} -> canonical Parquet ...")
     compression = str(canonical_cfg.get("compression", "snappy"))
     row_group_size = _row_group_size(float(sample_freq), canonical_cfg.get("row_group_minutes"))
+    write_chunk_rows = _write_chunk_rows(
+        row_group_size,
+        canonical_cfg.get("write_row_groups_per_chunk", 1),
+    )
 
     if fmt == "parquet":
-        total_rows = _rewrite_parquet_input(input_path, canonical, compression, row_group_size)
+        total_rows = _rewrite_parquet_input(input_path, canonical, compression, row_group_size, write_chunk_rows)
         print(f"  [ingest] wrote {canonical} ({total_rows:,} rows)")
     elif fmt == "hdf5":
-        sample_freq = _ingest_hdf5(input_path, canonical, sample_freq, compression, row_group_size)
+        sample_freq = _ingest_hdf5(input_path, canonical, sample_freq, compression, row_group_size, write_chunk_rows)
     elif fmt == "edf":
-        sample_freq = _ingest_edf(input_path, canonical, sample_freq, compression, row_group_size)
+        sample_freq = _ingest_edf(input_path, canonical, sample_freq, compression, row_group_size, write_chunk_rows)
     elif fmt == "erd":
         sample_freq = _ingest_erd(input_path, canonical, compression, row_group_size)
 
@@ -304,7 +329,8 @@ def _recover_sample_freq(input_path: Path, fmt: str) -> float:
 
 def _ingest_hdf5(h5_path: Path, out_file: Path,
                  sample_freq: float | None, compression: str,
-                 row_group_size: int | None) -> float:
+                 row_group_size: int | None,
+                 write_chunk_rows: int | None = None) -> float:
     """Read HDF5 and write as canonical Parquet. Returns sample_freq."""
     import h5py
 
@@ -316,7 +342,13 @@ def _ingest_hdf5(h5_path: Path, out_file: Path,
                 "pass sample_freq in config"
             )
 
-        total_rows = _write_streamed_tables(_iter_hdf5_tables(hf, row_group_size), out_file, compression, row_group_size)
+        total_rows = _write_streamed_tables(
+            _iter_hdf5_tables(hf, row_group_size),
+            out_file,
+            compression,
+            row_group_size,
+            write_chunk_rows=write_chunk_rows,
+        )
 
     print(f"  [ingest] wrote {out_file} ({total_rows:,} rows)")
     return freq
@@ -324,13 +356,20 @@ def _ingest_hdf5(h5_path: Path, out_file: Path,
 
 def _ingest_edf(edf_path: Path, out_file: Path,
                 sample_freq: float | None, compression: str,
-                row_group_size: int | None) -> float:
+                row_group_size: int | None,
+                write_chunk_rows: int | None = None) -> float:
     """Read EDF and write as canonical Parquet. Returns sample_freq."""
     from .readers import EdfFileReader
 
     with EdfFileReader(edf_path) as edf:
         freq = sample_freq or edf.sample_frequency
-        total = _write_streamed_tables(_iter_edf_tables(edf, row_group_size), out_file, compression, row_group_size)
+        total = _write_streamed_tables(
+            _iter_edf_tables(edf, row_group_size),
+            out_file,
+            compression,
+            row_group_size,
+            write_chunk_rows=write_chunk_rows,
+        )
 
     print(f"  [ingest] wrote {out_file} ({total:,} rows)")
     return float(freq)
