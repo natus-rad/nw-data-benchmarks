@@ -454,6 +454,43 @@ class BenchmarkRefactorTests(unittest.TestCase):
             cfg["parquet_investigations"]["compression"]["enabled"] = False
             self.assertEqual(benchmarks.bench_compression(info, paths, cfg), [])
 
+    def test_bench_compression_reports_size_for_single_file_parquet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pq_file = tmp_path / "single.parquet"
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2], type=pa.float32()),
+                }),
+                pq_file,
+                compression="snappy",
+            )
+            info = SimpleNamespace(
+                sample_freq=1.0,
+                channel_labels=["Fp1"],
+                channel_columns=["ch_Fp1"],
+                total_rows=2,
+                stamp_at_row=lambda row: row,
+            )
+            paths = {"parquet": pq_file, "parquet_none": pq_file}
+            cfg = {
+                "repetitions": 1,
+                "default_window": 1,
+                "parquet_investigations": {
+                    "compression": {
+                        "enabled": True,
+                        "variants": [{"codec": "none"}],
+                    }
+                },
+            }
+
+            with patch.object(benchmarks, "_timed", return_value=(0.1, np.zeros((1, 2), dtype=np.float32))):
+                results = benchmarks.bench_compression(info, paths, cfg)
+
+            self.assertGreater(results[0]["file_size_bytes"], 0)
+            self.assertGreater(results[0]["file_size_mib"], 0)
+
     def test_bench_remote_query_uses_nested_remote_query_config(self):
         class FakeCon:
             def close(self):

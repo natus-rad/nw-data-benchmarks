@@ -118,6 +118,29 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         self.assertIn("| 5m | 0.0669s | 0.0553s |", rendered)
         self.assertIn("| 5m | 14.59s | 12.22s |", rendered)
 
+    def test_render_report_handles_zero_artifact_size_without_crashing(self) -> None:
+        payload = {
+            "run_id": "2026-03-21T00-00-00",
+            "system": {"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16},
+            "studies": [
+                {
+                    "name": "demo",
+                    "channels": 2,
+                    "sample_freq": 100.0,
+                    "total_stamps": 1000,
+                    "duration_seconds": 10.0,
+                }
+            ],
+            "benchmarks": [
+                {"category": "compression", "format": "parquet", "codec": "snappy", "file_size_bytes": 0, "file_size_mib": 0.0, "wall_clock_seconds": 0.2},
+            ],
+        }
+        template = "# Report\n\n${f_results}\n"
+
+        rendered = render_report(payload, template, Path("benchmark/results/demo.json"))
+
+        self.assertIn("n/a", rendered)
+
     def test_render_report_supports_per_section_placeholders(self) -> None:
         payload = {
             "run_id": "2026-03-21T00-00-00",

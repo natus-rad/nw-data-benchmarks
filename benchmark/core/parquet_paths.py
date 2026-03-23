@@ -9,3 +9,8 @@ def list_parquet_files(path: Path) -> list[Path]:
     if path.is_file():
         return [path] if path.suffix.lower() == ".parquet" else []
     return sorted(path.glob("*.parquet")) if path.exists() else []
+
+
+def parquet_total_size_bytes(path: Path) -> int:
+    """Return the total size of a Parquet artifact stored as a file or dataset dir."""
+    return sum(file_path.stat().st_size for file_path in list_parquet_files(path))

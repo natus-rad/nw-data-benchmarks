@@ -453,6 +453,10 @@ def render_compression(rows: list[dict[str, Any]], payload: dict[str, Any]) -> s
     study = payload["studies"][0]
     raw_mib = raw_float32_mib(study)
     ordered = sorted(rows, key=lambda row: row["file_size_bytes"])
+
+    def _ratio_text(file_size_mib: float) -> str:
+        return f"{raw_mib / file_size_mib:.2f}×" if file_size_mib > 0 else "n/a"
+
     table = markdown_table(
         ["Codec", "1-minute read", "Artifact size", "Ratio vs raw float32"],
         [
@@ -460,7 +464,7 @@ def render_compression(rows: list[dict[str, Any]], payload: dict[str, Any]) -> s
                 row["codec"],
                 format_seconds(row["wall_clock_seconds"]),
                 format_mib(row["file_size_mib"]),
-                f"{raw_mib / row['file_size_mib']:.2f}×",
+                _ratio_text(row["file_size_mib"]),
             ]
             for row in ordered
         ],
@@ -503,6 +507,10 @@ def render_int32_storage(rows: list[dict[str, Any]], payload: dict[str, Any]) ->
     raw_mib = raw_float32_mib(study)
     size_rows = unique_by(rows, lambda row: (row["mode"], row.get("codec")))
     size_rows = sorted(size_rows, key=lambda row: row["file_size_bytes"])
+
+    def _ratio_text(file_size_mib: float) -> str:
+        return f"{raw_mib / file_size_mib:.2f}×" if file_size_mib > 0 else "n/a"
+
     size_table = markdown_table(
         ["Mode", "Codec", "Artifact size", "Ratio vs raw float32", "SNR vs float32"],
         [
@@ -510,7 +518,7 @@ def render_int32_storage(rows: list[dict[str, Any]], payload: dict[str, Any]) ->
                 row["mode"],
                 row.get("codec", "—"),
                 format_mib(row["file_size_mib"]),
-                f"{raw_mib / row['file_size_mib']:.2f}×",
+                _ratio_text(row["file_size_mib"]),
                 str(row["snr_vs_float32_db"]),
             ]
             for row in size_rows

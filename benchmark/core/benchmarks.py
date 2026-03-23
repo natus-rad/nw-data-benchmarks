@@ -12,6 +12,7 @@ from .config_helpers import (
     is_investigation_enabled,
     tuned_parquet_key,
 )
+from .parquet_paths import parquet_total_size_bytes
 from .readers import (
     EdfFileReader,
     _edf_file,
@@ -516,13 +517,13 @@ def bench_compression(info, paths: dict, cfg: dict) -> list[dict]:
             continue
 
         pq_path = paths[key]
-        total_size = sum(f.stat().st_size for f in pq_path.rglob("*.parquet"))
+        total_size = parquet_total_size_bytes(pq_path)
         t, data = _timed(lambda: _read_parquet_window(pq_path, info.channel_columns, start_stamp, end_stamp), reps)
         n_samples = data.shape[1] if data.ndim == 2 else 0
 
         none_key = "parquet_none"
         if none_key in paths:
-            uncomp_size = sum(f.stat().st_size for f in paths[none_key].rglob("*.parquet"))
+            uncomp_size = parquet_total_size_bytes(paths[none_key])
             ratio = round(uncomp_size / total_size, 2) if total_size > 0 else 0
         else:
             ratio = None
@@ -632,7 +633,7 @@ def bench_int32_storage(info, paths: dict, cfg: dict) -> list[dict]:
     columns = info.channel_columns
 
     ground_truth = _read_parquet_window(paths["parquet"], columns, start_stamp, end_stamp)
-    float32_size = sum(f.stat().st_size for f in paths["parquet"].rglob("*.parquet"))
+    float32_size = parquet_total_size_bytes(paths["parquet"])
     read_methods = [
         ("numpy", "int32_calibrated", _read_int32_calibrated),
         ("numpy", "int32_nanovolt", _read_int32_nanovolt),
@@ -647,7 +648,7 @@ def bench_int32_storage(info, paths: dict, cfg: dict) -> list[dict]:
                 continue
 
             pq_path = paths[key]
-            total_size = sum(f.stat().st_size for f in pq_path.rglob("*.parquet"))
+            total_size = parquet_total_size_bytes(pq_path)
             ratio = float32_size / total_size if total_size > 0 else 0
             t, data = _timed(lambda: read_fn(pq_path, columns, start_stamp, end_stamp), reps)
             n_samples = data.shape[1] if data.ndim == 2 else 0
@@ -683,7 +684,7 @@ def bench_int32_storage(info, paths: dict, cfg: dict) -> list[dict]:
     zstd_key = "parquet_zstd_3"
     if zstd_key in paths:
         t, _ = _timed(lambda: _read_parquet_window(paths[zstd_key], columns, start_stamp, end_stamp), reps)
-        zstd_size = sum(f.stat().st_size for f in paths[zstd_key].rglob("*.parquet"))
+        zstd_size = parquet_total_size_bytes(paths[zstd_key])
         n_samples = int(window_sec * info.sample_freq)
         results.append({
             "category": "int32_storage",
