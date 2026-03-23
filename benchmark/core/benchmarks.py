@@ -6,6 +6,7 @@ import numpy as np
 from .bench_utils import _chunk_ranges, _full_study_duration_hours, _throughput, _timed
 from .config_helpers import (
     get_channel_subsets,
+    get_core_include_canonical,
     get_default_window,
     get_parquet_compression_variants,
     get_read_positions,
@@ -68,23 +69,33 @@ def _read_target_window(target: dict, info, columns: list[str],
 
 def _core_targets(paths: dict, cfg: dict, category: str) -> list[dict]:
     selector = get_core_variants_selector(cfg, category)
+    include_canonical = get_core_include_canonical(cfg, category)
     root_variants = list(paths.get("__root_variants__", []))
+    canonical_target = paths.get("__canonical_target__")
+
+    selected: list[dict]
     if root_variants:
         if selector == []:
-            return []
-        if selector == "all":
-            return root_variants
-        by_id = {target["variant_id"]: target for target in root_variants}
-        return [by_id[variant_id] for variant_id in selector]
+            selected = []
+        elif selector == "all":
+            selected = list(root_variants)
+        else:
+            by_id = {target["variant_id"]: target for target in root_variants}
+            selected = [by_id[variant_id] for variant_id in selector]
+    else:
+        if selector == []:
+            selected = []
+        elif selector != "all":
+            raise ValueError(
+                f"benchmarks.core.{category}.variants cannot list explicit ids when no root variants exist"
+            )
+        else:
+            source_target = paths.get("__source_target__")
+            selected = [source_target] if source_target else []
 
-    if selector == []:
-        return []
-    if selector != "all":
-        raise ValueError(
-            f"benchmarks.core.{category}.variants cannot list explicit ids when no root variants exist"
-        )
-    source_target = paths.get("__source_target__")
-    return [source_target] if source_target else []
+    if include_canonical and canonical_target:
+        selected = list(selected) + [{**canonical_target, "sort_index": len(selected)}]
+    return selected
 
 
 def _core_result_fields(target: dict) -> dict:

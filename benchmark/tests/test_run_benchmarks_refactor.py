@@ -126,6 +126,27 @@ class BenchmarkRefactorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must define a non-empty string 'id'"):
             validate_config(cfg)
 
+    def test_normalize_config_defaults_canonical_id_and_include_flag(self):
+        cfg = normalize_config({
+            "benchmarks": {
+                "core": {
+                    "random_access": {"enabled": True, "variants": "all"},
+                }
+            }
+        })
+
+        self.assertEqual(cfg["canonical_parquet"]["id"], "canonical")
+        self.assertFalse(cfg["benchmarks"]["core"]["random_access"]["include_canonical"])
+
+    def test_validate_config_rejects_canonical_id_collision(self):
+        cfg = normalize_config({
+            "canonical_parquet": {"id": "pq_main"},
+            "variants": [{"id": "pq_main", "format": "parquet", "compression": "lz4", "row_group_minutes": 30}],
+        })
+
+        with self.assertRaisesRegex(ValueError, "collides with root variant id"):
+            validate_config(cfg)
+
     def test_ingest_materializes_parquet_input_to_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -180,6 +201,50 @@ class BenchmarkRefactorTests(unittest.TestCase):
              patch.object(run_benchmarks, "generate_variants", return_value={"parquet": Path("demo_canonical"), "__root_variants__": []}):
             with self.assertRaisesRegex(ValueError, "not yet supported for ERD"):
                 run_benchmarks.run_benchmarks(cfg, args)
+
+    def test_runner_allows_erd_canonical_only_core_run(self):
+        cfg = {
+            "studies": [{"name": "demo", "input": "demo.erd"}],
+            "benchmarks": {
+                "core": {
+                    "random_access": {"enabled": True, "variants": [], "include_canonical": True},
+                }
+            },
+            "variants": [],
+        }
+        args = argparse.Namespace(
+            config="benchmark/config/default.yaml",
+            categories=None,
+            output=None,
+            dry_run=False,
+            no_report=True,
+            sas_token=None,
+        )
+        fake_info = SimpleNamespace(
+            sample_freq=256.0,
+            total_rows=1024,
+            n_segments=1,
+            segment_plans=[],
+            channel_labels=["Fp1"],
+            channel_columns=["ch_Fp1"],
+            start_stamp=0,
+            end_stamp=1023,
+        )
+        captured = {}
+
+        def _fake_bench(_info, paths, cfg_norm):
+            captured["targets"] = benchmarks._core_targets(paths, cfg_norm, "random_access")
+            return []
+
+        with patch.object(run_benchmarks, "_selected_benchmarks", return_value=[("random_access", "A", _fake_bench)]), \
+             patch.object(run_benchmarks, "resolve_input_path", return_value=Path("demo.erd")), \
+             patch.object(run_benchmarks, "ingest", return_value=(Path("demo_canonical"), "erd", 256.0)), \
+             patch.object(run_benchmarks.StudyInfo, "from_parquet", return_value=fake_info), \
+             patch.object(run_benchmarks, "generate_variants", return_value={"parquet": Path("demo_canonical"), "__root_variants__": []}), \
+             patch.object(run_benchmarks, "_save_results"):
+            run_benchmarks.run_benchmarks(cfg, args)
+
+        self.assertEqual([target["artifact_id"] for target in captured["targets"]], ["canonical"])
 
     def test_runner_wires_baseline_input_path_separately_from_canonical_parquet(self):
         cfg = {
@@ -245,6 +310,65 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertEqual(get_tuned_parquet_codecs(cfg), ["lz4"])
         self.assertEqual(get_tuned_hdf5_compression(cfg), "lz4")
         self.assertEqual(get_tuned_chunk_sec(cfg), 123)
+
+    def test_core_targets_can_append_canonical_for_root_variants(self):
+        cfg = normalize_config({
+            "canonical_parquet": {"id": "canonical_pq"},
+            "benchmarks": {
+                "core": {
+                    "random_access": {"enabled": True, "variants": "all", "include_canonical": True},
+                }
+            },
+        })
+        paths = {
+            "__root_variants__": [
+                {"artifact_id": "pq_main", "variant_id": "pq_main", "artifact_kind": "variant", "format_family": "parquet", "reader_kind": "parquet", "path": Path("pq_main.parquet"), "display_label": "pq_main", "sort_index": 0},
+                {"artifact_id": "h5_main", "variant_id": "h5_main", "artifact_kind": "variant", "format_family": "hdf5", "reader_kind": "hdf5_columnar", "path": Path("h5_main.h5"), "display_label": "h5_main", "sort_index": 1},
+            ],
+            "__canonical_target__": {"artifact_id": "canonical_pq", "variant_id": "canonical_pq", "artifact_kind": "canonical", "format_family": "parquet", "reader_kind": "parquet", "path": Path("canonical.parquet"), "display_label": "canonical_pq", "sort_index": 0},
+        }
+
+        targets = benchmarks._core_targets(paths, cfg, "random_access")
+
+        self.assertEqual([target["artifact_id"] for target in targets], ["pq_main", "h5_main", "canonical_pq"])
+
+    def test_core_targets_can_run_source_plus_canonical_when_requested(self):
+        cfg = normalize_config({
+            "benchmarks": {
+                "core": {
+                    "random_access": {"enabled": True, "variants": "all", "include_canonical": True},
+                }
+            },
+            "variants": [],
+        })
+        paths = {
+            "__root_variants__": [],
+            "__source_target__": {"artifact_id": "source_parquet", "variant_id": None, "artifact_kind": "source", "format_family": "parquet", "reader_kind": "parquet", "path": Path("source.parquet"), "display_label": "source_parquet", "sort_index": 0},
+            "__canonical_target__": {"artifact_id": "canonical", "variant_id": "canonical", "artifact_kind": "canonical", "format_family": "parquet", "reader_kind": "parquet", "path": Path("canonical.parquet"), "display_label": "canonical", "sort_index": 0},
+        }
+
+        targets = benchmarks._core_targets(paths, cfg, "random_access")
+
+        self.assertEqual([target["artifact_id"] for target in targets], ["source_parquet", "canonical"])
+
+    def test_core_targets_can_run_canonical_only(self):
+        cfg = normalize_config({
+            "benchmarks": {
+                "core": {
+                    "random_access": {"enabled": True, "variants": [], "include_canonical": True},
+                }
+            },
+            "variants": [],
+        })
+        paths = {
+            "__root_variants__": [],
+            "__source_target__": {"artifact_id": "source_parquet", "variant_id": None, "artifact_kind": "source", "format_family": "parquet", "reader_kind": "parquet", "path": Path("source.parquet"), "display_label": "source_parquet", "sort_index": 0},
+            "__canonical_target__": {"artifact_id": "canonical", "variant_id": "canonical", "artifact_kind": "canonical", "format_family": "parquet", "reader_kind": "parquet", "path": Path("canonical.parquet"), "display_label": "canonical", "sort_index": 0},
+        }
+
+        targets = benchmarks._core_targets(paths, cfg, "random_access")
+
+        self.assertEqual([target["artifact_id"] for target in targets], ["canonical"])
 
     def test_resolve_input_path_downloads_remote_prefix(self):
         class FakeDownload:

@@ -13,6 +13,8 @@
 #   python benchmark/scripts/run_benchmarks.py --config my_config.yaml
 # ═══════════════════════════════════════════════════════════════════
 
+cache_dir: ".benchmark_cache"  # Local cache for downloaded inputs, canonical Parquet, and generated artifacts.
+
 # --- Azure (required only for remote inputs) ------------------------
 # Uncomment/edit this section if `studies[].input` points to Azure blob
 # storage instead of a local file/directory.
@@ -21,25 +23,42 @@
 # `.download_complete` marker plus at least one cached file; it is not a
 # full sync/repair pass against Azure.
 azure:
-  storage_account: "nwcsandboxstorage"     # Azure Storage account name
-  container: "waveforms"                   # Blob container holding the input/remote datasets
-  anonymous: true                           # true=public/anonymous reads; false=credentialed access
+  storage_account: "nwcsandboxstorage"  # Azure Storage account name
+  container: "waveforms"                # Blob container holding the input/remote datasets
+  anonymous: true                       # true=public/anonymous reads; false=credentialed access
 
 # --- Input ----------------------------------------------------------
 studies:
-  - name: "my_parquet_recording"           # Friendly study label used in results/reporting
-    input: "/path/to/my_recording.parquet" # <-- EDIT THIS (local file/dir or Azure blob path/URL)
+  - name: "my_parquet_recording"            # Friendly study label used in results/reporting
+    input: "/path/to/my_recording.parquet"  # <-- EDIT THIS (local file/dir or Azure blob path/URL)
     sample_freq: 256                        # Sample rate in Hz; keep explicit for Parquet inputs
 
+# --- Canonical Parquet ----------------------------------------------
+# Every input is first normalized into this cached intermediate dataset.
+# This is not part of `variants: all` by default, but it can still be benchmarked
+# explicitly via `include_canonical: true` on a core category.
 canonical_parquet:
+  id: canonical
   compression: snappy
   row_group_minutes: 30
 
+# --- Output Variants ------------------------------------------------
+# Root variants are the user-visible benchmark targets generated from
+# canonical Parquet. `id` must be unique and stable.
+# With `variants: []`, core benchmarks read the original source directly
+# for Parquet/HDF5/EDF inputs.
+# Variant fields:
+#   format: parquet | hdf5 | edf
+#   row_group_minutes: Parquet row-group target in minutes
+#   layout: HDF5 layout (columnar or rowgroup)
+#   chunk_minutes: HDF5 chunk target in minutes
+#   dtype: currently only float32 is supported for HDF5 variants
+#   compression: Parquet supports lz4/snappy/zstd/none; HDF5 currently supports only lz4
 variants:
-  - id: pq_5m_lz4                           # Required stable variant id; also used as the report label
-    format: parquet                         # Generate a Parquet variant
-    row_group_minutes: 5                    # Row-group size in minutes of data
-    compression: lz4                        # lz4 | snappy | zstd | none
+  - id: pq_5m_lz4         # Required stable variant id; also used as the report label
+    format: parquet       # Generate a Parquet variant
+    row_group_minutes: 5  # Row-group size in minutes of data
+    compression: lz4      # lz4 | snappy | zstd | none
 
   - id: pq_30m_lz4
     format: parquet
@@ -51,87 +70,110 @@ variants:
     row_group_minutes: 60
     compression: lz4
 
-  - id: h5_col_5m                           # Generate an HDF5 variant
+  - id: h5_col_5m         # Generate an HDF5 variant
     format: hdf5
-    layout: columnar                        # columnar | rowgroup
-    chunk_minutes: 5                        # Chunk size in minutes of data
-    dtype: float32                          # Only float32 is supported for HDF5 for now
-    compression: lz4                        # Only lz4 is supported for HDF5 for now
+    layout: columnar      # columnar | rowgroup
+    chunk_minutes: 5      # Chunk size in minutes of data
+    dtype: float32        # Only float32 is supported for HDF5 for now
+    compression: lz4      # Only lz4 is supported for HDF5 for now
 
   - id: h5_col_30m
     format: hdf5
     layout: columnar
     chunk_minutes: 30
-    dtype: float32                          # Only float32 is supported for HDF5 for now
-    compression: lz4                        # Only lz4 is supported for HDF5 for now
+    dtype: float32        # Only float32 is supported for HDF5 for now
+    compression: lz4      # Only lz4 is supported for HDF5 for now
 
   - id: h5_col_60m
     format: hdf5
     layout: columnar
     chunk_minutes: 60
-    dtype: float32                          # Only float32 is supported for HDF5 for now
-    compression: lz4                        # Only lz4 is supported for HDF5 for now
+    dtype: float32        # Only float32 is supported for HDF5 for now
+    compression: lz4      # Only lz4 is supported for HDF5 for now
 
   - id: h5_row_30m
     format: hdf5
     layout: rowgroup
     chunk_minutes: 30
-    dtype: float32                          # Only float32 is supported for HDF5 for now
-    compression: lz4                        # Only lz4 is supported for HDF5 for now
+    dtype: float32        # Only float32 is supported for HDF5 for now
+    compression: lz4      # Only lz4 is supported for HDF5 for now
 
-  - id: edf_export                          # Always 16-bit quantized
+  - id: edf_export        # Always 16-bit quantized
     format: edf
 
+# Benchmark families are grouped by purpose:
+#   common                  -> shared knobs used by multiple categories
+#   core                    -> A-E, the main read/processing benchmarks
+#   parquet_investigations  -> F-I, Parquet-specific experiments
+#   other                   -> J-K, tuned/baseline comparison workloads
+#
+# For core categories, `variants` may be:
+#   all        -> all root variant ids in declaration order
+#   []         -> skip that category
+#   [id, ...]  -> run only the listed root variant ids
+# Optional
+#   Adding `include_canonical: true` appends canonical_parquet.id to that category's targets.
+#
+# List of supported benchmarks:
+#   random_access       A: read the same window at different file positions.
+#   channel_subset      B: measure partial-channel read advantage.
+#   remontage           C: read + bipolar montage computation.
+#   filter_pipeline     D: read + montage + DSP / FFT pipeline.
+#   window_scaling      E: throughput vs window size.
+#   compression         F: compare Parquet codec size/speed trade-offs.
+#   precision_loss      G: EDF 16-bit quantization error vs float32 source.
+#   int32_storage       H: int32 Parquet storage modes.
+#   remote_query        I: remote DuckDB-over-Parquet vs streamed download paths.
+#   tuned_comparison    J: tuned Parquet vs tuned HDF5 with matched block sizes.
+#   baseline_comparison K: compare the original/baseline source artifact directly.
 benchmarks:
   common:
-    repetitions: 3
-    default_window: 60
+    repetitions: 3      # Timing repetitions per measurement.
+    default_window: 60  # Default read window in seconds for A/B/C.
   core:
     random_access:
       enabled: true
       variants: all
-      read_positions: [0.0, 0.5, 0.75, 0.95]
+      # include_canonical: true               # Optional: also benchmark canonical_parquet.id for this category.
+      read_positions: [0.0, 0.5, 0.75, 0.95]  # Fractions of total duration.
     channel_subset:
       enabled: true
       variants: all
-      channel_subsets: [4, 10]
+      channel_subsets: [4, 10]  # Channel counts to test plus implicit "all".
     remontage: {enabled: true, variants: all}
     filter_pipeline: {enabled: true, variants: all}
     window_scaling:
       enabled: true
       variants: all
-      window_sizes: [10, 30, 60, 300, 900, 1800, 3600]
+      window_sizes: [10, 30, 60, 300, 900, 1800, 3600]  # Seconds.
   parquet_investigations:
     compression:
       enabled: false
       variants:
-        - codec: "none"
+        - codec: "none"  # Uncompressed Parquet.
         - codec: "snappy"
         - codec: "zstd"
-          level: 3
+          level: 3  # Zstd compression level for this entry.
         - codec: "lz4"
     precision_loss: {enabled: false}
     int32_storage: {enabled: false}
     remote_query:
       enabled: false
-      n_random_points: 2
-      window_sec: 600
-      full_study_chunk_sec: 3600
-      remote_float32_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"
-      remote_int32_nanovolt_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.int32_nanovolt.snappy.parquet/"
-      remote_single_file_path: "parquet/tuned_pq_lz4_10m.parquet"
+      n_random_points: 2          # Number of random remote windows to query.
+      window_sec: 600             # Duration of each remote query window in seconds.
+      full_study_chunk_sec: 3600  # Chunk size for optional full-study sequential reads.
+      remote_float32_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"  # Remote float32 dataset.
+      remote_int32_nanovolt_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.int32_nanovolt.snappy.parquet/"  # Remote int32-nanovolt dataset.
+      remote_single_file_path: "parquet/tuned_pq_lz4_10m.parquet"  # Remote single-file tuned Parquet dataset.
   other:
     tuned_comparison:
       enabled: false
-      block_sizes_minutes: [5, 10, 20, 30, 60, 120]
-      parquet_codecs: [snappy, lz4]
-      hdf5_compression: lz4
-      chunk_sec: 3600
+      block_sizes_minutes: [5, 10, 20, 30, 60, 120]  # Generated block sizes in minutes.
+      parquet_codecs: [snappy, lz4]                  # Tuned Parquet codecs to compare.
+      hdf5_compression: lz4                          # Only lz4 is supported for tuned HDF5.
+      chunk_sec: 3600                                # Sequential full-study chunk read size in seconds.
     baseline_comparison:
       enabled: false
-      chunk_sec: 3600
+      chunk_sec: 3600  # Sequential full-study chunk read size in seconds.
 
-# --- Output ---------------------------------------------------------
-cache_dir: ".benchmark_cache"              # Cache + generated-variant directory
 # output: "results/my_benchmark_results.json"  # Optional explicit JSON output path
-

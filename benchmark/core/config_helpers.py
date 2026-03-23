@@ -17,6 +17,7 @@ DEFAULT_TUNED_PARQUET_CODECS = ["snappy", "lz4"]
 DEFAULT_TUNED_HDF5_COMPRESSION = "lz4"
 DEFAULT_TUNED_CHUNK_SEC = 300
 DEFAULT_CANONICAL_PARQUET = {
+    "id": "canonical",
     "compression": "snappy",
     "row_group_minutes": 30,
 }
@@ -36,7 +37,11 @@ def _enabled_from_legacy(categories: list[str], category: str) -> bool:
 
 def _normalize_core_leaf(raw_leaf, enabled: bool, selector, extras: dict | None = None) -> dict:
     leaf = _dict_or_empty(raw_leaf)
-    normalized = {"enabled": bool(leaf.get("enabled", enabled)), "variants": leaf.get("variants", selector)}
+    normalized = {
+        "enabled": bool(leaf.get("enabled", enabled)),
+        "variants": leaf.get("variants", selector),
+        "include_canonical": bool(leaf.get("include_canonical", False)),
+    }
     if extras:
         for key, value in extras.items():
             normalized[key] = leaf.get(key, value)
@@ -153,6 +158,11 @@ def normalize_config(cfg: dict | None) -> dict:
 
 
 def validate_config(cfg: dict) -> None:
+    canonical_cfg = get_canonical_parquet_cfg(cfg)
+    canonical_id = canonical_cfg.get("id")
+    if not isinstance(canonical_id, str) or not canonical_id.strip():
+        raise ValueError("canonical_parquet.id must define a non-empty string")
+
     variants = cfg.get("variants", []) or []
     ids: list[str] = []
     for i, spec in enumerate(variants):
@@ -161,6 +171,8 @@ def validate_config(cfg: dict) -> None:
             raise ValueError(f"variants[{i}] must define a non-empty string 'id'")
         if variant_id in ids:
             raise ValueError(f"Duplicate variant id: {variant_id}")
+        if variant_id == canonical_id:
+            raise ValueError(f"canonical_parquet.id collides with root variant id: {variant_id}")
         ids.append(variant_id)
 
     variant_ids = set(ids)
@@ -177,6 +189,10 @@ def validate_config(cfg: dict) -> None:
         if not isinstance(selector, list):
             raise ValueError(
                 f"benchmarks.core.{category}.variants must be 'all', [], or a list of variant ids"
+            )
+        if any(not isinstance(variant_id, str) or not variant_id.strip() for variant_id in selector):
+            raise ValueError(
+                f"benchmarks.core.{category}.variants must contain only non-empty string variant ids"
             )
         if not variant_ids:
             raise ValueError(
@@ -211,6 +227,10 @@ def is_core_category_enabled(cfg: dict, category: str) -> bool:
 
 def get_core_variants_selector(cfg: dict, category: str):
     return get_core_category_cfg(cfg, category).get("variants", "all")
+
+
+def get_core_include_canonical(cfg: dict, category: str) -> bool:
+    return bool(get_core_category_cfg(cfg, category).get("include_canonical", False))
 
 
 def selected_categories(cfg: dict) -> list[str]:

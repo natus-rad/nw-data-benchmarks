@@ -55,7 +55,10 @@ def _canonical_dir(cache_dir: Path, input_path: Path, fmt: str,
         "source": str(Path(input_path)),
         "format": fmt,
         "sample_freq": float(sample_freq),
-        "canonical": canonical_cfg,
+        "canonical": {
+            "compression": canonical_cfg.get("compression", "snappy"),
+            "row_group_minutes": canonical_cfg.get("row_group_minutes", 30),
+        },
     }
     token = _spec_hash(payload)
     stem = input_path.stem if input_path.is_file() else input_path.name

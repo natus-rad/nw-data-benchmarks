@@ -128,6 +128,21 @@ def _source_target(input_path: Path, detected_fmt: str) -> dict | None:
     return None
 
 
+def _canonical_target(canonical_pq: Path, cfg: dict) -> dict:
+    canonical_cfg = get_canonical_parquet_cfg(cfg)
+    canonical_id = str(canonical_cfg["id"])
+    return {
+        "artifact_id": canonical_id,
+        "variant_id": canonical_id,
+        "artifact_kind": "canonical",
+        "format_family": "parquet",
+        "reader_kind": "parquet",
+        "path": Path(canonical_pq),
+        "display_label": canonical_id,
+        "sort_index": 0,
+    }
+
+
 def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str, str, object]]) -> None:
     print("\n=== DRY RUN ===")
     print(f"Config: {args.config}")
@@ -141,6 +156,8 @@ def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str
         core_cfg = cfg.get("benchmarks", {}).get("core", {}).get(cat_id, {})
         if isinstance(core_cfg, dict) and "variants" in core_cfg:
             print(f"      variants={core_cfg['variants']}")
+            if core_cfg.get("include_canonical", False):
+                print("      include_canonical=true")
 
     selected_ids = {cat_id for cat_id, _, _ in selected}
     if any(cat in selected_ids for cat in (
@@ -254,6 +271,7 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
         paths = generate_variants(canonical_pq, info, variant_specs, output_base)
         paths.update(_baseline_input_paths(input_path, detected_fmt))
         paths["__source_target__"] = _source_target(input_path, detected_fmt)
+        paths["__canonical_target__"] = _canonical_target(canonical_pq, cfg)
         paths["__canonical_parquet__"] = canonical_pq
         source_type = detected_fmt
         study_dir = input_path
@@ -267,6 +285,7 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
                 Category.FILTER_PIPELINE,
                 Category.WINDOW_SCALING,
             }
+            and cfg.get("benchmarks", {}).get("core", {}).get(cat_id, {}).get("variants", "all") != []
             for cat_id in selected_ids
         ):
             raise ValueError(

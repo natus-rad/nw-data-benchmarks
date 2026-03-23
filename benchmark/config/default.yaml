@@ -19,7 +19,9 @@
 # Note: directory-style remote inputs are currently treated as cached when
 # `.download_complete` exists and at least one cached file remains. That is
 # a fast cache-hit heuristic, not a full sync/repair check against Azure.
-#
+
+cache_dir: ".benchmark_cache"  # Local cache for downloaded inputs, canonical Parquet, and generated artifacts.
+
 # AZURE AUTHENTICATION
 # --------------------
 #   Azure settings are needed for remote `input:` resolution and for the
@@ -28,7 +30,6 @@
 #     1. Run `az login` (uses DefaultAzureCredential)
 #     2. Set AZURE_STORAGE_SAS_TOKEN env var
 #     3. Pass --sas-token on the command line
-
 azure:
   storage_account: "nwcsandboxstorage"
   container: "waveforms"
@@ -49,35 +50,62 @@ studies:
     # guarantees the samplestamp unit matches the sampling rate.
     sample_freq: 256
 
-    # If you enable the `remote_query` benchmark below, also update the
-    # `parquet_investigations.remote_query` paths so they refer to the same
-    # study as this input.
-
-cache_dir: ".benchmark_cache"
-
+# Canonical intermediate Parquet written for every study before variants,
+# investigations, and report metadata are derived.
+# This is not part of `variants: all` by default, but it can still be benchmarked
+# explicitly via `include_canonical: true` on a core category.
 canonical_parquet:
+  id: canonical
   compression: snappy
   row_group_minutes: 30
 
+# User-declared benchmark targets generated from canonical Parquet.
+# `id` must be unique and stable; it is also used in reports and cache naming.
 variants:
   - id: pq_30m_lz4
     format: parquet
     row_group_minutes: 30
     compression: lz4
 
+# Benchmark families are grouped by purpose:
+#   common                  -> shared knobs used by multiple categories
+#   core                    -> A-E, the main read/processing benchmarks
+#   parquet_investigations  -> F-I, Parquet-specific experiments
+#   other                   -> J-K, tuned/baseline comparison workloads
+#
+# For core categories, `variants` may be:
+#   all        -> all root variant ids in declaration order
+#   []         -> skip that category
+#   [id, ...]  -> run only the listed root variant ids
+# Optional
+#   Adding `include_canonical: true` appends canonical_parquet.id to that category's targets.
+#
+# List of supported benchmarks:
+#   random_access       A: read the same window at different file positions.
+#   channel_subset      B: measure partial-channel read advantage.
+#   remontage           C: read + bipolar montage computation.
+#   filter_pipeline     D: read + montage + DSP / FFT pipeline.
+#   window_scaling      E: throughput vs window size.
+#   compression         F: compare Parquet codec size/speed trade-offs.
+#   precision_loss      G: EDF 16-bit quantization error vs float32 source.
+#   int32_storage       H: int32 Parquet storage modes.
+#   remote_query        I: remote DuckDB-over-Parquet vs streamed download paths.
+#   tuned_comparison    J: tuned Parquet vs tuned HDF5 with matched block sizes.
+#   baseline_comparison K: compare the original/baseline source artifact directly.
 benchmarks:
   common:
     repetitions: 3
-    default_window: 60
+    default_window: 60  # Default read window in seconds for A/B/C.
   core:
     random_access:
       enabled: true
       variants: all
-      read_positions: [0.0, 0.5, 0.75, 0.95]
+      # include_canonical: true  # Optional: also benchmark canonical_parquet.id for this category.
+      read_positions: [0.0, 0.5, 0.75, 0.95]  # Fractional positions across the study duration.
     channel_subset:
       enabled: true
       variants: all
-      channel_subsets: [4, 10]
+      channel_subsets: [4, 10]  # Channel counts to benchmark in addition to the superset.
     remontage:
       enabled: true
       variants: all
@@ -87,15 +115,15 @@ benchmarks:
     window_scaling:
       enabled: true
       variants: all
-      window_sizes: [10, 30, 60, 300, 900, 1800, 3600]
+      window_sizes: [10, 30, 60, 300, 900, 1800, 3600]  # Seconds.
   parquet_investigations:
     compression:
       enabled: true
       variants:
-        - codec: "none"
+        - codec: "none"   # Uncompressed Parquet.
         - codec: "snappy"
         - codec: "zstd"
-          level: 3
+          level: 3        # Zstd compression level for this entry.
         - codec: "zstd"
           level: 9
         - codec: "lz4"
@@ -105,20 +133,20 @@ benchmarks:
       enabled: true
     remote_query:
       enabled: true
-      n_random_points: 2
-      window_sec: 600
-      full_study_chunk_sec: 3600
-      remote_float32_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"
-      remote_int32_nanovolt_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.int32_nanovolt.snappy.parquet/"
-      remote_single_file_path: "parquet/tuned_pq_lz4_10m.parquet"
+      n_random_points: 2          # Number of random remote windows to query.
+      window_sec: 600             # Duration of each random query window in seconds.
+      full_study_chunk_sec: 3600  # Chunk size for optional full-study sequential reads.
+      remote_float32_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"  # Remote float32 dataset.
+      remote_int32_nanovolt_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.int32_nanovolt.snappy.parquet/"  # Remote int32-nanovolt dataset.
+      remote_single_file_path: "parquet/tuned_pq_lz4_10m.parquet"  # Remote single-file tuned Parquet dataset.
   other:
     tuned_comparison:
       enabled: true
-      block_sizes_minutes: [5, 10, 20, 30, 60, 120]
-      parquet_codecs: [snappy, lz4]
-      hdf5_compression: lz4
-      chunk_sec: 3600
+      block_sizes_minutes: [5, 10, 20, 30, 60, 120]  # Generated block sizes for tuned artifacts.
+      parquet_codecs: [snappy, lz4]                  # Tuned Parquet codecs to compare.
+      hdf5_compression: lz4                          # Only lz4 is currently supported for tuned HDF5.
+      chunk_sec: 3600                                # Sequential full-study chunk read size in seconds.
     baseline_comparison:
       enabled: false
-      chunk_sec: 3600
+      chunk_sec: 3600                                # Sequential full-study chunk read size in seconds.
 
