@@ -189,7 +189,7 @@ def _ingest_hdf5(h5_path: Path, out_file: Path,
             if "channel_labels" in hf.attrs:
                 labels = list(hf.attrs["channel_labels"])
             else:
-                labels = [f"ch_{i}" for i in range(hf["data"].shape[1])]
+                labels = [str(i) for i in range(hf["data"].shape[1])]
             data_matrix = hf["data"][:].astype(np.float32)
             ch_data = {f"ch_{lbl}": data_matrix[:, i]
                        for i, lbl in enumerate(labels)}

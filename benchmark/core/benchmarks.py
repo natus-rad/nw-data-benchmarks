@@ -39,8 +39,8 @@ from .signal import _apply_bipolar_montage, _apply_filters, _build_sos
 
 
 def _target_context(target: dict):
-    if target["reader_kind"] == "edf":
-        return EdfFileReader(_edf_file(target["path"]))
+    # Benchmark timing intentionally avoids keeping EDF readers open across
+    # repeated timed iterations so EDF is measured with reopen cost included.
     return nullcontext(None)
 
 
@@ -58,11 +58,12 @@ def _read_target_window(target: dict, info, columns: list[str],
     if kind == "hdf5_input":
         return _read_h5_input_window(path, columns, start_stamp, end_stamp)
     if kind == "edf":
-        if reader_state is None:
-            raise ValueError("EDF comparison reads require an open EdfFileReader")
         start_sample = int(start_stamp)
         n_samples = max(0, int(end_stamp) - int(start_stamp) + 1)
         channel_indices = [info.channel_columns.index(col) for col in columns]
+        if reader_state is None:
+            with EdfFileReader(_edf_file(path)) as reader:
+                return reader.read_window(start_sample, n_samples, channel_indices)
         return reader_state.read_window(start_sample, n_samples, channel_indices)
     raise ValueError(f"Unknown target reader kind: {kind}")
 
@@ -409,7 +410,7 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
 
     for target in _core_targets(paths, cfg, "filter_pipeline"):
         with _target_context(target) as reader_state:
-            edf_bench_samples = min(int(hours * 3600 * sample_freq), reader_state.total_samples) if reader_state else 0
+            edf_bench_samples = min(int(hours * 3600 * sample_freq), info.total_rows)
             t_read_total = t_mont_total = t_filt_total = 0.0
             total_samples_read = 0
 
@@ -475,7 +476,7 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
 
     for target in _core_targets(paths, cfg, "filter_pipeline"):
         with _target_context(target) as reader_state:
-            edf_bench_samples = min(int(hours * 3600 * sample_freq), reader_state.total_samples) if reader_state else 0
+            edf_bench_samples = min(int(hours * 3600 * sample_freq), info.total_rows)
             t_read_total = t_mont_total = t_filt_total = t_fft_total = 0.0
             total_samples_read = 0
             fft_count = 0

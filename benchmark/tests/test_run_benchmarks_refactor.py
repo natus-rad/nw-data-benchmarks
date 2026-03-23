@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
+import h5py
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -263,6 +264,28 @@ class BenchmarkRefactorTests(unittest.TestCase):
             self.assertEqual(canonical_file.suffix, ".parquet")
             self.assertRegex(canonical_file.name, r"^suppression_study_canonical_[0-9a-f]{10}\.parquet$")
             self.assertTrue(canonical_file.exists())
+
+    def test_ingest_hdf5_matrix_fallback_labels_avoid_double_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            h5_file = tmp_path / "input.h5"
+            with h5py.File(str(h5_file), "w") as hf:
+                hf.attrs["sample_freq"] = 256.0
+                hf.create_dataset(
+                    "data",
+                    data=np.array([[0.1, 1.1], [0.2, 1.2]], dtype=np.float32),
+                )
+
+            canonical_file, detected_fmt, sample_freq = ingest(
+                h5_file,
+                tmp_path / "cache",
+                canonical_cfg={"compression": "snappy", "row_group_minutes": 30},
+                study_name="demo",
+            )
+
+            self.assertEqual(detected_fmt, "hdf5")
+            self.assertEqual(sample_freq, 256.0)
+            self.assertEqual(pq.read_schema(canonical_file).names, ["samplestamp", "ch_0", "ch_1"])
 
     def test_runner_rejects_no_variant_direct_source_erd_core_runs(self):
         cfg = {
@@ -775,6 +798,86 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertEqual(mock_chunk_ranges.call_count, 1)
         mock_chunk_ranges.assert_called_once_with(0, 19, 14)
         self.assertEqual(mock_read.call_args_list[0].args[0], Path("baseline-input.parquet"))
+
+    def test_bench_random_access_edf_reopens_for_each_timed_read(self):
+        info = SimpleNamespace(
+            sample_freq=1.0,
+            channel_labels=["Fp1"],
+            channel_columns=["ch_Fp1"],
+            total_rows=100,
+            stamp_at_row=lambda row: row,
+        )
+        cfg = {"repetitions": 3, "default_window": 1, "read_positions": [0.0, 0.5]}
+        target = {
+            "artifact_id": "baseline_edf",
+            "variant_id": None,
+            "artifact_kind": "baseline",
+            "format_family": "edf",
+            "reader_kind": "edf",
+            "path": Path("baseline.edf"),
+            "display_label": "baseline_edf",
+            "sort_index": 0,
+        }
+        seen_reader_states = []
+
+        def fake_read(_target, _info, _columns, start_stamp, end_stamp, reader_state=None):
+            seen_reader_states.append(reader_state)
+            n = int(end_stamp) - int(start_stamp) + 1
+            return np.zeros((1, n), dtype=np.float32)
+
+        def fake_timed(fn, reps):
+            data = None
+            for _ in range(reps):
+                data = fn()
+            return 0.1, data
+
+        with patch.object(benchmarks, "_core_targets", return_value=[target]), \
+             patch.object(benchmarks, "_read_target_window", side_effect=fake_read), \
+             patch.object(benchmarks, "_timed", side_effect=fake_timed):
+            benchmarks.bench_random_access(info, {}, cfg)
+
+        self.assertEqual(len(seen_reader_states), 6)
+        self.assertTrue(all(state is None for state in seen_reader_states))
+
+    def test_bench_filter_pipeline_edf_reopens_for_each_chunk_read(self):
+        info = SimpleNamespace(
+            sample_freq=1.0,
+            channel_labels=["Fp1", "Fp2"],
+            channel_columns=["ch_Fp1", "ch_Fp2"],
+            total_rows=3600,
+            stamp_at_row=lambda row: row,
+            start_stamp=0,
+            end_stamp=3599,
+        )
+        target = {
+            "artifact_id": "baseline_edf",
+            "variant_id": None,
+            "artifact_kind": "baseline",
+            "format_family": "edf",
+            "reader_kind": "edf",
+            "path": Path("baseline.edf"),
+            "display_label": "baseline_edf",
+            "sort_index": 0,
+        }
+        seen_reader_states = []
+
+        def fake_read(_target, _info, columns, start_stamp, end_stamp, reader_state=None):
+            seen_reader_states.append(reader_state)
+            n = int(end_stamp) - int(start_stamp) + 1
+            return np.zeros((len(columns), n), dtype=np.float32)
+
+        with patch.object(benchmarks, "_core_targets", return_value=[target]), \
+             patch.object(benchmarks, "_read_target_window", side_effect=fake_read), \
+             patch.object(benchmarks, "_apply_bipolar_montage", side_effect=lambda matrix, _labels: matrix), \
+             patch.object(benchmarks, "_apply_filters", side_effect=lambda matrix, _sos: matrix), \
+             patch.object(benchmarks, "_build_sos", return_value="sos"), \
+             patch.object(benchmarks, "_full_study_duration_hours", return_value=1), \
+             patch.object(np.fft, "rfft", return_value=np.zeros((2, 1), dtype=np.complex64)):
+            results = benchmarks.bench_filter_pipeline(info, {}, {})
+
+        self.assertEqual({row["benchmark"] for row in results}, {"D.1", "D.2"})
+        self.assertTrue(seen_reader_states)
+        self.assertTrue(all(state is None for state in seen_reader_states))
 
     def test_bench_compression_uses_nested_variants_and_enabled_flag(self):
         with tempfile.TemporaryDirectory() as tmp:
