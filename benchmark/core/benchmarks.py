@@ -53,8 +53,10 @@ def _read_target_window(target: dict, info, columns: list[str],
         return _read_parquet_window(path, columns, start_stamp, end_stamp)
     if kind == "tuned_parquet":
         return _read_tuned_pq(path, columns, start_stamp, end_stamp)
-    if kind == "hdf5_columnar":
+    if kind in {"h5_columnar", "hdf5_columnar"}:
         return _read_h5_columnar_window(path, columns, start_stamp, end_stamp)
+    if kind in {"h5_rowgroup", "hdf5_rowgroup"}:
+        return _read_h5_rowgroup_window(path, columns, start_stamp, end_stamp)
     if kind == "hdf5_input":
         return _read_h5_input_window(path, columns, start_stamp, end_stamp)
     if kind == "edf":
