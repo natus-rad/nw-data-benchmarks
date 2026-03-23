@@ -157,7 +157,8 @@ def build_overview(study: dict[str, Any], system: dict[str, Any], categories: se
     note = (
         "The report is generated directly from benchmark result JSON. "
         "Sections for categories not present in the input file are called out explicitly, so partial benchmark runs still produce a readable report. "
-        "All reported throughput values use the theoretical decoded float32 payload size: rows × channels × 4 bytes."
+        "All reported throughput values use the theoretical decoded float32 payload size: rows × channels × 4 bytes. "
+        "HDF5 timings in this benchmark use a custom benchmark-specific `chunk_index` lookup structure built at conversion time, which intentionally gives HDF5 a best-case seek/read path rather than representing plain generic HDF5 without that helper."
     )
     return note + "\n\n" + markdown_table(["Property", "Value"], rows)
 

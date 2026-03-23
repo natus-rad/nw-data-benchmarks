@@ -55,6 +55,7 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         self.assertIn("Random access (median 1-minute read)", rendered)
         self.assertIn("Ratio vs raw float32", rendered)
         self.assertIn("rows × channels × 4 bytes", rendered)
+        self.assertIn("intentionally gives HDF5 a best-case seek/read path", rendered)
         self.assertIn("This category was not present in the input results file.", rendered)
 
     def test_latest_results_file_errors_when_directory_has_no_results(self) -> None:

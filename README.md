@@ -15,12 +15,12 @@ the format spec) for predicate pushdown during filtered reads. No custom
 indexing required.
 
 **HDF5:** Standard HDF5 has no built-in index for skipping chunks based on
-data values. To enable fair comparison, the benchmark builds a custom
-`chunk_index` dataset at conversion time — a small lookup table of timestamp
-ranges per chunk. This represents HDF5's best-case performance with a
-purpose-built index. Standard HDF5 files without this index would require
-scanning the full timestamp dataset on every filtered read, which is
-significantly slower.
+data values. These benchmarks intentionally give HDF5 a best-case lookup aid by
+building a custom `chunk_index` dataset at conversion time — a small benchmark-
+specific lookup table of timestamp ranges per chunk. This represents optimized
+HDF5-with-helper performance, not plain generic HDF5 without that extra index.
+Standard HDF5 files without this helper would require scanning the full
+timestamp dataset on every filtered read, which is significantly slower.
 
 **EDF:** Uses raw byte-offset seeks with no indexing. Fast for sequential
 reads on single files, but requires full file scan for filtered access.
@@ -99,7 +99,8 @@ Data is cached locally in `.benchmark_cache/` after the first download.
 
 - **HDF5 columnar** — One 1D dataset per channel, LZ4 compressed, chunked along time.
   Hierarchical, self-describing, efficient for selective column reads at small
-  block sizes. Includes custom chunk index for fast seeks.
+  block sizes. Includes a benchmark-specific custom `chunk_index` helper for
+  fast seeks, so treat these numbers as optimized HDF5 rather than plain HDF5.
 
 - **HDF5 row-group** — Single 2D dataset (samples × channels), LZ4 compressed,
   chunk-aligned to Parquet row groups. Tested for comparison but less efficient
