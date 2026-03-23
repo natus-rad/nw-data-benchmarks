@@ -141,12 +141,12 @@ benchmarks:
       remote_single_file_path: "parquet/tuned_pq_lz4_10m.parquet"  # Remote single-file tuned Parquet dataset.
   other:
     tuned_comparison:
-      enabled: true
+      enabled: false
       block_sizes_minutes: [5, 10, 20, 30, 60, 120]  # Generated block sizes for tuned artifacts.
       parquet_codecs: [snappy, lz4]                  # Tuned Parquet codecs to compare.
       hdf5_compression: lz4                          # Only lz4 is currently supported for tuned HDF5.
       chunk_sec: 3600                                # Sequential full-study chunk read size in seconds.
     baseline_comparison:
-      enabled: false
+      enabled: true
       chunk_sec: 3600                                # Sequential full-study chunk read size in seconds.
 

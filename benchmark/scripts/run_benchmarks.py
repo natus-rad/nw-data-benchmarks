@@ -27,17 +27,18 @@ from benchmark.core.config_helpers import (
     get_tuned_hdf5_compression,
     get_tuned_parquet_codecs,
     is_investigation_enabled,
+    tuned_parquet_key,
     validate_config,
 )
 from benchmark.core.constants import Category, FormatKey, InputFormat
-from benchmark.core.ingest import ingest
+from benchmark.core.ingest import _canonical_file, _detect_format, _recover_sample_freq, ingest
 from benchmark.core.remote import bench_remote_query
 from benchmark.core.setup import (
     _setup_int32_variants,
     _setup_parquet_compression_variants, _setup_tuned_variants,
 )
 from benchmark.core.study_info import StudyInfo, _system_info, load_config
-from benchmark.core.variants import generate_variants
+from benchmark.core.variants import _safe_id, _spec_hash as _variant_spec_hash, generate_variants
 from benchmark.scripts.generate_benchmark_report import generate_report
 
 
@@ -143,6 +144,221 @@ def _canonical_target(canonical_pq: Path, cfg: dict) -> dict:
     }
 
 
+def _artifact_exists(path: Path | None) -> bool:
+    if path is None:
+        return False
+    return path.is_file() or (path.is_dir() and any(path.glob("*.parquet")))
+
+
+def _study_output_base(cache_dir: Path, study_name: str) -> Path:
+    return cache_dir / f"{study_name[:30]}_variants"
+
+
+def _best_effort_local_input(input_value: str, cache_dir: Path) -> Path | None:
+    local_path = Path(input_value).expanduser()
+    if local_path.exists():
+        return local_path
+
+    cache_leaf = Path(str(input_value).rstrip("/")).name
+    cached_remote = cache_dir / cache_leaf
+    if cache_leaf and cached_remote.exists():
+        return cached_remote
+
+    return None
+
+
+def _best_effort_format(input_value: str, local_input: Path | None) -> str | None:
+    if local_input is not None:
+        try:
+            return _detect_format(local_input)
+        except Exception:
+            pass
+
+    suffix = Path(input_value).suffix.lower()
+    if suffix in {".h5", ".hdf5", ".he5"}:
+        return InputFormat.HDF5
+    if suffix == ".edf":
+        return InputFormat.EDF
+    if suffix == ".parquet":
+        return InputFormat.PARQUET
+    return None
+
+
+def _best_effort_sample_freq(study_cfg: dict, fmt: str | None, local_input: Path | None) -> float | None:
+    if study_cfg.get("sample_freq") is not None:
+        return float(study_cfg["sample_freq"])
+    if fmt in {InputFormat.HDF5, InputFormat.EDF} and local_input is not None:
+        try:
+            return float(_recover_sample_freq(local_input, fmt))
+        except Exception:
+            return None
+    return None
+
+
+def _root_variant_output_path(output_base: Path, spec: dict) -> Path:
+    variant_id = spec["id"]
+    fmt = spec["format"]
+    if fmt == "parquet":
+        token = _variant_spec_hash({
+            "id": variant_id,
+            "format": "parquet",
+            "row_group_minutes": spec.get("row_group_minutes", 5),
+            "compression": spec.get("compression", "lz4"),
+        })
+        return output_base / f"{_safe_id(variant_id)}_{token}.parquet"
+    if fmt == "hdf5":
+        token = _variant_spec_hash({
+            "id": variant_id,
+            "format": "hdf5",
+            "layout": spec.get("layout", "columnar"),
+            "chunk_minutes": spec.get("chunk_minutes", 5),
+            "dtype": spec.get("dtype", "float32"),
+            "compression": spec.get("compression", "lz4"),
+        })
+        return output_base / f"{_safe_id(variant_id)}_{token}.h5"
+    if fmt == "edf":
+        token = _variant_spec_hash({"id": variant_id, "format": "edf"})
+        return output_base / f"{_safe_id(variant_id)}_{token}.edf"
+    raise ValueError(f"Unsupported variant format for dry-run planning: {fmt}")
+
+
+def _tuned_label(minutes: float) -> str:
+    return f"{int(minutes * 60)}s" if minutes < 1 else f"{minutes}m"
+
+
+def _planned_artifacts_for_study(cfg: dict, study_cfg: dict,
+                                 selected: list[tuple[str, str, object]]) -> tuple[list[dict], list[str]]:
+    cache_dir = Path(cfg.get("cache_dir", ".benchmark_cache"))
+    input_value = _study_input_value(study_cfg)
+    local_input = _best_effort_local_input(input_value, cache_dir)
+    fmt = _best_effort_format(input_value, local_input)
+    sample_freq = _best_effort_sample_freq(study_cfg, fmt, local_input)
+    canonical_cfg = get_canonical_parquet_cfg(cfg)
+    output_base = _study_output_base(cache_dir, study_cfg["name"])
+    entries: list[dict] = []
+
+    canonical_path: Path | None = None
+    if local_input is not None and fmt is not None and sample_freq is not None:
+        canonical_path = _canonical_file(
+            cache_dir,
+            local_input,
+            fmt,
+            float(sample_freq),
+            canonical_cfg,
+            study_name=study_cfg["name"],
+        )
+        entries.append({
+            "status": "cached" if _artifact_exists(canonical_path) else "would-create",
+            "group": "canonical",
+            "key": str(canonical_cfg["id"]),
+            "path": canonical_path,
+            "note": None,
+        })
+    else:
+        reason = "local input path not available in dry-run"
+        if local_input is not None and fmt is None:
+            reason = "could not detect input format"
+        elif local_input is not None and sample_freq is None:
+            reason = "sample_freq is not known until runtime"
+        entries.append({
+            "status": "unknown",
+            "group": "canonical",
+            "key": str(canonical_cfg["id"]),
+            "path": None,
+            "note": reason,
+        })
+
+    for spec in cfg.get("variants", []):
+        path = _root_variant_output_path(output_base, spec)
+        entries.append({
+            "status": "cached" if _artifact_exists(path) else "would-create",
+            "group": "root_variant",
+            "key": spec["id"],
+            "path": path,
+            "note": spec["format"],
+        })
+
+    selected_ids = {cat_id for cat_id, _, _ in selected}
+
+    if Category.COMPRESSION in selected_ids and is_investigation_enabled(cfg, "compression"):
+        for comp_cfg in get_parquet_compression_variants(cfg):
+            codec = comp_cfg["codec"]
+            level = comp_cfg.get("level")
+            label = f"{codec}_{level}" if level else codec
+            if codec == "snappy" and not level:
+                entries.append({
+                    "status": "reuses-canonical" if canonical_path is not None else "unknown",
+                    "group": "compression",
+                    "key": f"parquet_{label}",
+                    "path": canonical_path,
+                    "note": "no separate file; reuses canonical parquet",
+                })
+                continue
+            path = output_base / f"parquet_{label}.parquet"
+            entries.append({
+                "status": "cached" if _artifact_exists(path) else "would-create",
+                "group": "compression",
+                "key": f"parquet_{label}",
+                "path": path,
+                "note": None,
+            })
+
+    if Category.INT32_STORAGE in selected_ids and is_investigation_enabled(cfg, "int32_storage"):
+        for mode in ("int32_calibrated", "int32_nanovolt"):
+            for codec in ("zstd", "snappy", "none"):
+                key = f"parquet_{mode}_{codec}"
+                path = output_base / f"{key}.parquet"
+                entries.append({
+                    "status": "cached" if _artifact_exists(path) else "would-create",
+                    "group": "int32_storage",
+                    "key": key,
+                    "path": path,
+                    "note": None,
+                })
+
+    if Category.TUNED_COMPARISON in selected_ids:
+        for minutes in get_tuned_block_sizes_minutes(cfg):
+            label = _tuned_label(minutes)
+            for codec in get_tuned_parquet_codecs(cfg):
+                key = tuned_parquet_key(codec, label)
+                path = output_base / f"{key}.parquet"
+                entries.append({
+                    "status": "cached" if _artifact_exists(path) else "would-create",
+                    "group": "tuned_parquet",
+                    "key": key,
+                    "path": path,
+                    "note": None,
+                })
+
+            h5_key = f"tuned_h5_{label}"
+            h5_path = output_base / f"{h5_key}.h5"
+            entries.append({
+                "status": "cached" if _artifact_exists(h5_path) else "would-create",
+                "group": "tuned_hdf5",
+                "key": h5_key,
+                "path": h5_path,
+                "note": f"compression={get_tuned_hdf5_compression(cfg)}",
+            })
+
+    runtime_only = []
+    if any(cat in selected_ids for cat in {
+        Category.RANDOM_ACCESS,
+        Category.CHANNEL_SUBSET,
+        Category.REMONTAGE,
+        Category.FILTER_PIPELINE,
+        Category.WINDOW_SCALING,
+    }):
+        runtime_only.append("core benchmarks A-E reuse canonical/root variant inputs; no extra cache artifacts")
+    if Category.PRECISION_LOSS in selected_ids:
+        runtime_only.append("precision_loss reuses the default Parquet artifact; no extra cache artifacts")
+    if Category.REMOTE_QUERY in selected_ids:
+        runtime_only.append("remote_query does not pre-generate local benchmark variants")
+    if Category.BASELINE_COMPARISON in selected_ids:
+        runtime_only.append("baseline_comparison reuses the resolved study input artifact; no extra cache artifacts")
+
+    return entries, runtime_only
+
+
 def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str, str, object]]) -> None:
     print("\n=== DRY RUN ===")
     print(f"Config: {args.config}")
@@ -206,6 +422,28 @@ def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str
     print(f"Canonical Parquet: {get_canonical_parquet_cfg(cfg)}")
     report_mode = "skip (--no-report)" if getattr(args, "no_report", False) else "auto-generate Markdown + HTML report"
     print(f"Report: {report_mode}")
+
+    print("\nPlanned cache artifacts:")
+    for study in cfg.get("studies", []):
+        entries, runtime_only = _planned_artifacts_for_study(cfg, study, selected)
+        print(f"  - {study['name']}")
+        counts = {"cached": 0, "would-create": 0, "reuses-canonical": 0, "unknown": 0}
+        for entry in entries:
+            counts[entry["status"]] = counts.get(entry["status"], 0) + 1
+            path_str = str(entry["path"]) if entry["path"] is not None else "(path unavailable)"
+            note = f" ({entry['note']})" if entry.get("note") else ""
+            print(
+                f"      [{entry['status']}] {entry['group']}: {entry['key']} -> {path_str}{note}"
+            )
+        for note in runtime_only:
+            print(f"      [info] {note}")
+        print(
+            "      summary: "
+            f"cached={counts.get('cached', 0)} "
+            f"would-create={counts.get('would-create', 0)} "
+            f"reuses-canonical={counts.get('reuses-canonical', 0)} "
+            f"unknown={counts.get('unknown', 0)}"
+        )
     print(f"\nTotal benchmark runs: ~{_estimate_runs(cfg, selected)}")
 
 

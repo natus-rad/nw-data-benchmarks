@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 
 from benchmark.core import azure_storage, bench_utils, benchmarks, readers, remote, setup, signal, study_info
 from benchmark.core.config_helpers import (
+    get_canonical_parquet_cfg,
     get_parquet_compression_variants,
     get_tuned_block_sizes_minutes,
     get_tuned_chunk_sec,
@@ -22,7 +23,7 @@ from benchmark.core.config_helpers import (
     normalize_config,
     validate_config,
 )
-from benchmark.core.ingest import ingest
+from benchmark.core.ingest import _canonical_file, ingest
 from benchmark.core.study_info import StudyInfo
 from benchmark.core.variants import generate_variants
 from benchmark.core.remote import bench_remote_query
@@ -81,6 +82,93 @@ class BenchmarkRefactorTests(unittest.TestCase):
             run_benchmarks.run_benchmarks(cfg, args)
 
         self.assertIn("(input: demo.edf)", out.getvalue())
+
+    def test_runner_dry_run_lists_planned_artifacts_and_cache_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_file = tmp_path / "demo.edf"
+            input_file.write_bytes(b"demo")
+            cache_dir = tmp_path / "cache"
+            output_base = cache_dir / "demo_variants"
+            output_base.mkdir(parents=True, exist_ok=True)
+
+            cfg = {
+                "cache_dir": str(cache_dir),
+                "studies": [{"name": "demo", "input": str(input_file), "sample_freq": 256}],
+                "variants": [
+                    {"id": "pq_fast", "format": "parquet", "compression": "lz4", "row_group_minutes": 30},
+                    {"id": "h5_col", "format": "hdf5", "layout": "columnar", "chunk_minutes": 5, "dtype": "float32", "compression": "lz4"},
+                ],
+                "benchmarks": {
+                    "core": {
+                        "random_access": {"enabled": True, "variants": "all"},
+                    },
+                    "parquet_investigations": {
+                        "compression": {"enabled": True, "variants": [{"codec": "snappy"}, {"codec": "lz4"}]},
+                        "precision_loss": {"enabled": True},
+                        "int32_storage": {"enabled": True},
+                    },
+                    "other": {
+                        "tuned_comparison": {
+                            "enabled": True,
+                            "block_sizes_minutes": [5],
+                            "parquet_codecs": ["snappy", "lz4"],
+                            "hdf5_compression": "lz4",
+                        },
+                        "baseline_comparison": {"enabled": True},
+                    },
+                },
+            }
+            normalized = normalize_config(cfg)
+
+            canonical = _canonical_file(
+                cache_dir,
+                input_file,
+                "edf",
+                256.0,
+                get_canonical_parquet_cfg(normalized),
+                study_name="demo",
+            )
+            canonical.write_bytes(b"cached canonical")
+
+            root_variant = run_benchmarks._root_variant_output_path(output_base, normalized["variants"][0])
+            root_variant.write_bytes(b"cached variant")
+            (output_base / "parquet_lz4.parquet").write_bytes(b"cached compression variant")
+            (output_base / "tuned_h5_5m.h5").write_bytes(b"cached tuned h5")
+
+            args = argparse.Namespace(
+                config="benchmark/config/default.yaml",
+                categories=[
+                    "random_access",
+                    "compression",
+                    "precision_loss",
+                    "int32_storage",
+                    "tuned_comparison",
+                    "baseline_comparison",
+                ],
+                output=None,
+                dry_run=True,
+                no_report=True,
+                sas_token=None,
+            )
+
+            with redirect_stdout(io.StringIO()) as out:
+                run_benchmarks.run_benchmarks(cfg, args)
+
+            dry_run = out.getvalue()
+            self.assertIn("[cached] canonical: canonical ->", dry_run)
+            self.assertIn(str(canonical), dry_run)
+            self.assertIn("[cached] root_variant: pq_fast ->", dry_run)
+            self.assertIn("[would-create] root_variant: h5_col ->", dry_run)
+            self.assertIn("[reuses-canonical] compression: parquet_snappy ->", dry_run)
+            self.assertIn("[cached] compression: parquet_lz4 ->", dry_run)
+            self.assertIn("[would-create] int32_storage: parquet_int32_calibrated_zstd ->", dry_run)
+            self.assertIn("[would-create] tuned_parquet: tuned_pq_5m ->", dry_run)
+            self.assertIn("[would-create] tuned_parquet: tuned_pq_lz4_5m ->", dry_run)
+            self.assertIn("[cached] tuned_hdf5: tuned_h5_5m ->", dry_run)
+            self.assertIn("[info] precision_loss reuses the default Parquet artifact; no extra cache artifacts", dry_run)
+            self.assertIn("[info] baseline_comparison reuses the resolved study input artifact; no extra cache artifacts", dry_run)
+            self.assertIn("summary: cached=4 would-create=9 reuses-canonical=1 unknown=0", dry_run)
 
     def test_runner_rejects_legacy_source_study_configs(self):
         cfg = {
