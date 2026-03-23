@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 import numpy as np
 
-from .bench_utils import _chunk_ranges, _full_study_duration_hours, _throughput, _timed
+from .bench_utils import _chunk_ranges, _full_study_duration_hours, _print_result, _throughput, _timed
 from .config_helpers import (
     get_channel_subsets,
     get_core_include_canonical,
@@ -159,6 +159,13 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
     import time
 
     results = []
+
+    def _append_logged_result(row: dict) -> None:
+        row = dict(row)
+        row["_printed_inline"] = True
+        results.append(row)
+        _print_result(row)
+
     sample_freq = info.sample_freq
     n_channels = len(info.channel_labels)
     ch_cols = info.channel_columns
@@ -184,7 +191,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
                 reps,
             )
         n_samples = data.shape[1] if data.ndim == 2 else 0
-        results.append({
+        _append_logged_result({
             "category": f"{category_prefix}_random_access",
             "benchmark": f"{section_letter}.1",
             "format": variant["format"],
@@ -204,7 +211,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
                 reps,
             )
         n_samples = data.shape[1] if data.ndim == 2 else 0
-        results.append({
+        _append_logged_result({
             "category": f"{category_prefix}_channel_subset",
             "benchmark": f"{section_letter}.2",
             "format": variant["format"],
@@ -232,7 +239,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
                     reps,
                 )
             n_samples = data.shape[1] if data.ndim == 2 else 0
-            results.append({
+            _append_logged_result({
                 "category": f"{category_prefix}_window_scaling",
                 "benchmark": f"{section_letter}.3",
                 "format": variant["format"],
@@ -256,7 +263,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
                 matrix = _read_target_window(variant, info, ch_cols, cs, ce, reader_state)
                 samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
         t_wall = time.perf_counter() - t_wall_start
-        results.append({
+        _append_logged_result({
             "category": f"{category_prefix}_full_study",
             "benchmark": f"{section_letter}.4",
             "format": variant["format"],

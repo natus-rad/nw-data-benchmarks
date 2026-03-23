@@ -919,7 +919,8 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
         with patch.object(benchmarks, "_timed", return_value=(0.1, np.zeros((5, 2), dtype=np.float32))), \
              patch.object(benchmarks, "_read_parquet_window", return_value=np.zeros((5, 2), dtype=np.float32)) as mock_read, \
-             patch.object(benchmarks, "_chunk_ranges", return_value=[(0, 13)]) as mock_chunk_ranges:
+             patch.object(benchmarks, "_chunk_ranges", return_value=[(0, 13)]) as mock_chunk_ranges, \
+             patch.object(benchmarks, "_print_result") as mock_print_result:
             results = benchmarks.bench_baseline_comparison(info, paths, cfg)
 
         self.assertEqual(
@@ -927,11 +928,13 @@ class BenchmarkRefactorTests(unittest.TestCase):
             {"baseline_random_access", "baseline_channel_subset", "baseline_window_scaling", "baseline_full_study"},
         )
         self.assertEqual({row["benchmark"] for row in results}, {"K.1", "K.2", "K.3", "K.4"})
+        self.assertTrue(all(row.get("_printed_inline") for row in results))
         self.assertTrue(all(row["artifact"] == "Baseline input" for row in results))
         self.assertTrue(all(row["format"] == "baseline_parquet" for row in results))
         self.assertEqual(mock_chunk_ranges.call_count, 1)
         mock_chunk_ranges.assert_called_once_with(0, 19, 14)
         self.assertEqual(mock_read.call_args_list[0].args[0], Path("baseline-input.parquet"))
+        self.assertEqual(mock_print_result.call_count, len(results))
 
     def test_print_result_prefixes_dotted_benchmark_ids(self):
         stdout = io.StringIO()
