@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from .azure_storage import _download_edf_from_azure
-from .bench_utils import _chunk_ranges, _print_result, _throughput
+from .bench_utils import _PeakRssTracker, _chunk_ranges, _peak_rss_fields, _print_result, _throughput
 from .config_helpers import get_remote_query_cfg, is_investigation_enabled
 from .readers import EdfFileReader, _edf_file
 from .signal import CHANNELS_10_20
@@ -121,10 +121,11 @@ def bench_remote_query(info, paths: dict, cfg: dict,
             total_rows = 0
 
             print(f"    DuckDB {pq_label} [{ch_label}] ... ", end="", flush=True)
-            for s, e in windows:
-                t, n_rows = _duckdb_remote_read(con, pq_az_path, query_cols, s, e)
-                times.append(t)
-                total_rows += n_rows
+            with _PeakRssTracker() as memory_tracker:
+                for s, e in windows:
+                    t, n_rows = _duckdb_remote_read(con, pq_az_path, query_cols, s, e)
+                    times.append(t)
+                    total_rows += n_rows
 
             total_time = sum(times)
             avg_time = total_time / len(times)
@@ -145,6 +146,7 @@ def bench_remote_query(info, paths: dict, cfg: dict,
                 "min_wall_per_window": round(min(times), 3),
                 "max_wall_per_window": round(max(times), 3),
                 "total_rows": total_rows,
+                **_peak_rss_fields(memory_tracker.peak_rss_mib),
                 **_throughput(total_rows, n_ch, total_time),
             })
 
@@ -163,11 +165,12 @@ def bench_remote_query(info, paths: dict, cfg: dict,
                 query_cols = list(cols)
                 total_rows = 0
                 print(f"    DuckDB full-study {pq_label} [{ch_label}] ... ", end="", flush=True)
-                t_wall_start = time.perf_counter()
-                for cs, ce in _chunk_ranges(bench_start, bench_end, chunk_stamps):
-                    _, n_rows = _duckdb_remote_read(con, pq_az_path, query_cols, cs, ce)
-                    total_rows += n_rows
-                t_wall = time.perf_counter() - t_wall_start
+                with _PeakRssTracker() as memory_tracker:
+                    t_wall_start = time.perf_counter()
+                    for cs, ce in _chunk_ranges(bench_start, bench_end, chunk_stamps):
+                        _, n_rows = _duckdb_remote_read(con, pq_az_path, query_cols, cs, ce)
+                        total_rows += n_rows
+                    t_wall = time.perf_counter() - t_wall_start
                 print(f"done ({t_wall:.1f}s)")
 
                 n_ch = len(cols)
@@ -182,6 +185,7 @@ def bench_remote_query(info, paths: dict, cfg: dict,
                     "n_chunks": n_chunks,
                     "total_rows": total_rows,
                     "total_wall_seconds": round(t_wall, 3),
+                    **_peak_rss_fields(memory_tracker.peak_rss_mib),
                     **_throughput(total_rows, n_ch, t_wall),
                 })
 
@@ -224,15 +228,16 @@ def bench_remote_query(info, paths: dict, cfg: dict,
         for ch_label, ch_indices in edf_channel_variants:
             print(f"    EDF local read [{ch_label}] ... ", end="", flush=True)
             local_times = []
-            for row_start in random_row_starts:
-                start_sample = int(row_start)
-                n_samp = min(int(window_sec * sample_freq), edf_total - start_sample)
-                if start_sample < 0 or n_samp <= 0:
-                    continue
+            with _PeakRssTracker() as memory_tracker:
+                for row_start in random_row_starts:
+                    start_sample = int(row_start)
+                    n_samp = min(int(window_sec * sample_freq), edf_total - start_sample)
+                    if start_sample < 0 or n_samp <= 0:
+                        continue
 
-                t0 = time.perf_counter()
-                edf_reader.read_window(start_sample, n_samp, ch_indices)
-                local_times.append(time.perf_counter() - t0)
+                    t0 = time.perf_counter()
+                    edf_reader.read_window(start_sample, n_samp, ch_indices)
+                    local_times.append(time.perf_counter() - t0)
 
             local_total = sum(local_times)
             combined = dl_time + local_total
@@ -254,6 +259,7 @@ def bench_remote_query(info, paths: dict, cfg: dict,
                 "read_seconds": round(local_total, 3),
                 "total_wall_seconds": round(combined, 3),
                 "avg_wall_per_window": round(local_total / len(local_times), 3) if local_times else 0,
+                **_peak_rss_fields(memory_tracker.peak_rss_mib),
             })
 
     return results

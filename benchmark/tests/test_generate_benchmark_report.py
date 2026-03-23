@@ -353,6 +353,27 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         with self.assertRaisesRegex(ReportGenerationError, "explicit total_stamps"):
             validate_results(payload, Path("benchmark/results/demo.json"))
 
+    def test_render_report_includes_peak_rss_when_present(self) -> None:
+        payload = {
+            "run_id": "2026-03-21T00-00-00",
+            "system": {"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16},
+            "studies": [{"name": "demo", "channels": 2, "sample_freq": 100.0, "total_stamps": 1000, "duration_seconds": 10.0}],
+            "benchmarks": [{
+                "category": "random_access",
+                "format": "parquet",
+                "position": "0%",
+                "wall_clock_seconds": 0.5,
+                "mib_per_sec": 10.0,
+                "peak_rss_mib": 123.4,
+            }],
+        }
+        template = "# Report\n\n${overview}\n\n${a_results}\n"
+
+        rendered = render_report(payload, template, Path("demo_benchmark_results.json"))
+
+        self.assertIn("peak_rss_mib", rendered)
+        self.assertIn("peak 123.4 MiB", rendered)
+
     def test_generate_report_writes_markdown_and_html(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

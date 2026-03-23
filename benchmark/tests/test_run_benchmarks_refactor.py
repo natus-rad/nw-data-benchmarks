@@ -1195,9 +1195,34 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertIn("time=0.0500s", line)
         self.assertIn("first=0.1200s", line)
 
+    def test_print_result_includes_peak_rss_when_present(self):
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            bench_utils._print_result({
+                "format": "parquet",
+                "wall_clock_seconds": 0.05,
+                "peak_rss_mib": 123.4,
+            })
+
+        self.assertIn("rss=123.4 MiB", stdout.getvalue().strip())
+
     def test_timed_records_first_and_all_samples(self):
+        peaks = iter([101.0, 103.0, 102.0])
+
+        class FakeTracker:
+            def __init__(self, *_args, **_kwargs):
+                self.peak_rss_mib = None
+
+            def __enter__(self):
+                self.peak_rss_mib = next(peaks)
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
         values = iter([1.0, 2.0, 3.0])
-        with patch("benchmark.core.bench_utils.time.perf_counter", side_effect=[0.0, 0.1, 1.0, 1.3, 2.0, 2.2]):
+        with patch("benchmark.core.bench_utils._PeakRssTracker", FakeTracker), \
+             patch("benchmark.core.bench_utils.time.perf_counter", side_effect=[0.0, 0.1, 1.0, 1.3, 2.0, 2.2]):
             timed = bench_utils._timed(lambda: next(values), reps=3)
 
         median_seconds, result = timed
@@ -1206,6 +1231,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertAlmostEqual(timed.first_seconds, 0.1)
         self.assertEqual(len(timed.all_seconds), 3)
         np.testing.assert_allclose(timed.all_seconds, np.array([0.1, 0.3, 0.2], dtype=np.float64))
+        self.assertAlmostEqual(timed.peak_rss_mib, 103.0)
 
     def test_gap_safe_row_helpers_use_row_counts_not_stamp_spans(self):
         stamps = [0, 1, 2, 3, 100, 101, 102, 103]
@@ -1614,6 +1640,51 @@ class BenchmarkRefactorTests(unittest.TestCase):
             text.index("parquet_float32_snappy  subset=all"),
             text.index("DuckDB float32_snappy [10-20 (19ch)]"),
         )
+
+    def test_bench_remote_query_rows_include_peak_rss_when_available(self):
+        class FakeCon:
+            def close(self):
+                return None
+
+        class FakeTracker:
+            def __init__(self, *_args, **_kwargs):
+                self.peak_rss_mib = 321.0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+        info = SimpleNamespace(
+            sample_freq=1.0,
+            channel_labels=["Fp1", "Fp2"],
+            channel_columns=["ch_Fp1", "ch_Fp2"],
+            total_rows=100,
+            stamp_at_row=lambda row: row,
+            start_stamp=0,
+            end_stamp=99,
+        )
+        cfg = {
+            "azure": {"storage_account": "acct", "container": "waveforms"},
+            "parquet_investigations": {
+                "remote_query": {
+                    "enabled": True,
+                    "n_random_points": 1,
+                    "window_sec": 10,
+                    "full_study_chunk_sec": 20,
+                    "remote_float32_path": "parquet/demo/",
+                }
+            },
+        }
+
+        with patch.object(remote, "_PeakRssTracker", FakeTracker), \
+             patch.object(remote, "_make_duckdb_connection", return_value=FakeCon()), \
+             patch.object(remote, "_duckdb_remote_read", return_value=(0.1, 10)):
+            results = remote.bench_remote_query(info, {"edf": Path("missing.edf")}, cfg)
+
+        self.assertTrue(results)
+        self.assertTrue(all(row["peak_rss_mib"] == 321.0 for row in results))
 
     def test_bench_remote_query_skips_empty_10_20_subset(self):
         class FakeCon:

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
+import sys
+import threading
 import time
 from typing import Any
 
@@ -14,6 +17,109 @@ from .config_helpers import (
 
 
 BYTES_PER_FLOAT32 = 4
+_MEMORY_POLL_INTERVAL_SECONDS = 0.01
+
+
+def _current_process_rss_bytes() -> int | None:
+    try:
+        import psutil  # type: ignore
+
+        return int(psutil.Process().memory_info().rss)
+    except Exception:
+        pass
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+                _fields_ = [
+                    ("cb", ctypes.c_uint32),
+                    ("PageFaultCount", ctypes.c_uint32),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            counters = PROCESS_MEMORY_COUNTERS()
+            counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
+            if not ctypes.windll.psapi.GetProcessMemoryInfo(
+                ctypes.windll.kernel32.GetCurrentProcess(),
+                ctypes.byref(counters),
+                counters.cb,
+            ):
+                return None
+            return int(counters.WorkingSetSize)
+        except Exception:
+            return None
+
+    statm_path = "/proc/self/statm"
+    if os.path.exists(statm_path):
+        try:
+            with open(statm_path, "r", encoding="utf-8") as f:
+                parts = f.read().split()
+            if len(parts) >= 2:
+                return int(parts[1]) * int(os.sysconf("SC_PAGE_SIZE"))
+        except Exception:
+            return None
+
+    return None
+
+
+class _PeakRssTracker:
+    def __init__(self, poll_interval_seconds: float = _MEMORY_POLL_INTERVAL_SECONDS):
+        self._poll_interval_seconds = poll_interval_seconds
+        self._peak_bytes: int | None = None
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def _sample_once(self) -> None:
+        rss = _current_process_rss_bytes()
+        if rss is None:
+            return
+        self._peak_bytes = rss if self._peak_bytes is None else max(self._peak_bytes, rss)
+
+    def _poll_loop(self) -> None:
+        while not self._stop.wait(self._poll_interval_seconds):
+            self._sample_once()
+
+    def __enter__(self):
+        self._sample_once()
+        self._thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=max(0.05, self._poll_interval_seconds * 2))
+            self._thread = None
+        self._sample_once()
+
+    @property
+    def peak_rss_mib(self) -> float | None:
+        if self._peak_bytes is None:
+            return None
+        return float(self._peak_bytes) / (1024.0 * 1024.0)
+
+
+def _peak_rss_fields(peak_rss_mib: float | None) -> dict[str, float]:
+    if peak_rss_mib is None:
+        return {}
+    return {"peak_rss_mib": round(float(peak_rss_mib), 1)}
+
+
+def _max_peak_rss(peaks: list[float | None]) -> float | None:
+    valid = [float(peak) for peak in peaks if peak is not None]
+    return max(valid) if valid else None
 
 
 @dataclass(frozen=True)
@@ -22,6 +128,7 @@ class TimedMeasurement:
     result: Any
     first_seconds: float
     all_seconds: tuple[float, ...]
+    peak_rss_mib: float | None = None
 
     def __iter__(self):
         yield self.median_seconds
@@ -31,16 +138,20 @@ class TimedMeasurement:
 def _timed(fn, reps: int = 3) -> TimedMeasurement:
     """Run fn() reps times and return median + first-run timing details."""
     times = []
+    peaks: list[float | None] = []
     result = None
     for _ in range(reps):
-        t0 = time.perf_counter()
-        result = fn()
-        times.append(time.perf_counter() - t0)
+        with _PeakRssTracker() as tracker:
+            t0 = time.perf_counter()
+            result = fn()
+            times.append(time.perf_counter() - t0)
+        peaks.append(tracker.peak_rss_mib)
     return TimedMeasurement(
         median_seconds=float(np.median(times)),
         result=result,
         first_seconds=float(times[0]),
         all_seconds=tuple(float(t) for t in times),
+        peak_rss_mib=_max_peak_rss(peaks),
     )
 
 
@@ -133,6 +244,8 @@ def _print_result(r: dict) -> None:
         parts.append(f"{dl_tag}{r['download_seconds']:.1f}s")
     if "mib_per_sec" in r:
         parts.append(f"tput={r['mib_per_sec']:.1f} MiB/s")
+    if r.get("peak_rss_mib") is not None:
+        parts.append(f"rss={float(r['peak_rss_mib']):.1f} MiB")
     if "compression_ratio" in r and r["compression_ratio"] is not None:
         parts.append(f"ratio={r['compression_ratio']:.1f}x")
     if "worst_max_abs_error" in r:

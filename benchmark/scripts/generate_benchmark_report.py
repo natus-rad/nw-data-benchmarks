@@ -152,6 +152,7 @@ def build_overview(study: dict[str, Any], system: dict[str, Any], categories: se
         "Sections for categories not present in the input file are called out explicitly, so partial benchmark runs still produce a readable report. "
         "All reported throughput values use the theoretical decoded float32 payload size: rows × channels × 4 bytes. "
         "For repeated-read benchmarks, `wall_clock_seconds` is the warm-cache-leaning median across repetitions and `first_wall_clock_seconds` records the first repetition as the closest available cold-start proxy without explicit OS cache eviction. "
+        "When available, `peak_rss_mib` reports sampled peak process resident memory during the benchmark invocation. "
         "HDF5 timings in this benchmark use a custom benchmark-specific `chunk_index` lookup structure built at conversion time, which intentionally gives HDF5 a best-case seek/read path rather than representing plain generic HDF5 without that helper."
     )
     return note + "\n\n" + markdown_table(["Property", "Value"], rows)
@@ -436,7 +437,7 @@ def render_remontage(rows: list[dict[str, Any]], _: dict[str, Any]) -> str:
                 label(row["format"]),
                 format_seconds(row["read_seconds"]),
                 format_seconds(row["montage_seconds"]),
-                format_seconds(row["wall_clock_seconds"]),
+                timing_cell(row, "wall_clock_seconds"),
                 f"{100 * row['montage_seconds'] / row['wall_clock_seconds']:.1f}%",
             ]
             for row in ordered
@@ -455,7 +456,7 @@ def render_filter_pipeline(rows: list[dict[str, Any]], _: dict[str, Any]) -> str
                 format_seconds(row["read_seconds"]),
                 format_seconds(row["montage_seconds"]),
                 format_seconds(row["filter_seconds"]),
-                format_seconds(row["wall_clock_seconds"]),
+                timing_cell(row, "wall_clock_seconds"),
                 format_rate(row["mib_per_sec"]),
             ]
             for row in ordered
@@ -477,7 +478,7 @@ def render_sliding_fft(rows: list[dict[str, Any]], _: dict[str, Any]) -> str:
                 format_seconds(row["montage_seconds"]),
                 format_seconds(row["filter_seconds"]),
                 format_seconds(row["fft_seconds"]),
-                format_seconds(row["wall_clock_seconds"]),
+                timing_cell(row, "wall_clock_seconds"),
             ]
             for row in ordered
         ],
@@ -513,7 +514,7 @@ def render_compression(rows: list[dict[str, Any]], payload: dict[str, Any]) -> s
         [
             [
                 row["codec"],
-                format_seconds(row["wall_clock_seconds"]),
+                timing_cell(row, "wall_clock_seconds"),
                 format_mib(row["file_size_mib"]),
                 _ratio_text(row["file_size_mib"]),
             ]
@@ -590,7 +591,7 @@ def render_int32_storage(rows: list[dict[str, Any]], payload: dict[str, Any]) ->
                 row["mode"],
                 row.get("read_method", "—"),
                 row.get("codec", "—"),
-                format_seconds(row["wall_clock_seconds"]),
+                timing_cell(row, "wall_clock_seconds"),
                 format_rate(row["mib_per_sec"]),
             ]
             for row in representative
@@ -630,7 +631,7 @@ def render_remote_query(rows: list[dict[str, Any]], payload: dict[str, Any]) -> 
                 row["method"],
                 label(row["format"]),
                 row["channel_subset"],
-                format_seconds(row["total_wall_seconds"]),
+                timing_cell(row, "total_wall_seconds"),
                 format_seconds(row["avg_wall_per_window"]),
                 format_rate(row["mib_per_sec"]) if "mib_per_sec" in row else "—",
             ]
@@ -819,10 +820,16 @@ def metric_cell(row: dict[str, Any] | None, time_key: str, rate_key: str) -> str
 
 def timing_cell(row: dict[str, Any], time_key: str) -> str:
     text = format_seconds(row[time_key])
+    notes = []
     if time_key == "wall_clock_seconds" and "first_wall_clock_seconds" in row:
         first = float(row["first_wall_clock_seconds"])
         if abs(first - float(row[time_key])) > 5e-7:
-            text += f" (first {format_seconds(first)})"
+            notes.append(f"first {format_seconds(first)}")
+    peak_rss_mib = row.get("peak_rss_mib")
+    if peak_rss_mib is not None:
+        notes.append(f"peak {format_mib(peak_rss_mib)}")
+    if notes:
+        text += f" ({'; '.join(notes)})"
     return text
 
 

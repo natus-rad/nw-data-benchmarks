@@ -3,7 +3,16 @@ from __future__ import annotations
 from contextlib import nullcontext
 import numpy as np
 
-from .bench_utils import _chunk_ranges, _full_study_duration_hours, _print_result, _throughput, _timed
+from .bench_utils import (
+    _PeakRssTracker,
+    _chunk_ranges,
+    _full_study_duration_hours,
+    _max_peak_rss,
+    _peak_rss_fields,
+    _print_result,
+    _throughput,
+    _timed,
+)
 from .config_helpers import (
     get_channel_subsets,
     get_core_include_canonical,
@@ -51,6 +60,7 @@ def _timed_call(fn, reps: int, precision: int = 6):
     fields = {
         "wall_clock_seconds": round(float(median_seconds), precision),
         "first_wall_clock_seconds": round(first_seconds, precision),
+        **_peak_rss_fields(getattr(timing, "peak_rss_mib", None)),
     }
     all_seconds = getattr(timing, "all_seconds", None)
     if all_seconds:
@@ -58,11 +68,13 @@ def _timed_call(fn, reps: int, precision: int = 6):
     return float(median_seconds), result, fields
 
 
-def _single_timing_fields(seconds: float, precision: int = 6) -> dict[str, float]:
+def _single_timing_fields(seconds: float, precision: int = 6,
+                          peak_rss_mib: float | None = None) -> dict[str, float]:
     rounded = round(float(seconds), precision)
     return {
         "wall_clock_seconds": rounded,
         "first_wall_clock_seconds": rounded,
+        **_peak_rss_fields(peak_rss_mib),
     }
 
 
@@ -279,19 +291,19 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
     for variant in variants:
         samples_read = 0
         chunk_bounds = row_chunks if variant["reader_kind"] == "edf" else stamp_chunks
-        t_wall_start = time.perf_counter()
-        with _target_context(variant) as reader_state:
+        with _PeakRssTracker() as memory_tracker, _target_context(variant) as reader_state:
+            t_wall_start = time.perf_counter()
             for cs, ce in chunk_bounds:
                 matrix = _read_target_window(variant, info, ch_cols, cs, ce, reader_state)
                 samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
-        t_wall = time.perf_counter() - t_wall_start
+            t_wall = time.perf_counter() - t_wall_start
         _append_logged_result({
             "category": f"{category_prefix}_full_study",
             "benchmark": f"{section_letter}.4",
             "format": variant["format"],
             **variant["result_fields"],
             "total_samples": samples_read,
-            **_single_timing_fields(t_wall, precision=3),
+            **_single_timing_fields(t_wall, precision=3, peak_rss_mib=memory_tracker.peak_rss_mib),
             **_throughput(samples_read, n_channels, t_wall),
         })
 
@@ -453,12 +465,14 @@ def bench_remontage(info, paths: dict, cfg: dict) -> list[dict]:
                 montage_sec = time.perf_counter() - t_mont_start
                 return matrix, derived, read_sec, montage_sec
 
-            times_read, times_mont = [], []
+            times_read, times_mont, peaks = [], [], []
             matrix = derived = None
             for _ in range(reps):
-                matrix, derived, r, m = run()
+                with _PeakRssTracker() as memory_tracker:
+                    matrix, derived, r, m = run()
                 times_read.append(r)
                 times_mont.append(m)
+                peaks.append(memory_tracker.peak_rss_mib)
 
             read_sec = float(np.median(times_read))
             mont_sec = float(np.median(times_mont))
@@ -471,6 +485,7 @@ def bench_remontage(info, paths: dict, cfg: dict) -> list[dict]:
                 "wall_clock_seconds": round(total, 6),
                 "first_wall_clock_seconds": round(times_read[0] + times_mont[0], 6),
                 "timing_samples_seconds": [round(r + m, 6) for r, m in zip(times_read, times_mont)],
+                **_peak_rss_fields(_max_peak_rss(peaks)),
                 "read_seconds": round(read_sec, 6),
                 "montage_seconds": round(mont_sec, 6),
                 "derived_channels": derived.shape[0] if derived is not None and derived.ndim == 2 else 0,
@@ -502,7 +517,7 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
     print(f"    Study: {hours}h ({bench_sec:.0f}s), {n_channels} ch, {sample_freq} Hz")
 
     for target in _core_targets(paths, cfg, "filter_pipeline"):
-        with _target_context(target) as reader_state:
+        with _PeakRssTracker() as memory_tracker, _target_context(target) as reader_state:
             t_read_total = t_mont_total = t_filt_total = 0.0
             total_samples_read = 0
             chunk_bounds = row_chunks if target["reader_kind"] == "edf" else stamp_chunks
@@ -533,7 +548,7 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
                 "sample_freq": sample_freq,
                 "channels": n_channels,
                 "total_samples": total_samples_read,
-                **_single_timing_fields(t_wall, precision=3),
+                **_single_timing_fields(t_wall, precision=3, peak_rss_mib=memory_tracker.peak_rss_mib),
                 "read_seconds": round(t_read_total, 3),
                 "montage_seconds": round(t_mont_total, 3),
                 "filter_seconds": round(t_filt_total, 3),
@@ -552,7 +567,7 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
     print(f"    FFT: {n_fft_windows} windows, {fft_window_sec}s window, {fft_stride_sec}s stride")
 
     for target in _core_targets(paths, cfg, "filter_pipeline"):
-        with _target_context(target) as reader_state:
+        with _PeakRssTracker() as memory_tracker, _target_context(target) as reader_state:
             t_read_total = t_mont_total = t_filt_total = t_fft_total = 0.0
             total_samples_read = 0
             fft_count = 0
@@ -606,7 +621,7 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
                 "fft_stride_sec": fft_stride_sec,
                 "fft_windows_expected": n_fft_windows,
                 "fft_windows_computed": fft_count,
-                **_single_timing_fields(t_wall, precision=3),
+                **_single_timing_fields(t_wall, precision=3, peak_rss_mib=memory_tracker.peak_rss_mib),
                 "read_seconds": round(t_read_total, 3),
                 "montage_seconds": round(t_mont_total, 3),
                 "filter_seconds": round(t_filt_total, 3),
