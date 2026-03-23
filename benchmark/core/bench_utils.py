@@ -14,6 +14,7 @@ from .config_helpers import (
     get_parquet_compression_variants,
     get_read_positions,
     get_repetitions,
+    get_remote_query_cfg,
     get_tuned_parquet_codecs,
     get_window_sizes,
     is_investigation_enabled,
@@ -21,7 +22,7 @@ from .config_helpers import (
 
 
 BYTES_PER_FLOAT32 = 4
-_MEMORY_POLL_INTERVAL_SECONDS = 0.01
+_MEMORY_POLL_INTERVAL_SECONDS = 0.05
 
 
 def _current_process_rss_bytes() -> int | None:
@@ -194,6 +195,7 @@ def _estimate_runs(cfg: dict, selected: list) -> int:
     read_positions = get_read_positions(cfg)
     channel_subsets = get_channel_subsets(cfg)
     window_sizes = get_window_sizes(cfg)
+    remote_cfg = get_remote_query_cfg(cfg)
     for cat_id, _, _ in selected:
         if cat_id == "random_access":
             n += len(read_positions) * 2 * reps
@@ -211,6 +213,20 @@ def _estimate_runs(cfg: dict, selected: list) -> int:
         elif cat_id == "precision_loss":
             if is_investigation_enabled(cfg, "precision_loss"):
                 n += 1
+        elif cat_id == "int32_storage":
+            if is_investigation_enabled(cfg, "int32_storage"):
+                n += 12 * reps
+        elif cat_id == "remote_query":
+            if is_investigation_enabled(cfg, "remote_query"):
+                parquet_variants = sum(
+                    1
+                    for key in ("remote_float32_path", "remote_int32_nanovolt_path", "remote_single_file_path")
+                    if remote_cfg.get(key)
+                )
+                channel_variants = 2  # all channels + 10-20 subset when available
+                n += parquet_variants * channel_variants
+                if remote_cfg.get("full_study_chunk_sec"):
+                    n += parquet_variants * channel_variants
         elif cat_id == "tuned_comparison":
             tuned_variants = len(get_tuned_parquet_codecs(cfg)) + 1  # one HDF5 variant
             n += tuned_variants * ((2 + len(window_sizes)) * reps + 1)

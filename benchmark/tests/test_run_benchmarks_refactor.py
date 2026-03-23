@@ -182,8 +182,46 @@ class BenchmarkRefactorTests(unittest.TestCase):
             self.assertIn("Default window: 45", dry_run)
             self.assertIn("Read positions: [0.5]", dry_run)
             self.assertIn("Channel subsets: [3]", dry_run)
-            self.assertIn("Total benchmark runs: ~45", dry_run)
+            self.assertIn("Total benchmark runs: ~69", dry_run)
             self.assertIn("summary: cached=4 would-create=9 reuses-canonical=1 unknown=0", dry_run)
+
+    def test_system_info_handles_missing_psutil(self):
+        with patch.object(study_info, "psutil", None), \
+             patch.object(study_info.os, "sysconf", side_effect=OSError, create=True), \
+             patch.object(study_info.platform, "system", return_value="Windows"), \
+             patch.object(study_info.platform, "release", return_value="11"), \
+             patch.object(study_info.platform, "processor", return_value=""), \
+             patch.object(study_info.platform, "machine", return_value="x86_64"), \
+             patch.object(study_info.platform, "python_version", return_value="3.12"), \
+             patch.object(study_info.os, "cpu_count", return_value=8):
+            info = study_info._system_info()
+
+        self.assertEqual(info["ram_gb"], None)
+        self.assertEqual(info["cpu"], "x86_64")
+
+    def test_estimate_runs_includes_int32_and_remote_query(self):
+        cfg = normalize_config({
+            "benchmarks": {
+                "common": {"repetitions": 2},
+                "core": {"window_scaling": {"window_sizes": [15, 45]}},
+                "parquet_investigations": {
+                    "int32_storage": {"enabled": True},
+                    "remote_query": {
+                        "enabled": True,
+                        "full_study_chunk_sec": 3600,
+                        "remote_float32_path": "parquet/demo/",
+                    },
+                },
+                "other": {"baseline_comparison": {"enabled": True}},
+            }
+        })
+        selected = [
+            ("int32_storage", "H", benchmarks.bench_int32_storage),
+            ("remote_query", "I", remote.bench_remote_query),
+            ("baseline_comparison", "K", benchmarks.bench_baseline_comparison),
+        ]
+
+        self.assertEqual(bench_utils._estimate_runs(cfg, selected), 37)
 
     def test_runner_rejects_legacy_source_study_configs(self):
         cfg = {
@@ -1623,7 +1661,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
             n = int(end_stamp) - int(start_stamp) + 1
             return np.zeros((len(columns), n), dtype=np.float32)
 
-        with patch.object(benchmarks, "_core_targets", return_value=[target]), \
+        with patch.object(benchmarks, "_core_targets", return_value=[target]) as mock_core_targets, \
              patch.object(benchmarks, "_read_target_window", side_effect=fake_read), \
              patch.object(benchmarks, "_apply_bipolar_montage", side_effect=lambda matrix, _labels: matrix), \
              patch.object(benchmarks, "_apply_filters", side_effect=lambda matrix, _sos: matrix), \
@@ -1635,6 +1673,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertEqual({row["benchmark"] for row in results}, {"D.1", "D.2"})
         self.assertTrue(seen_reader_states)
         self.assertTrue(all(state is None for state in seen_reader_states))
+        mock_core_targets.assert_called_once_with({}, {}, "filter_pipeline")
 
     def test_build_sos_returns_float32_coefficients(self):
         sos = signal._build_sos(256.0)

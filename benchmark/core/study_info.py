@@ -5,9 +5,13 @@ import platform
 from pathlib import Path
 
 import numpy as np
-import psutil
 import pyarrow.parquet as pq
 import yaml
+
+try:
+    import psutil  # type: ignore
+except Exception:
+    psutil = None
 
 from .config_helpers import normalize_config, validate_config
 from .parquet_paths import list_parquet_files
@@ -20,12 +24,30 @@ def load_config(path: str) -> dict:
     return cfg
 
 
+def _system_ram_gb() -> float | None:
+    if psutil is not None:
+        try:
+            return round(psutil.virtual_memory().total / (1024**3), 1)
+        except Exception:
+            pass
+
+    if hasattr(os, "sysconf"):
+        try:
+            page_count = int(os.sysconf("SC_PHYS_PAGES"))
+            page_size = int(os.sysconf("SC_PAGE_SIZE"))
+            return round((page_count * page_size) / (1024**3), 1)
+        except Exception:
+            pass
+
+    return None
+
+
 def _system_info() -> dict:
     return {
         "os": f"{platform.system()} {platform.release()}",
         "cpu": platform.processor() or platform.machine(),
         "cpu_count": os.cpu_count(),
-        "ram_gb": round(psutil.virtual_memory().total / (1024**3), 1),
+        "ram_gb": _system_ram_gb(),
         "python": platform.python_version(),
     }
 

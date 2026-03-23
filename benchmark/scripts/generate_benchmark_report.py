@@ -169,7 +169,7 @@ def build_summary(payload: dict[str, Any]) -> str:
     if random_rows:
         medians = median_by_format(random_rows, "wall_clock_seconds")
         best_format, best_value = min(medians.items(), key=lambda item: item[1])
-        rows.append(["Random access (warm median 1-minute read)", label(best_format), format_seconds(best_value)])
+        rows.append(["Random access (warm-cache-leaning median 1-minute read)", label(best_format), format_seconds(best_value)])
 
     subset_rows = [row for row in rows_for(payload, "channel_subset") if str(row.get("channels")) == "4"]
     if subset_rows:
@@ -213,7 +213,7 @@ def build_key_observations(payload: dict[str, Any]) -> str:
         ranking = sorted(medians.items(), key=lambda item: item[1])
         (best_fmt, best_val), (second_fmt, second_val) = ranking[:2]
         bullets.append(
-            f"**Random access:** {label(best_fmt)} has the lowest warm-median 1-minute read time at {format_seconds(best_val)}, about {second_val / best_val:.2f}× faster than {label(second_fmt)}."
+            f"**Random access:** {label(best_fmt)} has the lowest warm-cache-leaning median 1-minute read time at {format_seconds(best_val)}, about {second_val / best_val:.2f}× faster than {label(second_fmt)}."
         )
 
     compression_rows = rows_for(payload, "compression")
@@ -410,7 +410,7 @@ def render_random_access(rows: list[dict[str, Any]], _: dict[str, Any]) -> str:
         table_rows.append(cells)
     medians = median_by_format(rows, "wall_clock_seconds")
     best_fmt, best_val = min(medians.items(), key=lambda item: item[1])
-    note = f"{label(best_fmt)} has the lowest warm-median 1-minute read time across read positions at {format_seconds(best_val)}."
+    note = f"{label(best_fmt)} has the lowest warm-cache-leaning median 1-minute read time across read positions at {format_seconds(best_val)}."
     return note + "\n\n" + markdown_table(["Position", *[label(fmt) for fmt in formats]], table_rows)
 
 

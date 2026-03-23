@@ -515,7 +515,9 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
 
     print(f"    Study: {hours}h ({bench_sec:.0f}s), {n_channels} ch, {sample_freq} Hz")
 
-    for target in _core_targets(paths, cfg, "filter_pipeline"):
+    targets = _core_targets(paths, cfg, "filter_pipeline")
+
+    for target in targets:
         with _PeakRssTracker() as memory_tracker, _target_context(target) as reader_state:
             t_read_total = t_mont_total = t_filt_total = 0.0
             total_samples_read = 0
@@ -564,7 +566,7 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
     stamp_fft_chunks = [_stamp_bounds(info, row_bounds) for row_bounds in row_fft_chunks]
     print(f"    FFT: {n_fft_windows} windows, {fft_window_sec}s window, {fft_stride_sec}s stride")
 
-    for target in _core_targets(paths, cfg, "filter_pipeline"):
+    for target in targets:
         with _PeakRssTracker() as memory_tracker, _target_context(target) as reader_state:
             t_read_total = t_mont_total = t_filt_total = t_fft_total = 0.0
             total_samples_read = 0
