@@ -263,6 +263,7 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
             cache_dir,
             sample_freq,
             canonical_cfg=get_canonical_parquet_cfg(cfg),
+            study_name=study_cfg["name"],
         )
         info = StudyInfo.from_parquet(canonical_pq, sample_freq=sample_freq)
         short_name = study_cfg["name"][:30]

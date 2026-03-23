@@ -160,17 +160,21 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 compression="snappy",
             )
 
-            canonical_dir, detected_fmt, sample_freq = ingest(
+            canonical_file, detected_fmt, sample_freq = ingest(
                 parquet_file,
                 tmp_path / "cache",
                 sample_freq=256,
                 canonical_cfg={"compression": "lz4", "row_group_minutes": 30},
+                study_name="suppression_study",
             )
 
             self.assertEqual(detected_fmt, "parquet")
             self.assertEqual(sample_freq, 256.0)
-            self.assertNotEqual(canonical_dir, parquet_file)
-            self.assertTrue((canonical_dir / "part_00000.parquet").exists())
+            self.assertNotEqual(canonical_file, parquet_file)
+            self.assertEqual(canonical_file.parent, tmp_path / "cache")
+            self.assertEqual(canonical_file.suffix, ".parquet")
+            self.assertRegex(canonical_file.name, r"^suppression_study_canonical_[0-9a-f]{10}\.parquet$")
+            self.assertTrue(canonical_file.exists())
 
     def test_runner_rejects_no_variant_direct_source_erd_core_runs(self):
         cfg = {

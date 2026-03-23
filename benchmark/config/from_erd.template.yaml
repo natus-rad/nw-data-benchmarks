@@ -34,7 +34,7 @@ studies:
     # sample_freq: 256                   # Optional if ERD metadata already provides it
 
 # --- Canonical Parquet ----------------------------------------------
-# Every input is first normalized into this cached intermediate dataset.
+# Every input is first normalized into this cached intermediate Parquet file.
 # This is not part of `variants: all` by default, but it can still be benchmarked
 # explicitly via `include_canonical: true` on a core category.
 canonical_parquet:

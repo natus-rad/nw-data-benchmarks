@@ -100,7 +100,7 @@ benchmarks:
     random_access:
       enabled: true
       variants: all
-      # include_canonical: true  # Optional: also benchmark canonical_parquet.id for this category.
+      include_canonical: true  # Optional: also benchmark canonical_parquet.id for this category.
       read_positions: [0.0, 0.5, 0.75, 0.95]  # Fractional positions across the study duration.
     channel_subset:
       enabled: true

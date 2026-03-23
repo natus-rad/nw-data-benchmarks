@@ -7,7 +7,7 @@
 # The input can be a local .parquet file / directory of Parquet part
 # files, or a remote Azure blob path/URL to that dataset. The data must
 # have float32 channel columns and an int64 samplestamp column. Inputs are
-# always materialized into a cached canonical Parquet dataset first.
+# always materialized into a cached canonical Parquet file first.
 #
 # Usage:
 #   python benchmark/scripts/run_benchmarks.py --config my_config.yaml
@@ -34,7 +34,7 @@ studies:
     sample_freq: 256                        # Sample rate in Hz; keep explicit for Parquet inputs
 
 # --- Canonical Parquet ----------------------------------------------
-# Every input is first normalized into this cached intermediate dataset.
+# Every input is first normalized into this cached intermediate Parquet file.
 # This is not part of `variants: all` by default, but it can still be benchmarked
 # explicitly via `include_canonical: true` on a core category.
 canonical_parquet:

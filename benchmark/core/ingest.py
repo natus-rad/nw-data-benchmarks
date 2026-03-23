@@ -1,6 +1,6 @@
-"""Ingest any supported input format into a canonical Parquet directory.
+"""Ingest any supported input format into a canonical Parquet file.
 
-The canonical Parquet is a directory of .parquet files with columns:
+The canonical Parquet is a single .parquet file with columns:
   - samplestamp (int64): monotonically increasing sample index
   - ch_<label> (float32): one column per EEG channel
 
@@ -49,8 +49,9 @@ def _row_group_size(sample_freq: float, row_group_minutes: int | None) -> int | 
     return max(1, int(float(sample_freq) * 60 * int(row_group_minutes)))
 
 
-def _canonical_dir(cache_dir: Path, input_path: Path, fmt: str,
-                   sample_freq: float, canonical_cfg: dict) -> Path:
+def _canonical_file(cache_dir: Path, input_path: Path, fmt: str,
+                    sample_freq: float, canonical_cfg: dict,
+                    study_name: str | None = None) -> Path:
     payload = {
         "source": str(Path(input_path)),
         "format": fmt,
@@ -61,26 +62,26 @@ def _canonical_dir(cache_dir: Path, input_path: Path, fmt: str,
         },
     }
     token = _spec_hash(payload)
-    stem = input_path.stem if input_path.is_file() else input_path.name
+    stem = study_name or (input_path.stem if input_path.is_file() else input_path.name)
     safe_stem = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in stem)[:48]
-    return cache_dir / f"{safe_stem}_canonical_{token}"
+    return cache_dir / f"{safe_stem}_canonical_{token}.parquet"
 
 
-def _write_table(table: pa.Table, out_dir: Path, compression: str,
+def _write_table(table: pa.Table, out_file: Path, compression: str,
                  row_group_size: int | None) -> None:
-    out_file = out_dir / "part_00000.parquet"
+    out_file.parent.mkdir(parents=True, exist_ok=True)
     kwargs = {"compression": compression}
     if row_group_size is not None:
         kwargs["row_group_size"] = row_group_size
     pq.write_table(table, str(out_file), **kwargs)
 
 
-def _rewrite_parquet_input(src_path: Path, out_dir: Path, compression: str,
+def _rewrite_parquet_input(src_path: Path, out_file: Path, compression: str,
                            row_group_size: int | None) -> int:
     src_files = list_parquet_files(src_path)
     if not src_files:
         raise ValueError(f"No Parquet files found under {src_path}")
-    out_file = out_dir / "part_00000.parquet"
+    out_file.parent.mkdir(parents=True, exist_ok=True)
     writer = None
     total_rows = 0
     try:
@@ -101,10 +102,11 @@ def _rewrite_parquet_input(src_path: Path, out_dir: Path, compression: str,
 
 def ingest(input_path: Path, cache_dir: Path,
            sample_freq: float | None = None,
-           canonical_cfg: dict | None = None) -> tuple[Path, str, float]:
-    """Ingest any input format into a canonical Parquet directory.
+           canonical_cfg: dict | None = None,
+           study_name: str | None = None) -> tuple[Path, str, float]:
+    """Ingest any input format into a canonical Parquet file.
 
-    Returns (canonical_pq_dir, detected_format, sample_freq).
+    Returns (canonical_pq_file, detected_format, sample_freq).
 
     Canonical Parquet is always materialized into cache, including for
     Parquet input.
@@ -121,19 +123,20 @@ def ingest(input_path: Path, cache_dir: Path,
     elif sample_freq is None:
         sample_freq = _recover_sample_freq(input_path, fmt)
 
-    canonical = _canonical_dir(cache_dir, input_path, fmt, float(sample_freq), canonical_cfg)
-    if canonical.exists() and any(canonical.glob("*.parquet")):
+    canonical = _canonical_file(
+        cache_dir, input_path, fmt, float(sample_freq), canonical_cfg, study_name=study_name
+    )
+    if canonical.exists():
         print(f"  [cached] canonical Parquet: {canonical}")
         return canonical, fmt, float(sample_freq)
 
-    canonical.mkdir(parents=True, exist_ok=True)
     print(f"  [ingest] {fmt} -> canonical Parquet ...")
     compression = str(canonical_cfg.get("compression", "snappy"))
     row_group_size = _row_group_size(float(sample_freq), canonical_cfg.get("row_group_minutes"))
 
     if fmt == "parquet":
         total_rows = _rewrite_parquet_input(input_path, canonical, compression, row_group_size)
-        print(f"  [ingest] wrote {canonical / 'part_00000.parquet'} ({total_rows:,} rows)")
+        print(f"  [ingest] wrote {canonical} ({total_rows:,} rows)")
     elif fmt == "hdf5":
         sample_freq = _ingest_hdf5(input_path, canonical, sample_freq, compression, row_group_size)
     elif fmt == "edf":
@@ -161,7 +164,7 @@ def _recover_sample_freq(input_path: Path, fmt: str) -> float:
     )
 
 
-def _ingest_hdf5(h5_path: Path, out_dir: Path,
+def _ingest_hdf5(h5_path: Path, out_file: Path,
                  sample_freq: float | None, compression: str,
                  row_group_size: int | None) -> float:
     """Read HDF5 and write as canonical Parquet. Returns sample_freq."""
@@ -206,12 +209,12 @@ def _ingest_hdf5(h5_path: Path, out_dir: Path,
     columns = {"samplestamp": pa.array(stamps)}
     columns.update({col: pa.array(arr) for col, arr in ch_data.items()})
     table = pa.table(columns)
-    _write_table(table, out_dir, compression, row_group_size)
-    print(f"  [ingest] wrote {out_dir / 'part_00000.parquet'} ({total_rows:,} rows)")
+    _write_table(table, out_file, compression, row_group_size)
+    print(f"  [ingest] wrote {out_file} ({total_rows:,} rows)")
     return freq
 
 
-def _ingest_edf(edf_path: Path, out_dir: Path,
+def _ingest_edf(edf_path: Path, out_file: Path,
                 sample_freq: float | None, compression: str,
                 row_group_size: int | None) -> float:
     """Read EDF and write as canonical Parquet. Returns sample_freq."""
@@ -231,12 +234,12 @@ def _ingest_edf(edf_path: Path, out_dir: Path,
         columns[f"ch_{lbl}"] = pa.array(data[i].astype(np.float32))
 
     table = pa.table(columns)
-    _write_table(table, out_dir, compression, row_group_size)
-    print(f"  [ingest] wrote {out_dir / 'part_00000.parquet'} ({total:,} rows)")
+    _write_table(table, out_file, compression, row_group_size)
+    print(f"  [ingest] wrote {out_file} ({total:,} rows)")
     return float(freq)
 
 
-def _ingest_erd(erd_dir: Path, out_dir: Path, compression: str,
+def _ingest_erd(erd_dir: Path, out_file: Path, compression: str,
                 row_group_size: int | None) -> float:
     """Read ERD study directory and write as canonical Parquet.
 
@@ -274,7 +277,7 @@ def _ingest_erd(erd_dir: Path, out_dir: Path, compression: str,
         columns[f"ch_{lbl}"] = pa.array(data[i].astype(np.float32))
 
     table = pa.table(columns)
-    _write_table(table, out_dir, compression, row_group_size)
-    print(f"  [ingest] wrote {out_dir / 'part_00000.parquet'} ({total_rows:,} rows)")
+    _write_table(table, out_file, compression, row_group_size)
+    print(f"  [ingest] wrote {out_file} ({total_rows:,} rows)")
     return float(raw.sample_freq)
 
