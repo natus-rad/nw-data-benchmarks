@@ -9,11 +9,15 @@ import sys
 from pathlib import Path
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from benchmark.core.azure_storage import _get_blob_service_client
+try:
+    from benchmark.core.azure_storage import _get_blob_service_client
+except ModuleNotFoundError as exc:
+    if exc.name == "benchmark" and __package__ in (None, ""):
+        raise SystemExit(
+            "Run this CLI as a module from the repository root: "
+            "python -m benchmark.scripts.edf_comparison"
+        ) from exc
+    raise
 
 try:
     import pyedflib
