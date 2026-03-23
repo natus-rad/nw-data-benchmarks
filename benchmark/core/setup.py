@@ -77,9 +77,11 @@ def _setup_parquet_compression_variants(paths: dict, src_dir: Path,
         out_dir = output_base / f"parquet_{label}"
 
         if out_dir.exists() and any(out_dir.glob("*.parquet")):
+            print(f"  [cached] parquet_{label} -> {out_dir}")
             paths[f"parquet_{label}"] = out_dir
             continue
         if codec == "snappy" and not level:
+            print(f"  [cached] parquet_{label} -> {src_dir}")
             paths[f"parquet_{label}"] = src_dir
             continue
 
@@ -136,6 +138,7 @@ def _setup_int32_variants(paths: dict, output_base: Path, name: str) -> None:
             label = f"{mode}_{codec}"
             out_path = output_base / f"parquet_{label}"
             if out_path.exists() and any(out_path.glob("*.parquet")):
+                print(f"  [cached] parquet_{label} -> {out_path}")
                 paths[f"parquet_{label}"] = out_path
                 continue
 
@@ -490,6 +493,8 @@ def _setup_tuned_parquet(paths, output_base, src_files, ch_cols,
                 size_mib = out_file.stat().st_size / (1024 * 1024)
                 n_rg = pq.ParquetFile(str(out_file)).metadata.num_row_groups
                 print(f"  [convert] {key}: {size_mib:.1f} MiB, {n_rg} row groups")
+            else:
+                print(f"  [cached] {key} -> {out_file}")
             paths[key] = out_file
 
 
