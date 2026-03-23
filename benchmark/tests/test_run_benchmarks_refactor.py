@@ -1419,6 +1419,26 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertIs(result, expected)
         mock_read.assert_called_once_with(Path("demo.h5"), ["ch_Fp1"], 10, 11)
 
+    def test_read_target_window_accepts_legacy_hdf5_columnar_alias(self):
+        target = {"reader_kind": "hdf5_columnar", "path": Path("demo.h5")}
+        expected = np.zeros((1, 2), dtype=np.float32)
+
+        with patch.object(benchmarks, "_read_h5_columnar_window", return_value=expected) as mock_read:
+            result = benchmarks._read_target_window(target, SimpleNamespace(), ["ch_Fp1"], 10, 11)
+
+        self.assertIs(result, expected)
+        mock_read.assert_called_once_with(Path("demo.h5"), ["ch_Fp1"], 10, 11)
+
+    def test_read_target_window_accepts_legacy_hdf5_rowgroup_alias(self):
+        target = {"reader_kind": "hdf5_rowgroup", "path": Path("demo.h5")}
+        expected = np.zeros((1, 2), dtype=np.float32)
+
+        with patch.object(benchmarks, "_read_h5_rowgroup_window", return_value=expected) as mock_read:
+            result = benchmarks._read_target_window(target, SimpleNamespace(), ["ch_Fp1"], 10, 11)
+
+        self.assertIs(result, expected)
+        mock_read.assert_called_once_with(Path("demo.h5"), ["ch_Fp1"], 10, 11)
+
     def test_bench_random_access_precomputes_gap_safe_bounds_outside_timed_reads(self):
         stamps = [0, 1, 2, 3, 100, 101, 102, 103]
         info = SimpleNamespace(
@@ -2162,4 +2182,3 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

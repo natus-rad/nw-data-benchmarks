@@ -4,6 +4,7 @@ Standalone EDF comparison script.
 Tests random access, whole study read, subset channel read, and re-montage performance.
 Requires: pyedflib, numpy
 """
+from collections import Counter
 import time
 import sys
 from pathlib import Path
@@ -46,7 +47,6 @@ def load_edf_metadata(edf_path):
     eeg_labels = []
 
     # Find the most common sample count (should be the regular EEG channels)
-    from collections import Counter
     sample_counts = Counter(samples_per_channel)
     most_common_count = sample_counts.most_common(1)[0][0]
 

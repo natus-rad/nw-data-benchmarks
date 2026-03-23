@@ -7,6 +7,7 @@ from benchmark.scripts.generate_benchmark_report import (
     block_sort_key,
     generate_report,
     latest_results_file,
+    render_html,
     render_report,
     validate_results,
 )
@@ -124,6 +125,20 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
 
     def test_block_sort_key_orders_seconds_and_fractional_minutes(self) -> None:
         self.assertEqual(sorted(["5m", "30s", "1.5m"], key=block_sort_key), ["30s", "1.5m", "5m"])
+
+    def test_render_html_links_toc_entries_to_heading_ids(self) -> None:
+        html = render_html(
+            "# Report\n\n"
+            "_Generated from demo_\n\n"
+            "## Summary\n\n"
+            "### Random Access\n\n"
+            "Text\n"
+        )
+
+        self.assertIn('<h2 id="summary">Summary</h2>', html)
+        self.assertIn('<h3 id="random-access">Random Access</h3>', html)
+        self.assertIn('<a href="#summary">Summary</a>', html)
+        self.assertIn('<a href="#random-access" class="sub">Random Access</a>', html)
 
     def test_render_report_includes_separate_k_section(self) -> None:
         payload = {

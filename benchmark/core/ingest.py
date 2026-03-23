@@ -88,15 +88,12 @@ def _canonical_file(cache_dir: Path, input_path: Path, fmt: str,
 def _write_table(table: pa.Table, out_file: Path, compression: str,
                  row_group_size: int | None) -> None:
     out_file.parent.mkdir(parents=True, exist_ok=True)
-    if row_group_size is not None:
-        pq.write_table(
-            table,
-            str(out_file),
-            compression=compression,
-            row_group_size=row_group_size,
-        )
-        return
-    pq.write_table(table, str(out_file), compression=compression)
+    pq.write_table(
+        table,
+        str(out_file),
+        compression=compression,
+        row_group_size=row_group_size,
+    )
 
 
 def _hdf5_batch_rows(total_rows: int, row_group_size: int | None,
@@ -427,4 +424,3 @@ def _ingest_erd(erd_dir: Path, out_file: Path, compression: str,
     _write_table(table, out_file, compression, row_group_size)
     print(f"  [ingest] wrote {out_file} ({total_rows:,} rows)")
     return float(raw.sample_freq)
-

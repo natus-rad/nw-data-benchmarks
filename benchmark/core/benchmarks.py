@@ -53,6 +53,13 @@ def _target_context(target: dict):
     return nullcontext(None)
 
 
+def _normalize_reader_kind(kind: str) -> str:
+    return {
+        "hdf5_columnar": "h5_columnar",
+        "hdf5_rowgroup": "h5_rowgroup",
+    }.get(kind, kind)
+
+
 def _timed_call(fn, reps: int, precision: int = 6):
     timing = _timed(fn, reps)
     median_seconds, result = timing
@@ -81,15 +88,15 @@ def _single_timing_fields(seconds: float, precision: int = 6,
 def _read_target_window(target: dict, info, columns: list[str],
                         start_stamp: int, end_stamp: int,
                         reader_state=None) -> np.ndarray:
-    kind = target["reader_kind"]
+    kind = _normalize_reader_kind(target["reader_kind"])
     path = target["path"]
     if kind == "parquet":
         return _read_parquet_window(path, columns, start_stamp, end_stamp)
     if kind == "tuned_parquet":
         return _read_tuned_pq(path, columns, start_stamp, end_stamp)
-    if kind in {"h5_columnar", "hdf5_columnar"}:
+    if kind == "h5_columnar":
         return _read_h5_columnar_window(path, columns, start_stamp, end_stamp)
-    if kind in {"h5_rowgroup", "hdf5_rowgroup"}:
+    if kind == "h5_rowgroup":
         return _read_h5_rowgroup_window(path, columns, start_stamp, end_stamp)
     if kind == "hdf5_input":
         return _read_h5_input_window(path, columns, start_stamp, end_stamp)
@@ -331,7 +338,7 @@ def _tuned_comparison_variants(paths: dict, cfg: dict, sample_freq: float) -> li
                 "key": h5_key,
                 "format": f"hdf5_{hdf5_compression}",
                 "path": paths[h5_key],
-                "reader_kind": "hdf5_columnar",
+                "reader_kind": "h5_columnar",
                 "result_fields": {"block_size": label, "variant": h5_key},
             })
     return variants
@@ -455,6 +462,7 @@ def bench_remontage(info, paths: dict, cfg: dict) -> list[dict]:
     for target in targets:
         with _target_context(target) as reader_state:
             start_bound, end_bound = _read_bounds_for_target(target, row_bounds, stamp_bounds)
+
             def run(rs=reader_state, tgt=target):
                 t_read_start = time.perf_counter()
                 matrix = _read_target_window(tgt, info, info.channel_columns, start_bound, end_bound, rs)
