@@ -17,7 +17,7 @@ class _StrEnum(str, Enum):
 
 # ── Benchmark category IDs ────────────────────────────────────────
 # These match the ``cat_id`` values in ``BENCHMARKS`` (benchmarks.py)
-# and the keys used in result JSON / config ``benchmarks:`` lists.
+# and the keys used in result JSON / structured config sections.
 
 class Category(_StrEnum):
     """Benchmark category identifiers."""

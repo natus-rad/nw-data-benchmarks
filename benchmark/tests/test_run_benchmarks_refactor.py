@@ -70,7 +70,11 @@ class BenchmarkRefactorTests(unittest.TestCase):
     def test_runner_dry_run_accepts_input_study(self):
         cfg = {
             "studies": [{"name": "demo", "input": "demo.edf", "sample_freq": 256}],
-            "benchmarks": ["random_access"],
+            "benchmarks": {
+                "core": {
+                    "random_access": {"enabled": True},
+                }
+            },
         }
         args = argparse.Namespace(
             config="benchmark/config/default.yaml",
@@ -180,7 +184,11 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 "remote_parquet_url": "parquet/legacy/",
                 "sample_freq": 256,
             }],
-            "benchmarks": ["random_access"],
+            "benchmarks": {
+                "core": {
+                    "random_access": {"enabled": True},
+                }
+            },
         }
         args = argparse.Namespace(
             config="benchmark/config/default.yaml",
@@ -193,20 +201,26 @@ class BenchmarkRefactorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Legacy study configs are no longer supported"):
             run_benchmarks.run_benchmarks(cfg, args)
 
-    def test_selected_benchmarks_come_only_from_benchmarks_list(self):
+    def test_selected_benchmarks_follow_nested_enabled_flags(self):
         cfg = {
-            "benchmarks": ["random_access"],
-            "parquet_investigations": {
-                "compression": {"enabled": True},
-                "remote_query": {"enabled": True},
+            "benchmarks": {
+                "core": {
+                    "random_access": {"enabled": True},
+                },
+                "parquet_investigations": {
+                    "compression": {"enabled": True},
+                    "remote_query": {"enabled": False},
+                },
+                "other": {
+                    "tuned_comparison": {"enabled": True, "block_sizes_minutes": [5, 10]},
+                },
             },
-            "tuned_comparison": {"block_sizes_minutes": [5, 10]},
         }
         args = argparse.Namespace(categories=None)
 
         selected = run_benchmarks._selected_benchmarks(cfg, args)
 
-        self.assertEqual([cat_id for cat_id, _, _ in selected], ["random_access"])
+        self.assertEqual([cat_id for cat_id, _, _ in selected], ["random_access", "compression", "tuned_comparison"])
 
     def test_validate_config_requires_variant_ids(self):
         cfg = normalize_config({
@@ -458,7 +472,11 @@ class BenchmarkRefactorTests(unittest.TestCase):
     def test_runner_rejects_no_variant_direct_source_erd_core_runs(self):
         cfg = {
             "studies": [{"name": "demo", "input": "demo.erd"}],
-            "benchmarks": ["random_access"],
+            "benchmarks": {
+                "core": {
+                    "random_access": {"enabled": True},
+                }
+            },
             "variants": [],
         }
         args = argparse.Namespace(
@@ -532,7 +550,11 @@ class BenchmarkRefactorTests(unittest.TestCase):
     def test_runner_wires_baseline_input_path_separately_from_canonical_parquet(self):
         cfg = {
             "studies": [{"name": "demo", "input": "demo-source.parquet", "sample_freq": 256}],
-            "benchmarks": ["baseline_comparison"],
+            "benchmarks": {
+                "other": {
+                    "baseline_comparison": {"enabled": True},
+                }
+            },
             "variants": [],
         }
         args = argparse.Namespace(
@@ -598,21 +620,37 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertEqual(get_tuned_hdf5_compression(cfg), "lz4")
         self.assertEqual(get_tuned_chunk_sec(cfg), 123)
 
-    def test_normalize_config_tolerates_scalar_core_leaf_values(self):
-        cfg = normalize_config({
-            "benchmarks": {
-                "core": {
-                    "random_access": True,
-                    "channel_subset": False,
-                    "window_scaling": 123,
+    def test_normalize_config_rejects_scalar_core_leaf_values(self):
+        with self.assertRaisesRegex(ValueError, "benchmarks.core.random_access"):
+            normalize_config({
+                "benchmarks": {
+                    "core": {
+                        "random_access": True,
+                    }
                 }
-            }
-        })
+            })
 
-        self.assertEqual(cfg["benchmarks"]["core"]["random_access"]["read_positions"], [0.0, 0.5, 0.75, 0.95])
-        self.assertEqual(cfg["benchmarks"]["core"]["channel_subset"]["channel_subsets"], [4, 10])
-        self.assertEqual(cfg["benchmarks"]["core"]["window_scaling"]["window_sizes"], [10, 30, 60, 300, 900, 1800, 3600])
-        self.assertFalse(cfg["benchmarks"]["core"]["random_access"]["enabled"])
+        with self.assertRaisesRegex(ValueError, "benchmarks.core.channel_subset"):
+            normalize_config({
+                "benchmarks": {
+                    "core": {
+                        "channel_subset": False,
+                    }
+                }
+            })
+
+        with self.assertRaisesRegex(ValueError, "benchmarks.core.window_scaling"):
+            normalize_config({
+                "benchmarks": {
+                    "core": {
+                        "window_scaling": 123,
+                    }
+                }
+            })
+
+    def test_normalize_config_rejects_list_style_benchmarks(self):
+        with self.assertRaisesRegex(ValueError, "list-style benchmark selection"):
+            normalize_config({"benchmarks": ["random_access"]})
 
     def test_core_targets_can_append_canonical_for_root_variants(self):
         cfg = normalize_config({
@@ -1797,7 +1835,11 @@ class BenchmarkRefactorTests(unittest.TestCase):
             cfg = {
                 "cache_dir": str(tmp_path / "cache"),
                 "studies": [{"name": "demo", "input": "demo.parquet", "sample_freq": 256}],
-                "benchmarks": ["remote_query"],
+                "benchmarks": {
+                    "parquet_investigations": {
+                        "remote_query": {"enabled": True},
+                    }
+                },
                 "variants": [],
             }
             args = argparse.Namespace(
@@ -1868,7 +1910,11 @@ class BenchmarkRefactorTests(unittest.TestCase):
             cfg = {
                 "cache_dir": str(tmp_path / "cache"),
                 "studies": [{"name": "demo", "input": "demo.edf", "sample_freq": 256}],
-                "benchmarks": ["random_access"],
+                "benchmarks": {
+                    "core": {
+                        "random_access": {"enabled": True},
+                    }
+                },
             }
             args = argparse.Namespace(
                 config="benchmark/config/default.yaml",
@@ -1916,7 +1962,11 @@ class BenchmarkRefactorTests(unittest.TestCase):
             cfg = {
                 "cache_dir": str(tmp_path / "cache"),
                 "studies": [{"name": "demo", "input": "demo.edf", "sample_freq": 256}],
-                "benchmarks": ["random_access"],
+                "benchmarks": {
+                    "core": {
+                        "random_access": {"enabled": True},
+                    }
+                },
             }
             args = argparse.Namespace(
                 config="benchmark/config/default.yaml",

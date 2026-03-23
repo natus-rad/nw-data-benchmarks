@@ -33,14 +33,17 @@ def _dict_or_empty(value) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _enabled_from_legacy(categories: list[str], category: str) -> bool:
-    return category in categories
+def _require_mapping(value, path: str) -> dict:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    raise ValueError(f"Config field '{path}' must be a mapping/object.")
 
 
-def _normalize_core_leaf(raw_leaf, enabled: bool, selector, extras: dict | None = None) -> dict:
-    leaf = _dict_or_empty(raw_leaf)
+def _normalize_core_leaf(leaf: dict, selector, extras: dict | None = None) -> dict:
     normalized = {
-        "enabled": bool(leaf.get("enabled", enabled)),
+        "enabled": bool(leaf.get("enabled", False)),
         "variants": leaf.get("variants", selector),
         "include_canonical": bool(leaf.get("include_canonical", False)),
     }
@@ -52,89 +55,67 @@ def _normalize_core_leaf(raw_leaf, enabled: bool, selector, extras: dict | None 
 
 def normalize_config(cfg: dict | None) -> dict:
     cfg = deepcopy(cfg or {})
-    legacy_mode = isinstance(cfg.get("benchmarks"), list)
-    legacy_categories = cfg.get("benchmarks") if isinstance(cfg.get("benchmarks"), list) else []
-    raw_benchmarks = _dict_or_empty(cfg.get("benchmarks"))
-    raw_common = _dict_or_empty(raw_benchmarks.get("common"))
-    raw_core = _dict_or_empty(raw_benchmarks.get("core"))
-    raw_parquet = _dict_or_empty(raw_benchmarks.get("parquet_investigations"))
-    raw_other = _dict_or_empty(raw_benchmarks.get("other"))
-    raw_random_access = _dict_or_empty(raw_core.get(Category.RANDOM_ACCESS))
-    raw_channel_subset = _dict_or_empty(raw_core.get(Category.CHANNEL_SUBSET))
-    raw_window_scaling = _dict_or_empty(raw_core.get(Category.WINDOW_SCALING))
-    legacy_parquet = _dict_or_empty(cfg.get("parquet_investigations"))
-    legacy_tuned = _dict_or_empty(cfg.get("tuned_comparison"))
-    legacy_baseline = _dict_or_empty(cfg.get("baseline_comparison"))
+    if isinstance(cfg.get("benchmarks"), list):
+        raise ValueError(
+            "Config field 'benchmarks' must be a mapping/object; list-style benchmark selection is no longer supported. "
+            "Use benchmarks.common/core/parquet_investigations/other with explicit enabled flags."
+        )
+
+    raw_benchmarks = _require_mapping(cfg.get("benchmarks"), "benchmarks")
+    raw_common = _require_mapping(raw_benchmarks.get("common"), "benchmarks.common")
+    raw_core = _require_mapping(raw_benchmarks.get("core"), "benchmarks.core")
+    raw_parquet = _require_mapping(raw_benchmarks.get("parquet_investigations"), "benchmarks.parquet_investigations")
+    raw_other = _require_mapping(raw_benchmarks.get("other"), "benchmarks.other")
+    raw_random_access = _require_mapping(raw_core.get(Category.RANDOM_ACCESS), f"benchmarks.core.{Category.RANDOM_ACCESS}")
+    raw_channel_subset = _require_mapping(raw_core.get(Category.CHANNEL_SUBSET), f"benchmarks.core.{Category.CHANNEL_SUBSET}")
+    raw_remontage = _require_mapping(raw_core.get(Category.REMONTAGE), f"benchmarks.core.{Category.REMONTAGE}")
+    raw_filter_pipeline = _require_mapping(raw_core.get(Category.FILTER_PIPELINE), f"benchmarks.core.{Category.FILTER_PIPELINE}")
+    raw_window_scaling = _require_mapping(raw_core.get(Category.WINDOW_SCALING), f"benchmarks.core.{Category.WINDOW_SCALING}")
+    raw_tuned = _require_mapping(raw_other.get(Category.TUNED_COMPARISON), f"benchmarks.other.{Category.TUNED_COMPARISON}")
+    raw_baseline = _require_mapping(raw_other.get(Category.BASELINE_COMPARISON), f"benchmarks.other.{Category.BASELINE_COMPARISON}")
 
     common = {
-        "repetitions": int(raw_common.get("repetitions", cfg.get("repetitions", 3))),
-        "default_window": int(raw_common.get("default_window", cfg.get("default_window", 60))),
+        "repetitions": int(raw_common.get("repetitions", 3)),
+        "default_window": int(raw_common.get("default_window", 60)),
     }
     core = {
         Category.RANDOM_ACCESS: _normalize_core_leaf(
             raw_random_access,
-            _enabled_from_legacy(legacy_categories, Category.RANDOM_ACCESS),
             "all",
-            {"read_positions": _list_or_empty(raw_random_access.get("read_positions", cfg.get("read_positions", [0.0, 0.5, 0.75, 0.95])))}
+            {"read_positions": _list_or_empty(raw_random_access.get("read_positions", [0.0, 0.5, 0.75, 0.95]))}
         ),
         Category.CHANNEL_SUBSET: _normalize_core_leaf(
             raw_channel_subset,
-            _enabled_from_legacy(legacy_categories, Category.CHANNEL_SUBSET),
             "all",
-            {"channel_subsets": _list_or_empty(raw_channel_subset.get("channel_subsets", cfg.get("channel_subsets", [4, 10])))}
+            {"channel_subsets": _list_or_empty(raw_channel_subset.get("channel_subsets", [4, 10]))}
         ),
         Category.REMONTAGE: _normalize_core_leaf(
-            raw_core.get(Category.REMONTAGE),
-            _enabled_from_legacy(legacy_categories, Category.REMONTAGE),
+            raw_remontage,
             "all",
         ),
         Category.FILTER_PIPELINE: _normalize_core_leaf(
-            raw_core.get(Category.FILTER_PIPELINE),
-            _enabled_from_legacy(legacy_categories, Category.FILTER_PIPELINE),
+            raw_filter_pipeline,
             "all",
         ),
         Category.WINDOW_SCALING: _normalize_core_leaf(
             raw_window_scaling,
-            _enabled_from_legacy(legacy_categories, Category.WINDOW_SCALING),
             "all",
-            {"window_sizes": _list_or_empty(raw_window_scaling.get("window_sizes", cfg.get("window_sizes", [10, 30, 60, 300, 900, 1800, 3600])))}
+            {"window_sizes": _list_or_empty(raw_window_scaling.get("window_sizes", [10, 30, 60, 300, 900, 1800, 3600]))}
         ),
     }
     parquet_investigations = {
-        Category.COMPRESSION: {
-            **_dict_or_empty(legacy_parquet.get(Category.COMPRESSION)),
-            **_dict_or_empty(raw_parquet.get(Category.COMPRESSION)),
-        },
-        Category.PRECISION_LOSS: {
-            **_dict_or_empty(legacy_parquet.get(Category.PRECISION_LOSS)),
-            **_dict_or_empty(raw_parquet.get(Category.PRECISION_LOSS)),
-        },
-        Category.INT32_STORAGE: {
-            **_dict_or_empty(legacy_parquet.get(Category.INT32_STORAGE)),
-            **_dict_or_empty(raw_parquet.get(Category.INT32_STORAGE)),
-        },
-        Category.REMOTE_QUERY: {
-            **_dict_or_empty(legacy_parquet.get(Category.REMOTE_QUERY)),
-            **_dict_or_empty(raw_parquet.get(Category.REMOTE_QUERY)),
-        },
+        Category.COMPRESSION: _require_mapping(raw_parquet.get(Category.COMPRESSION), f"benchmarks.parquet_investigations.{Category.COMPRESSION}"),
+        Category.PRECISION_LOSS: _require_mapping(raw_parquet.get(Category.PRECISION_LOSS), f"benchmarks.parquet_investigations.{Category.PRECISION_LOSS}"),
+        Category.INT32_STORAGE: _require_mapping(raw_parquet.get(Category.INT32_STORAGE), f"benchmarks.parquet_investigations.{Category.INT32_STORAGE}"),
+        Category.REMOTE_QUERY: _require_mapping(raw_parquet.get(Category.REMOTE_QUERY), f"benchmarks.parquet_investigations.{Category.REMOTE_QUERY}"),
     }
     for category in (Category.COMPRESSION, Category.PRECISION_LOSS, Category.INT32_STORAGE, Category.REMOTE_QUERY):
-        parquet_investigations[category]["enabled"] = bool(
-            parquet_investigations[category].get("enabled", _enabled_from_legacy(legacy_categories, category))
-        )
+        parquet_investigations[category]["enabled"] = bool(parquet_investigations[category].get("enabled", False))
 
-    tuned = {**legacy_tuned, **_dict_or_empty(raw_other.get(Category.TUNED_COMPARISON))}
-    tuned["enabled"] = bool(tuned.get("enabled", _enabled_from_legacy(legacy_categories, Category.TUNED_COMPARISON)))
-    baseline = {**legacy_baseline, **_dict_or_empty(raw_other.get(Category.BASELINE_COMPARISON))}
-    baseline["enabled"] = bool(baseline.get("enabled", _enabled_from_legacy(legacy_categories, Category.BASELINE_COMPARISON)))
-
-    if legacy_mode:
-        for category in core:
-            core[category]["enabled"] = _enabled_from_legacy(legacy_categories, category)
-        for category in parquet_investigations:
-            parquet_investigations[category]["enabled"] = _enabled_from_legacy(legacy_categories, category)
-        tuned["enabled"] = _enabled_from_legacy(legacy_categories, Category.TUNED_COMPARISON)
-        baseline["enabled"] = _enabled_from_legacy(legacy_categories, Category.BASELINE_COMPARISON)
+    tuned = dict(raw_tuned)
+    tuned["enabled"] = bool(tuned.get("enabled", False))
+    baseline = dict(raw_baseline)
+    baseline["enabled"] = bool(baseline.get("enabled", False))
 
     canonical_cfg = _dict_or_empty(cfg.get("canonical_parquet"))
     cfg["canonical_parquet"] = {
@@ -150,16 +131,6 @@ def normalize_config(cfg: dict | None) -> dict:
             Category.BASELINE_COMPARISON: baseline,
         },
     }
-
-    # Transitional mirrors for call sites that still read legacy top-level keys.
-    cfg["repetitions"] = common["repetitions"]
-    cfg["default_window"] = common["default_window"]
-    cfg["read_positions"] = list(core[Category.RANDOM_ACCESS].get("read_positions", []))
-    cfg["channel_subsets"] = list(core[Category.CHANNEL_SUBSET].get("channel_subsets", []))
-    cfg["window_sizes"] = list(core[Category.WINDOW_SCALING].get("window_sizes", []))
-    cfg["parquet_investigations"] = parquet_investigations
-    cfg["tuned_comparison"] = tuned
-    cfg["baseline_comparison"] = baseline
     return cfg
 
 
