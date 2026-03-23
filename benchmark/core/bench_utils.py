@@ -10,8 +10,12 @@ from typing import Any
 import numpy as np
 
 from .config_helpers import (
+    get_channel_subsets,
     get_parquet_compression_variants,
+    get_read_positions,
+    get_repetitions,
     get_tuned_parquet_codecs,
+    get_window_sizes,
     is_investigation_enabled,
 )
 
@@ -186,18 +190,21 @@ def _chunk_ranges(start_stamp: int, end_stamp: int, chunk_stamps: int):
 def _estimate_runs(cfg: dict, selected: list) -> int:
     """Rough estimate of total benchmark invocations."""
     n = 0
-    reps = cfg.get("repetitions", 3)
+    reps = get_repetitions(cfg)
+    read_positions = get_read_positions(cfg)
+    channel_subsets = get_channel_subsets(cfg)
+    window_sizes = get_window_sizes(cfg)
     for cat_id, _, _ in selected:
         if cat_id == "random_access":
-            n += len(cfg.get("read_positions", [0, 0.5, 0.75, 0.95])) * 2 * reps
+            n += len(read_positions) * 2 * reps
         elif cat_id == "channel_subset":
-            n += (len(cfg.get("channel_subsets", [4, 10])) + 1) * 2 * reps
+            n += (len(channel_subsets) + 1) * 2 * reps
         elif cat_id == "remontage":
             n += 2 * reps
         elif cat_id == "filter_pipeline":
             n += 1
         elif cat_id == "window_scaling":
-            n += len(cfg.get("window_sizes", [])) * 2 * reps
+            n += len(window_sizes) * 2 * reps
         elif cat_id == "compression":
             if is_investigation_enabled(cfg, "compression"):
                 n += len(get_parquet_compression_variants(cfg)) * reps
@@ -206,9 +213,9 @@ def _estimate_runs(cfg: dict, selected: list) -> int:
                 n += 1
         elif cat_id == "tuned_comparison":
             tuned_variants = len(get_tuned_parquet_codecs(cfg)) + 1  # one HDF5 variant
-            n += tuned_variants * ((2 + len(cfg.get("window_sizes", []))) * reps + 1)
+            n += tuned_variants * ((2 + len(window_sizes)) * reps + 1)
         elif cat_id == "baseline_comparison":
-            n += ((2 + len(cfg.get("window_sizes", []))) * reps + 1)
+            n += ((2 + len(window_sizes)) * reps + 1)
     return n
 
 

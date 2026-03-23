@@ -88,10 +88,15 @@ def _canonical_file(cache_dir: Path, input_path: Path, fmt: str,
 def _write_table(table: pa.Table, out_file: Path, compression: str,
                  row_group_size: int | None) -> None:
     out_file.parent.mkdir(parents=True, exist_ok=True)
-    kwargs = {"compression": compression}
     if row_group_size is not None:
-        kwargs["row_group_size"] = row_group_size
-    pq.write_table(table, str(out_file), **kwargs)
+        pq.write_table(
+            table,
+            str(out_file),
+            compression=compression,
+            row_group_size=row_group_size,
+        )
+        return
+    pq.write_table(table, str(out_file), compression=compression)
 
 
 def _hdf5_batch_rows(total_rows: int, row_group_size: int | None,

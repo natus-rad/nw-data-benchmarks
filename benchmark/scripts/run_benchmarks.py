@@ -16,14 +16,19 @@ try:
     from benchmark.core.benchmarks import BENCHMARKS
     from benchmark.core.config_helpers import (
         get_canonical_parquet_cfg,
+        get_channel_subsets,
+        get_default_window,
         get_parquet_compression_variants,
+        get_read_positions,
         get_remote_query_cfg,
+        get_repetitions,
         normalize_config,
         selected_categories,
         get_tuned_block_sizes_minutes,
         get_tuned_chunk_sec,
         get_tuned_hdf5_compression,
         get_tuned_parquet_codecs,
+        get_window_sizes,
         is_investigation_enabled,
         tuned_parquet_key,
         validate_config,
@@ -446,8 +451,11 @@ def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str
             f"with chunk_sec={get_tuned_chunk_sec(cfg)}"
         )
 
-    print(f"\nWindow sizes: {cfg.get('window_sizes', [])}")
-    print(f"Repetitions: {cfg.get('repetitions', 3)}")
+    print(f"\nWindow sizes: {get_window_sizes(cfg)}")
+    print(f"Repetitions: {get_repetitions(cfg)}")
+    print(f"Default window: {get_default_window(cfg)}")
+    print(f"Read positions: {get_read_positions(cfg)}")
+    print(f"Channel subsets: {get_channel_subsets(cfg)}")
     print(f"Canonical Parquet: {get_canonical_parquet_cfg(cfg)}")
     report_mode = "skip (--no-report)" if getattr(args, "no_report", False) else "auto-generate Markdown + HTML report"
     print(f"Report: {report_mode}")

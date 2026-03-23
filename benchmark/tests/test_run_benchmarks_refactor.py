@@ -106,8 +106,11 @@ class BenchmarkRefactorTests(unittest.TestCase):
                     {"id": "h5_col", "format": "hdf5", "layout": "columnar", "chunk_minutes": 5, "dtype": "float32", "compression": "lz4"},
                 ],
                 "benchmarks": {
+                    "common": {"repetitions": 2, "default_window": 45},
                     "core": {
-                        "random_access": {"enabled": True, "variants": "all"},
+                        "random_access": {"enabled": True, "variants": "all", "read_positions": [0.5]},
+                        "channel_subset": {"channel_subsets": [3]},
+                        "window_scaling": {"window_sizes": [15, 45]},
                     },
                     "parquet_investigations": {
                         "compression": {"enabled": True, "variants": [{"codec": "snappy"}, {"codec": "lz4"}]},
@@ -174,6 +177,12 @@ class BenchmarkRefactorTests(unittest.TestCase):
             self.assertIn("[cached] tuned_hdf5: tuned_h5_5m ->", dry_run)
             self.assertIn("[info] precision_loss reuses the default Parquet artifact; no extra cache artifacts", dry_run)
             self.assertIn("[info] baseline_comparison reuses the resolved study input artifact; no extra cache artifacts", dry_run)
+            self.assertIn("Window sizes: [15, 45]", dry_run)
+            self.assertIn("Repetitions: 2", dry_run)
+            self.assertIn("Default window: 45", dry_run)
+            self.assertIn("Read positions: [0.5]", dry_run)
+            self.assertIn("Channel subsets: [3]", dry_run)
+            self.assertIn("Total benchmark runs: ~45", dry_run)
             self.assertIn("summary: cached=4 would-create=9 reuses-canonical=1 unknown=0", dry_run)
 
     def test_runner_rejects_legacy_source_study_configs(self):
