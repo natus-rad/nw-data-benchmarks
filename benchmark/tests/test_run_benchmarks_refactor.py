@@ -24,7 +24,7 @@ from benchmark.core.config_helpers import (
     normalize_config,
     validate_config,
 )
-from benchmark.core.ingest import _canonical_file, _iter_hdf5_tables, ingest
+from benchmark.core.ingest import _canonical_file, _ingest_edf, _iter_edf_tables, _iter_hdf5_tables, ingest
 from benchmark.core.study_info import StudyInfo
 from benchmark.core.variants import generate_variants
 from benchmark.core.remote import bench_remote_query
@@ -348,6 +348,62 @@ class BenchmarkRefactorTests(unittest.TestCase):
             self.assertEqual(tables[0].column_names, ["samplestamp", "ch_C3", "ch_Fp1"])
             self.assertEqual(tables[1]["samplestamp"].to_pylist(), [22, 23])
             self.assertEqual(tables[-1]["ch_Fp1"].to_pylist(), [0.5])
+
+    def test_iter_edf_tables_chunks_reader_windows(self):
+        class FakeEdf:
+            total_samples = 5
+            sample_frequency = 1.0
+            signal_labels = ["Fp1", "C3"]
+
+            def __init__(self):
+                self.calls = []
+
+            def read_window(self, start_sample, n_samples, channel_indices=None):
+                self.calls.append((start_sample, n_samples, channel_indices))
+                base = np.arange(start_sample, start_sample + n_samples, dtype=np.float32)
+                return np.vstack([base, base + 100.0])
+
+        edf = FakeEdf()
+        tables = list(_iter_edf_tables(edf, row_group_size=2))
+
+        self.assertEqual(edf.calls, [(0, 2, None), (2, 2, None), (4, 1, None)])
+        self.assertEqual([table.num_rows for table in tables], [2, 2, 1])
+        self.assertEqual(tables[0].column_names, ["samplestamp", "ch_Fp1", "ch_C3"])
+        self.assertEqual(tables[1]["samplestamp"].to_pylist(), [2, 3])
+        self.assertEqual(tables[-1]["ch_C3"].to_pylist(), [104.0])
+
+    def test_ingest_edf_streams_without_read_all_channels(self):
+        class FakeEdfReader:
+            def __init__(self, _path):
+                self.total_samples = 5
+                self.signal_labels = ["Fp1", "C3"]
+                self.sample_frequency = 1.0
+                self.calls = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def read_window(self, start_sample, n_samples, channel_indices=None):
+                self.calls.append((start_sample, n_samples, channel_indices))
+                base = np.arange(start_sample, start_sample + n_samples, dtype=np.float32)
+                return np.vstack([base, base + 10.0])
+
+            def read_all_channels(self):
+                raise AssertionError("read_all_channels should not be used")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            out_file = tmp_path / "canonical.parquet"
+            fake_reader = FakeEdfReader(Path("demo.edf"))
+            with patch("benchmark.core.readers.EdfFileReader", return_value=fake_reader):
+                sample_freq = _ingest_edf(Path("demo.edf"), out_file, None, "snappy", row_group_size=2)
+
+            self.assertEqual(sample_freq, 1.0)
+            self.assertEqual(fake_reader.calls, [(0, 2, None), (2, 2, None), (4, 1, None)])
+            self.assertEqual(pq.read_schema(out_file).names, ["samplestamp", "ch_Fp1", "ch_C3"])
 
     def test_runner_rejects_no_variant_direct_source_erd_core_runs(self):
         cfg = {

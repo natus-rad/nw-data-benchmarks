@@ -90,6 +90,45 @@ def _hdf5_batch_rows(total_rows: int, row_group_size: int | None,
     return max(1, total_rows)
 
 
+def _write_streamed_tables(tables, out_file: Path, compression: str,
+                           row_group_size: int | None) -> int:
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    target_rows = int(row_group_size) if row_group_size and int(row_group_size) > 0 else None
+    writer = None
+    pending: list[pa.Table] = []
+    pending_rows = 0
+    total_rows = 0
+    try:
+        for table in tables:
+            if writer is None:
+                writer = pq.ParquetWriter(str(out_file), table.schema, compression=compression)
+            total_rows += table.num_rows
+            if target_rows is None:
+                writer.write_table(table)
+                continue
+
+            start = 0
+            while start < table.num_rows:
+                remaining = target_rows - pending_rows
+                length = min(remaining, table.num_rows - start)
+                pending.append(table.slice(start, length))
+                pending_rows += length
+                start += length
+                if pending_rows >= target_rows:
+                    merged = pa.concat_tables(pending)
+                    writer.write_table(merged, row_group_size=merged.num_rows)
+                    pending = []
+                    pending_rows = 0
+
+        if writer is not None and pending_rows > 0:
+            merged = pa.concat_tables(pending)
+            writer.write_table(merged, row_group_size=merged.num_rows)
+    finally:
+        if writer is not None:
+            writer.close()
+    return total_rows
+
+
 def _hdf5_stamp_source(hf):
     for name in ("samplestamp", "timestamps", "time", "sample_index"):
         if name in hf:
@@ -149,6 +188,30 @@ def _iter_hdf5_tables(hf, row_group_size: int | None):
     for start in range(0, total_rows, batch_rows):
         end = min(start + batch_rows, total_rows)
         yield pa.table(_column_arrays(start, end), schema=schema)
+
+
+def _edf_batch_rows(total_rows: int, sample_freq: float,
+                    row_group_size: int | None) -> int:
+    default_chunk_rows = max(int(np.ceil(float(sample_freq))) * 30, 1)
+    chunk_rows = default_chunk_rows if row_group_size is None else min(int(row_group_size), default_chunk_rows)
+    return max(1, min(total_rows, chunk_rows))
+
+
+def _iter_edf_tables(edf, row_group_size: int | None):
+    total_rows = int(edf.total_samples)
+    labels = list(edf.signal_labels)
+    schema = pa.schema([
+        pa.field("samplestamp", pa.int64()),
+        *[pa.field(f"ch_{lbl}", pa.float32()) for lbl in labels],
+    ])
+    batch_rows = _edf_batch_rows(total_rows, float(edf.sample_frequency), row_group_size)
+    for start in range(0, total_rows, batch_rows):
+        n_rows = min(batch_rows, total_rows - start)
+        matrix = edf.read_window(start, n_rows)
+        columns = {"samplestamp": pa.array(np.arange(start, start + n_rows, dtype=np.int64))}
+        for idx, label in enumerate(labels):
+            columns[f"ch_{label}"] = pa.array(np.asarray(matrix[idx], dtype=np.float32))
+        yield pa.table(columns, schema=schema)
 
 
 def _rewrite_parquet_input(src_path: Path, out_file: Path, compression: str,
@@ -253,18 +316,7 @@ def _ingest_hdf5(h5_path: Path, out_file: Path,
                 "pass sample_freq in config"
             )
 
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        writer = None
-        total_rows = 0
-        try:
-            for table in _iter_hdf5_tables(hf, row_group_size):
-                if writer is None:
-                    writer = pq.ParquetWriter(str(out_file), table.schema, compression=compression)
-                total_rows += table.num_rows
-                writer.write_table(table, row_group_size=row_group_size)
-        finally:
-            if writer is not None:
-                writer.close()
+        total_rows = _write_streamed_tables(_iter_hdf5_tables(hf, row_group_size), out_file, compression, row_group_size)
 
     print(f"  [ingest] wrote {out_file} ({total_rows:,} rows)")
     return freq
@@ -277,20 +329,9 @@ def _ingest_edf(edf_path: Path, out_file: Path,
     from .readers import EdfFileReader
 
     with EdfFileReader(edf_path) as edf:
-        total = edf.total_samples
         freq = sample_freq or edf.sample_frequency
-        labels = edf.signal_labels
+        total = _write_streamed_tables(_iter_edf_tables(edf, row_group_size), out_file, compression, row_group_size)
 
-        # Read all data (physical values in µV via EdfFileReader.read_all_channels)
-        data = edf.read_all_channels()  # shape: (n_channels, total)
-
-    stamps = np.arange(total, dtype=np.int64)
-    columns = {"samplestamp": pa.array(stamps)}
-    for i, lbl in enumerate(labels):
-        columns[f"ch_{lbl}"] = pa.array(data[i].astype(np.float32))
-
-    table = pa.table(columns)
-    _write_table(table, out_file, compression, row_group_size)
     print(f"  [ingest] wrote {out_file} ({total:,} rows)")
     return float(freq)
 
