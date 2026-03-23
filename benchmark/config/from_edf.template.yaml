@@ -29,114 +29,109 @@ studies:
     input: "/path/to/my_recording.edf"     # <-- EDIT THIS (local file or Azure blob path/URL)
     sample_freq: 256                        # Required for EDF input
 
-# --- Benchmarks -----------------------------------------------------
-# Keep or comment rows to choose what runs. Every available benchmark is
-# listed here, and `benchmarks:` is the only thing that decides what runs.
-benchmarks:
-  - random_access                           # A: Windowed read at various file positions
-  - channel_subset                          # B: Read a subset of channels (columnar advantage)
-  - remontage                               # C: Read + bipolar montage computation
-  - filter_pipeline                         # D: Full-study chunked read + bandpass/notch DSP
-  - window_scaling                          # E: Throughput vs window size (10s to 1hr)
-  # - compression                           # F: Parquet codec comparison (uses parquet_investigations below)
-  # - precision_loss                        # G: EDF 16-bit quantization error
-  # - int32_storage                         # H: Int32 storage comparison
-  # - remote_query                          # I: Remote Parquet (DuckDB) vs EDF download
-  # - tuned_comparison                      # J: Tuned Parquet vs HDF5 (matched block sizes)
+canonical_parquet:
+  compression: snappy
+  row_group_minutes: 30
 
-# --- Output Variants ------------------------------------------------
-# Each entry generates one file from the canonical Parquet. Include one of
-# each type so you can see what's available. The first Parquet variant becomes
-# the default `parquet` path used by the core benchmark categories.
-# Comment out or duplicate entries as needed.
-#
-# Omit this section entirely (or leave empty) to benchmark only the
-# canonical Parquet with no additional variants.
-# Variant fields:
-#   format: parquet | hdf5 | edf
-#   row_group_minutes: Parquet row-group target in minutes
-#   layout: HDF5 layout (columnar or rowgroup)
-#   chunk_minutes: HDF5 chunk target in minutes
-#   dtype: currently only float32 is supported for HDF5 variants
-#   compression: Parquet supports lz4/snappy/zstd/none; HDF5 currently supports only lz4
 variants:
   # Parquet variants -- tune row_group_minutes and compression
-  - format: parquet
+  - id: pq_5m_lz4
+    format: parquet
     row_group_minutes: 5                    # Row group size in minutes of data
     compression: lz4                        # lz4 | snappy | zstd | none
 
-  - format: parquet
+  - id: pq_30m_lz4
+    format: parquet
     row_group_minutes: 30
     compression: lz4
 
-  - format: parquet
+  - id: pq_60m_lz4
+    format: parquet
     row_group_minutes: 60
     compression: lz4
 
   # HDF5 variants -- tune layout and chunk_minutes
-  - format: hdf5
+  - id: h5_col_5m
+    format: hdf5
     layout: columnar                        # columnar | rowgroup
     chunk_minutes: 5                        # Chunk size in minutes of data
     dtype: float32                          # Only float32 is supported for HDF5 for now
     compression: lz4                        # Only lz4 is supported for HDF5 for now
 
-  - format: hdf5
+  - id: h5_col_30m
+    format: hdf5
     layout: columnar
     chunk_minutes: 30
     dtype: float32                          # Only float32 is supported for HDF5 for now
     compression: lz4                        # Only lz4 is supported for HDF5 for now
 
-  - format: hdf5
+  - id: h5_col_60m
+    format: hdf5
     layout: columnar
     chunk_minutes: 60
     dtype: float32                          # Only float32 is supported for HDF5 for now
     compression: lz4                        # Only lz4 is supported for HDF5 for now
 
   # HDF5 rowgroup variant -- single matrix layout
-  - format: hdf5
+  - id: h5_row_30m
+    format: hdf5
     layout: rowgroup
     chunk_minutes: 30
     dtype: float32                          # Only float32 is supported for HDF5 for now
     compression: lz4                        # Only lz4 is supported for HDF5 for now
 
   # EDF variant -- always 16-bit quantized, no tunable parameters
-  - format: edf
+  - id: edf_export
+    format: edf
 
-# --- Benchmark Parameters -------------------------------------------
-repetitions: 3                              # Timing repetitions per measurement
-default_window: 60                          # Default window size in seconds
-window_sizes: [10, 30, 60, 300, 900, 1800, 3600]  # For window_scaling benchmark
-read_positions: [0.0, 0.5, 0.75, 0.95]     # File positions for random_access (0.0=start, 1.0=end)
-channel_subsets: [4, 10]                    # Number of channels for channel_subset benchmark
-
-# --- Optional benchmark-specific config -----------------------------
-parquet_investigations:
-  compression:                              # Benchmark F configuration
-    enabled: true                           # false skips F even if `compression` is in benchmarks
-    variants:                               # Codec variants generated for benchmark F
-      - codec: "none"                      # Uncompressed Parquet
-      - codec: "snappy"                    # Snappy-compressed Parquet
-      - codec: "zstd"                      # Zstd-compressed Parquet
-        level: 3                            # Zstd compression level for this entry
-      - codec: "lz4"                       # LZ4-compressed Parquet
-  precision_loss:                           # Benchmark G configuration
-    enabled: true                           # false skips G even if `precision_loss` is in benchmarks
-  int32_storage:                            # Benchmark H configuration
-    enabled: true                           # false skips H even if `int32_storage` is in benchmarks
-  remote_query:                             # Benchmark I configuration
-    enabled: true                           # false skips I even if `remote_query` is in benchmarks
-    n_random_points: 2                      # Number of random remote windows to query
-    window_sec: 600                         # Duration of each random remote window in seconds
-    full_study_chunk_sec: 3600              # Chunk size for optional full-study sequential remote reads
-    remote_float32_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"  # Azure blob path for float32 dataset
-    remote_int32_nanovolt_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.int32_nanovolt.snappy.parquet/"  # Azure blob path for int32-nV dataset
-    remote_single_file_path: "parquet/tuned_pq_lz4_10m.parquet"  # Azure blob path for single-file tuned Parquet
-
-tuned_comparison:
-  block_sizes_minutes: [5, 10, 20, 30, 60, 120]  # Block sizes in minutes for benchmark J; benchmarks list controls whether J runs
-  parquet_codecs: [snappy, lz4]                  # Tuned Parquet codecs to generate for benchmark J
-  hdf5_compression: lz4                          # Only lz4 is currently supported for tuned HDF5 variants
-  chunk_sec: 3600                                # Sequential chunk size in seconds for J.4 full-study reads
+benchmarks:
+  common:
+    repetitions: 3
+    default_window: 60
+  core:
+    random_access:
+      enabled: true
+      variants: all
+      read_positions: [0.0, 0.5, 0.75, 0.95]
+    channel_subset:
+      enabled: true
+      variants: all
+      channel_subsets: [4, 10]
+    remontage: {enabled: true, variants: all}
+    filter_pipeline: {enabled: true, variants: all}
+    window_scaling:
+      enabled: true
+      variants: all
+      window_sizes: [10, 30, 60, 300, 900, 1800, 3600]
+  parquet_investigations:
+    compression:
+      enabled: false
+      variants:
+        - codec: "none"
+        - codec: "snappy"
+        - codec: "zstd"
+          level: 3
+        - codec: "lz4"
+    precision_loss: {enabled: false}
+    int32_storage: {enabled: false}
+    remote_query:
+      enabled: false
+      n_random_points: 2
+      window_sec: 600
+      full_study_chunk_sec: 3600
+      remote_float32_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"
+      remote_int32_nanovolt_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.int32_nanovolt.snappy.parquet/"
+      remote_single_file_path: "parquet/tuned_pq_lz4_10m.parquet"
+  other:
+    tuned_comparison:
+      enabled: false
+      block_sizes_minutes: [5, 10, 20, 30, 60, 120]
+      parquet_codecs: [snappy, lz4]
+      hdf5_compression: lz4
+      chunk_sec: 3600
+    baseline_comparison:
+      enabled: false
+      chunk_sec: 3600
 
 # --- Output ---------------------------------------------------------
 cache_dir: ".benchmark_cache"               # Where generated files are stored
