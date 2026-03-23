@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from .azure_storage import _download_edf_from_azure
-from .bench_utils import _chunk_ranges, _throughput
+from .bench_utils import _chunk_ranges, _print_result, _throughput
 from .config_helpers import get_remote_query_cfg, is_investigation_enabled
 from .readers import EdfFileReader, _edf_file
 from .signal import CHANNELS_10_20
@@ -55,6 +55,13 @@ def bench_remote_query(info, paths: dict, cfg: dict,
                        args: argparse.Namespace | None = None) -> list[dict]:
     """Benchmark I: Remote Parquet (DuckDB) vs Remote EDF (full download + local read)."""
     results = []
+
+    def _append_logged_result(row: dict) -> None:
+        row = dict(row)
+        row["_printed_inline"] = True
+        results.append(row)
+        _print_result(row)
+
     remote_cfg = get_remote_query_cfg(cfg)
     if not remote_cfg:
         print("    [skip] No parquet_investigations.remote_query config found.")
@@ -121,8 +128,9 @@ def bench_remote_query(info, paths: dict, cfg: dict,
             print(f"done ({total_time:.1f}s)")
 
             n_ch = len(cols)
-            results.append({
+            _append_logged_result({
                 "category": "remote_query",
+                "benchmark": "I.1",
                 "format": f"parquet_{pq_label}",
                 "method": "duckdb_remote",
                 "channel_subset": ch_label,
@@ -160,8 +168,9 @@ def bench_remote_query(info, paths: dict, cfg: dict,
                 print(f"done ({t_wall:.1f}s)")
 
                 n_ch = len(cols)
-                results.append({
+                _append_logged_result({
                     "category": "remote_query_full_study",
+                    "benchmark": "I.2",
                     "format": f"parquet_{pq_label}",
                     "method": "duckdb_full_study",
                     "channel_subset": ch_label,
@@ -224,8 +233,9 @@ def bench_remote_query(info, paths: dict, cfg: dict,
             n_ch = len(ch_indices) if ch_indices else n_channels
             print(f"done ({combined:.1f}s)")
 
-            results.append({
+            _append_logged_result({
                 "category": "remote_query",
+                "benchmark": "I.1",
                 "format": "edf",
                 "method": "full_download_then_read",
                 "channel_subset": ch_label,

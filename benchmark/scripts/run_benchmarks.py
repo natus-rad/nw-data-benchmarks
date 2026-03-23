@@ -559,9 +559,11 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
             results = bench_fn(info, paths, cfg, args) if bench_fn is bench_remote_query else bench_fn(info, paths, cfg)
             for result in results:
                 result = dict(result)
+                inline_printed = bool(result.pop("_printed_inline", False))
                 result["study"] = study_cfg["name"]
                 output["benchmarks"].append(result)
-                _print_result(result)
+                if not inline_printed:
+                    _print_result(result)
             _save_results(output, out_path)
             print(f"  [checkpoint -> {out_path}]")
 

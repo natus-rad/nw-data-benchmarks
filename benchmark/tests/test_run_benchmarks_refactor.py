@@ -1182,6 +1182,96 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
         self.assertTrue(any(r["category"] == "remote_query" for r in results))
 
+    def test_bench_remote_query_prints_structured_rows_inline(self):
+        class FakeCon:
+            def close(self):
+                return None
+
+        info = SimpleNamespace(
+            sample_freq=1.0,
+            channel_labels=["Fp1", "Fp2"],
+            channel_columns=["ch_Fp1", "ch_Fp2"],
+            total_rows=100,
+            stamp_at_row=lambda row: row,
+            start_stamp=0,
+            end_stamp=99,
+        )
+        cfg = {
+            "azure": {"storage_account": "acct", "container": "waveforms"},
+            "parquet_investigations": {
+                "remote_query": {
+                    "enabled": True,
+                    "n_random_points": 1,
+                    "window_sec": 10,
+                    "remote_float32_path": "parquet/demo/",
+                }
+            },
+        }
+
+        stdout = io.StringIO()
+        with patch.object(remote, "_make_duckdb_connection", return_value=FakeCon()), \
+             patch.object(remote, "_duckdb_remote_read", return_value=(0.1, 10)), \
+             redirect_stdout(stdout):
+            results = remote.bench_remote_query(info, {"edf": Path("missing.edf")}, cfg)
+
+        text = stdout.getvalue()
+        self.assertTrue(all(r.get("_printed_inline") for r in results))
+        self.assertLess(
+            text.index("parquet_float32_snappy  subset=all"),
+            text.index("DuckDB float32_snappy [10-20 (19ch)]"),
+        )
+
+    def test_runner_skips_duplicate_print_for_inline_logged_results(self):
+        def fake_bench(_info, _paths, _cfg):
+            return [{
+                "category": "remote_query",
+                "benchmark": "I.1",
+                "format": "parquet_float32_snappy",
+                "channel_subset": "all",
+                "window_seconds": 600,
+                "total_wall_seconds": 1.0,
+                "_printed_inline": True,
+            }]
+
+        info = SimpleNamespace(
+            sample_freq=256.0,
+            channel_labels=["Fp1"],
+            channel_columns=["ch_Fp1"],
+            total_rows=1000,
+            start_stamp=0,
+            end_stamp=999,
+            segment_plans=[object()],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            results_path = tmp_path / "results.json"
+            cfg = {
+                "cache_dir": str(tmp_path / "cache"),
+                "studies": [{"name": "demo", "input": "demo.parquet", "sample_freq": 256}],
+                "benchmarks": ["remote_query"],
+                "variants": [],
+            }
+            args = argparse.Namespace(
+                config="benchmark/config/default.yaml",
+                categories=None,
+                output=str(results_path),
+                dry_run=False,
+                no_report=True,
+                sas_token=None,
+            )
+
+            with patch.object(run_benchmarks, "_selected_benchmarks", return_value=[("remote_query", "I", fake_bench)]), \
+                 patch.object(run_benchmarks, "resolve_input_path", return_value=Path("demo.parquet")), \
+                 patch.object(run_benchmarks, "ingest", return_value=(Path("demo_canonical"), "parquet", 256.0)), \
+                 patch.object(run_benchmarks.StudyInfo, "from_parquet", return_value=info), \
+                 patch.object(run_benchmarks, "generate_variants", return_value={"parquet": Path("demo_canonical")}), \
+                 patch.object(run_benchmarks, "_system_info", return_value={"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16}), \
+                 patch.object(run_benchmarks, "_print_result") as mock_print_result:
+                run_benchmarks.run_benchmarks(cfg, args)
+
+        mock_print_result.assert_not_called()
+
     def test_save_results_retries_after_transient_permission_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             out_path = Path(tmp) / "results.json"
