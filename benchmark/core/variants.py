@@ -93,6 +93,7 @@ def generate_variants(canonical_pq: Path, info: StudyInfo,
     if not variant_specs:
         return paths
 
+    print("  Generating test variants (skip if cached)...")
     output_base.mkdir(parents=True, exist_ok=True)
 
     for index, spec in enumerate(variant_specs):

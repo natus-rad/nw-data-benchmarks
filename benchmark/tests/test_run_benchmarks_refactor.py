@@ -764,6 +764,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
             with redirect_stdout(stdout):
                 paths = generate_variants(canonical, info, spec, output_base)
 
+            self.assertIn("Generating test variants (skip if cached)", stdout.getvalue())
             self.assertIn("[cached] variant__pq_30m_lz4", stdout.getvalue())
             self.assertEqual(paths["parquet"], canonical)
             self.assertEqual(paths["variant__pq_30m_lz4"], out_file)
