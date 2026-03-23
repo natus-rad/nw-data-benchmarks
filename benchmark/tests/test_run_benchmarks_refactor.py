@@ -1444,6 +1444,29 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertTrue(seen_reader_states)
         self.assertTrue(all(state is None for state in seen_reader_states))
 
+    def test_build_sos_returns_float32_coefficients(self):
+        sos = signal._build_sos(256.0)
+
+        self.assertEqual(sos.dtype, np.float32)
+
+    def test_apply_filters_uses_float32_inputs(self):
+        captured = {}
+
+        def fake_sosfilt(sos_arg, matrix_arg, axis=1):
+            captured["sos_dtype"] = sos_arg.dtype
+            captured["matrix_dtype"] = matrix_arg.dtype
+            captured["axis"] = axis
+            return np.zeros_like(matrix_arg, dtype=np.float32)
+
+        with patch("scipy.signal.sosfilt", side_effect=fake_sosfilt):
+            filtered = signal._apply_filters(
+                np.ones((2, 8), dtype=np.float32),
+                np.ones((3, 6), dtype=np.float64),
+            )
+
+        self.assertEqual(captured, {"sos_dtype": np.float32, "matrix_dtype": np.float32, "axis": 1})
+        self.assertEqual(filtered.dtype, np.float32)
+
     def test_bench_compression_uses_nested_variants_and_enabled_flag(self):
         with tempfile.TemporaryDirectory() as tmp:
             pq_dir = Path(tmp) / "parquet_none"

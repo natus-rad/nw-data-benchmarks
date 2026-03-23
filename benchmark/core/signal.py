@@ -38,10 +38,12 @@ def _build_sos(sample_freq: float) -> np.ndarray:
     b_notch, a_notch = iirnotch(60.0, 30.0, sample_freq)
     sos_notch = tf2sos(b_notch, a_notch)
     sos_bp = butter(4, [0.1, 70.0], btype="bandpass", fs=sample_freq, output="sos")
-    return np.vstack([sos_notch, sos_bp])
+    return np.vstack([sos_notch, sos_bp]).astype(np.float32, copy=False)
 
 
 def _apply_filters(matrix: np.ndarray, sos: np.ndarray) -> np.ndarray:
     from scipy.signal import sosfilt
 
-    return sosfilt(sos, matrix, axis=1).astype(np.float32, copy=False)
+    matrix32 = np.asarray(matrix, dtype=np.float32)
+    filtered = sosfilt(np.asarray(sos, dtype=np.float32), matrix32, axis=1)
+    return np.asarray(filtered, dtype=np.float32)
