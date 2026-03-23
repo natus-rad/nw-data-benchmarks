@@ -1138,11 +1138,77 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 compression="snappy",
             )
 
-            info = StudyInfo.from_parquet(pq_file, sample_freq=256)
+            with patch("benchmark.core.study_info.pq.read_table", side_effect=AssertionError("read_table should not be used")):
+                info = StudyInfo.from_parquet(pq_file, sample_freq=256)
+            try:
+                self.assertEqual(info.channel_labels, ["Fp1"])
+                self.assertEqual(info.total_rows, 2)
+                self.assertEqual(info.stamp_at_row(1), 11)
+                self.assertTrue(info._stamp_cache_path is not None and info._stamp_cache_path.exists())
+            finally:
+                info.close()
 
-            self.assertEqual(info.channel_labels, ["Fp1"])
-            self.assertEqual(info.total_rows, 2)
-            self.assertEqual(info.stamp_at_row(1), 11)
+    def test_study_info_from_parquet_builds_memmapped_stamp_cache_for_segmented_dataset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pq_dir = tmp_path / "segmented"
+            pq_dir.mkdir()
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([10, 11, 12], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2, 0.3], type=pa.float32()),
+                }),
+                pq_dir / "part_00000.parquet",
+                compression="snappy",
+            )
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([20, 21], type=pa.int64()),
+                    "ch_Fp1": pa.array([1.1, 1.2], type=pa.float32()),
+                }),
+                pq_dir / "part_00001.parquet",
+                compression="snappy",
+            )
+
+            with patch("benchmark.core.study_info.pq.read_table", side_effect=AssertionError("read_table should not be used")):
+                info = StudyInfo.from_parquet(pq_dir, sample_freq=256)
+            try:
+                self.assertEqual(info.start_stamp, 10)
+                self.assertEqual(info.end_stamp, 21)
+                self.assertEqual(info.total_rows, 5)
+                self.assertEqual(info.n_segments, 2)
+                self.assertEqual([info.stamp_at_row(i) for i in (0, 2, 3, 4)], [10, 12, 20, 21])
+                self.assertEqual([seg.last_stamp for seg in info.segment_plans], [12, 21])
+                self.assertTrue(info._stamp_cache_path is not None and info._stamp_cache_path.exists())
+            finally:
+                info.close()
+
+    def test_study_info_from_parquet_reuses_existing_stamp_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pq_file = tmp_path / "single.parquet"
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([10, 11, 12], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2, 0.3], type=pa.float32()),
+                }),
+                pq_file,
+                compression="snappy",
+            )
+
+            first_info = StudyInfo.from_parquet(pq_file, sample_freq=256)
+            try:
+                self.assertTrue(first_info._stamp_cache_path is not None and first_info._stamp_cache_path.exists())
+
+                with patch("benchmark.core.study_info._build_stamp_cache", side_effect=AssertionError("stamp cache should be reused")):
+                    second_info = StudyInfo.from_parquet(pq_file, sample_freq=256)
+                try:
+                    self.assertEqual(second_info.stamp_at_row(0), 10)
+                    self.assertEqual(second_info.stamp_at_row(2), 12)
+                finally:
+                    second_info.close()
+            finally:
+                first_info.close()
 
     def test_setup_parquet_compression_variants_accepts_single_file_source(self):
         with tempfile.TemporaryDirectory() as tmp:
