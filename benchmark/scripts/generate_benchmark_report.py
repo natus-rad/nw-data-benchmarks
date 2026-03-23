@@ -609,8 +609,26 @@ def render_int32_storage(rows: list[dict[str, Any]], payload: dict[str, Any]) ->
     )
 
 
-def render_remote_query(rows: list[dict[str, Any]], _: dict[str, Any]) -> str:
+def render_remote_query(rows: list[dict[str, Any]], payload: dict[str, Any]) -> str:
+    full_study_rows = rows_for(payload, "remote_query_full_study")
+
+    def _summarize(values: list[Any], *, suffix: str = "") -> str:
+        uniq = []
+        for value in values:
+            if value is None or value in uniq:
+                continue
+            uniq.append(value)
+        if not uniq:
+            return "not reported"
+        return ", ".join(f"{value}{suffix}" for value in uniq)
+
     ordered = sorted(rows, key=lambda row: row["total_wall_seconds"])
+    settings = (
+        "Received settings: "
+        f"n_random_points={_summarize([row.get('n_windows') for row in ordered])}; "
+        f"window_sec={_summarize([row.get('window_seconds') for row in ordered], suffix='s')}; "
+        f"full_study_chunk_sec={_summarize([row.get('chunk_seconds') for row in full_study_rows], suffix='s')}."
+    )
     table = markdown_table(
         ["Method", "Format", "Channel subset", "Total time", "Avg/window", "Throughput"],
         [
@@ -627,7 +645,7 @@ def render_remote_query(rows: list[dict[str, Any]], _: dict[str, Any]) -> str:
     )
     estimated = any(bool(row.get("download_estimated")) for row in rows)
     note = "EDF download time in this run is marked as estimated." if estimated else "All reported remote timings are direct measurements."
-    return note + "\n\n" + table
+    return settings + "\n\n" + note + "\n\n" + table
 
 
 def render_tuned_comparison(payload: dict[str, Any]) -> str:

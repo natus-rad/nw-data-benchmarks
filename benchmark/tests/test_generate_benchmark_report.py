@@ -219,6 +219,88 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         self.assertIn("Parquet has the lowest median 1-minute read time", rendered)
         self.assertIn("*This category was not present in the input results file.*", rendered)
 
+    def test_render_report_remote_query_section_shows_received_settings(self) -> None:
+        payload = {
+            "run_id": "2026-03-23T00-00-00",
+            "system": {"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16},
+            "studies": [
+                {
+                    "name": "demo",
+                    "channels": 46,
+                    "sample_freq": 256.0,
+                    "total_stamps": 11854000,
+                    "duration_seconds": 46304.7,
+                }
+            ],
+            "benchmarks": [
+                {
+                    "category": "remote_query",
+                    "format": "parquet_float32_snappy",
+                    "method": "duckdb_remote",
+                    "channel_subset": "all",
+                    "n_channels": 46,
+                    "n_windows": 10,
+                    "window_seconds": 600,
+                    "total_wall_seconds": 4.0,
+                    "avg_wall_per_window": 0.4,
+                    "mib_per_sec": 120.0,
+                },
+                {
+                    "category": "remote_query_full_study",
+                    "format": "parquet_float32_snappy",
+                    "method": "duckdb_full_study",
+                    "channel_subset": "all",
+                    "n_channels": 46,
+                    "chunk_seconds": 300,
+                    "n_chunks": 4,
+                    "total_rows": 1000,
+                    "total_wall_seconds": 3.0,
+                    "mib_per_sec": 140.0,
+                },
+            ],
+        }
+        template = "# Report\n\n${i_results}\n"
+
+        rendered = render_report(payload, template, Path("benchmark/results/demo.json"))
+
+        self.assertIn("Received settings: n_random_points=10; window_sec=600s; full_study_chunk_sec=300s.", rendered)
+        self.assertIn("All reported remote timings are direct measurements.", rendered)
+
+    def test_render_report_remote_query_section_handles_missing_full_study_chunk_setting(self) -> None:
+        payload = {
+            "run_id": "2026-03-23T00-00-00",
+            "system": {"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16},
+            "studies": [
+                {
+                    "name": "demo",
+                    "channels": 46,
+                    "sample_freq": 256.0,
+                    "total_stamps": 11854000,
+                    "duration_seconds": 46304.7,
+                }
+            ],
+            "benchmarks": [
+                {
+                    "category": "remote_query",
+                    "format": "edf",
+                    "method": "full_download_then_read",
+                    "channel_subset": "10-20 (19ch)",
+                    "n_channels": 19,
+                    "n_windows": 6,
+                    "window_seconds": 120,
+                    "download_estimated": True,
+                    "total_wall_seconds": 8.0,
+                    "avg_wall_per_window": 0.6,
+                },
+            ],
+        }
+        template = "# Report\n\n${i_results}\n"
+
+        rendered = render_report(payload, template, Path("benchmark/results/demo.json"))
+
+        self.assertIn("Received settings: n_random_points=6; window_sec=120s; full_study_chunk_sec=not reported.", rendered)
+        self.assertIn("EDF download time in this run is marked as estimated.", rendered)
+
     def test_render_report_preserves_variant_order_for_core_results(self) -> None:
         payload = {
             "run_id": "2026-03-21T00-00-00",
