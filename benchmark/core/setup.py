@@ -9,6 +9,7 @@ import numpy as np
 import pyarrow.parquet as pq
 
 from .config_helpers import (
+    get_canonical_parquet_cfg,
     get_parquet_compression_variants,
     get_tuned_block_sizes_minutes,
     get_tuned_hdf5_compression,
@@ -17,6 +18,36 @@ from .config_helpers import (
 )
 from .parquet_paths import list_parquet_files
 from .study_info import StudyInfo
+
+
+def _chunk_reader_max_rows(cfg: dict | None) -> int:
+    canonical_cfg = get_canonical_parquet_cfg(cfg or {})
+    return max(1, int(canonical_cfg.get("chunk_reader_max_rows", 65_536)))
+
+
+def _iter_parquet_tables(src_files: list[Path], *, columns: list[str] | None = None,
+                         max_rows: int | None = None):
+    row_limit = max(1, int(max_rows)) if max_rows else None
+    for src_file in src_files:
+        parquet_file = pq.ParquetFile(str(src_file))
+        pending_row_groups: list[int] = []
+        pending_rows = 0
+        for row_group_index in range(parquet_file.metadata.num_row_groups):
+            row_group_rows = int(parquet_file.metadata.row_group(row_group_index).num_rows)
+            if pending_row_groups and row_limit is not None and pending_rows + row_group_rows > row_limit:
+                yield parquet_file.read_row_groups(pending_row_groups, columns=columns)
+                pending_row_groups = []
+                pending_rows = 0
+
+            pending_row_groups.append(row_group_index)
+            pending_rows += row_group_rows
+            if row_limit is not None and pending_rows >= row_limit:
+                yield parquet_file.read_row_groups(pending_row_groups, columns=columns)
+                pending_row_groups = []
+                pending_rows = 0
+
+        if pending_row_groups:
+            yield parquet_file.read_row_groups(pending_row_groups, columns=columns)
 
 
 def _parquet_to_edf(pq_dir: Path, edf_path: Path,
@@ -37,15 +68,13 @@ def _parquet_to_edf(pq_dir: Path, edf_path: Path,
 
     ch_min = np.full(n_channels, np.inf)
     ch_max = np.full(n_channels, -np.inf)
-    for f in pq_files:
-        parquet_file = pq.ParquetFile(str(f))
-        for batch in parquet_file.iter_batches(columns=ch_cols, batch_size=batch_rows):
-            for i in range(n_channels):
-                arr = batch.column(i).to_numpy(zero_copy_only=False).astype(np.float64, copy=False)
-                if arr.size == 0:
-                    continue
-                ch_min[i] = min(ch_min[i], float(arr.min()))
-                ch_max[i] = max(ch_max[i], float(arr.max()))
+    for table in _iter_parquet_tables(pq_files, columns=ch_cols, max_rows=batch_rows):
+        for i, col_name in enumerate(ch_cols):
+            arr = table.column(col_name).to_numpy(zero_copy_only=False).astype(np.float64, copy=False)
+            if arr.size == 0:
+                continue
+            ch_min[i] = min(ch_min[i], float(arr.min()))
+            ch_max[i] = max(ch_max[i], float(arr.max()))
     flat = ch_min == ch_max
     ch_max[flat] = ch_min[flat] + 1.0
 
@@ -64,14 +93,12 @@ def _parquet_to_edf(pq_dir: Path, edf_path: Path,
                 "transducer": "",
                 "prefilter": "",
             })
-        for f in pq_files:
-            parquet_file = pq.ParquetFile(str(f))
-            for batch in parquet_file.iter_batches(columns=ch_cols, batch_size=batch_rows):
-                block = [
-                    batch.column(i).to_numpy(zero_copy_only=False).astype(np.float64, copy=False)
-                    for i in range(n_channels)
-                ]
-                writer.writeSamples(block)
+        for table in _iter_parquet_tables(pq_files, columns=ch_cols, max_rows=batch_rows):
+            block = [
+                table.column(col_name).to_numpy(zero_copy_only=False).astype(np.float64, copy=False)
+                for col_name in ch_cols
+            ]
+            writer.writeSamples(block)
     finally:
         writer.close()
 
@@ -83,6 +110,7 @@ def _setup_parquet_compression_variants(paths: dict, src_dir: Path,
     src_files = list_parquet_files(src_dir)
     if not src_files:
         return
+    batch_rows = _chunk_reader_max_rows(cfg)
 
     for comp_cfg in get_parquet_compression_variants(cfg):
         codec = comp_cfg["codec"]
@@ -109,10 +137,21 @@ def _setup_parquet_compression_variants(paths: dict, src_dir: Path,
 
         output_files = []
         for src_file in src_files:
-            table = pq.read_table(str(src_file))
             out_file = out_path if single_file else out_path / src_file.name
-            pq.write_table(table, str(out_file), compression=compression,
-                           compression_level=level)
+            writer = None
+            try:
+                for table in _iter_parquet_tables([src_file], max_rows=batch_rows):
+                    if writer is None:
+                        writer = pq.ParquetWriter(
+                            str(out_file),
+                            table.schema,
+                            compression=compression,
+                            compression_level=level,
+                        )
+                    writer.write_table(table, row_group_size=table.num_rows)
+            finally:
+                if writer is not None:
+                    writer.close()
             output_files.append(src_file.name)
         if not single_file and len(output_files) > 1:
             _write_parquet_dataset_metadata(out_path, output_files)
@@ -145,7 +184,8 @@ def _write_parquet_dataset_metadata(out_dir: Path, output_files: list[str]) -> N
         combined_meta.write_metadata_file(str(out_dir / "_metadata"))
 
 
-def _setup_int32_variants(paths: dict, output_base: Path, name: str) -> None:
+def _setup_int32_variants(paths: dict, output_base: Path, name: str,
+                          cfg: dict | None = None) -> None:
     """Create int32 Parquet variants from the default float32 export."""
     import pyarrow as pa
 
@@ -153,6 +193,9 @@ def _setup_int32_variants(paths: dict, output_base: Path, name: str) -> None:
     src_files = list_parquet_files(src_path)
     if not src_files:
         return
+    batch_rows = _chunk_reader_max_rows(cfg)
+    schema_names = pq.read_schema(str(src_files[0])).names
+    base_channel_cols = [c for c in schema_names if c not in ("samplestamp", "is_gap")]
 
     for mode in ("int32_calibrated", "int32_nanovolt"):
         for codec in ("zstd", "snappy", "none"):
@@ -172,13 +215,9 @@ def _setup_int32_variants(paths: dict, output_base: Path, name: str) -> None:
 
             global_calibration = {}
             if mode == "int32_calibrated":
-                ch_cols = None
-                for src_file in src_files:
-                    t = pq.read_table(str(src_file))
-                    if ch_cols is None:
-                        ch_cols = [c for c in t.column_names if c not in ("samplestamp", "is_gap")]
-                    for col_name in ch_cols:
-                        arr = t.column(col_name).to_numpy().astype(np.float64)
+                for table in _iter_parquet_tables(src_files, columns=base_channel_cols, max_rows=batch_rows):
+                    for col_name in base_channel_cols:
+                        arr = table.column(col_name).to_numpy().astype(np.float64, copy=False)
                         if arr.size == 0:
                             continue
                         prev = global_calibration.get(
@@ -197,44 +236,51 @@ def _setup_int32_variants(paths: dict, output_base: Path, name: str) -> None:
 
             output_files = []
             for src_file in src_files:
-                table = pq.read_table(str(src_file))
-                schema_meta = dict(table.schema.metadata or {})
-                ch_cols = [c for c in table.column_names if c not in ("samplestamp", "is_gap")]
-
-                if mode == "int32_calibrated":
-                    new_columns = {}
-                    for col_name in ch_cols:
-                        arr = table.column(col_name).to_numpy().astype(np.float64)
-                        cal = global_calibration.get(col_name, {"gain": 1.0, "offset": 0.0})
-                        digital = np.round((arr - cal["offset"]) / cal["gain"]).astype(np.int32)
-                        new_columns[col_name] = pa.array(digital)
-                    schema_meta[b"int32_calibration"] = json.dumps(global_calibration).encode("utf-8")
-                else:
-                    new_columns = {}
-                    for col_name in ch_cols:
-                        arr = table.column(col_name).to_numpy().astype(np.float64)
-                        digital = np.round(arr / NANOVOLT_SCALE).astype(np.int32)
-                        new_columns[col_name] = pa.array(digital)
-                    schema_meta[b"int32_scale_uv"] = str(NANOVOLT_SCALE).encode("utf-8")
-
-                new_cols_list = []
-                new_fields = []
-                for col_name in table.column_names:
-                    if col_name in new_columns:
-                        new_cols_list.append(new_columns[col_name])
-                        new_fields.append(pa.field(col_name, pa.int32()))
-                    else:
-                        new_cols_list.append(table.column(col_name))
-                        new_fields.append(table.schema.field(col_name))
-
-                new_schema = pa.schema(new_fields, metadata=schema_meta)
-                new_table = pa.table(
-                    {f.name: c for f, c in zip(new_fields, new_cols_list)},
-                    schema=new_schema,
-                )
                 compression = None if codec == "none" else codec
                 out_file = out_path if single_file else out_path / src_file.name
-                pq.write_table(new_table, str(out_file), compression=compression)
+                writer = None
+                try:
+                    for table in _iter_parquet_tables([src_file], max_rows=batch_rows):
+                        schema_meta = dict(table.schema.metadata or {})
+                        ch_cols = [c for c in table.column_names if c not in ("samplestamp", "is_gap")]
+
+                        if mode == "int32_calibrated":
+                            new_columns = {}
+                            for col_name in ch_cols:
+                                arr = table.column(col_name).to_numpy().astype(np.float64, copy=False)
+                                cal = global_calibration.get(col_name, {"gain": 1.0, "offset": 0.0})
+                                digital = np.round((arr - cal["offset"]) / cal["gain"]).astype(np.int32)
+                                new_columns[col_name] = pa.array(digital)
+                            schema_meta[b"int32_calibration"] = json.dumps(global_calibration).encode("utf-8")
+                        else:
+                            new_columns = {}
+                            for col_name in ch_cols:
+                                arr = table.column(col_name).to_numpy().astype(np.float64, copy=False)
+                                digital = np.round(arr / NANOVOLT_SCALE).astype(np.int32)
+                                new_columns[col_name] = pa.array(digital)
+                            schema_meta[b"int32_scale_uv"] = str(NANOVOLT_SCALE).encode("utf-8")
+
+                        new_cols_list = []
+                        new_fields = []
+                        for col_name in table.column_names:
+                            if col_name in new_columns:
+                                new_cols_list.append(new_columns[col_name])
+                                new_fields.append(pa.field(col_name, pa.int32()))
+                            else:
+                                new_cols_list.append(table.column(col_name))
+                                new_fields.append(table.schema.field(col_name))
+
+                        new_schema = pa.schema(new_fields, metadata=schema_meta)
+                        new_table = pa.table(
+                            {f.name: c for f, c in zip(new_fields, new_cols_list)},
+                            schema=new_schema,
+                        )
+                        if writer is None:
+                            writer = pq.ParquetWriter(str(out_file), new_table.schema, compression=compression)
+                        writer.write_table(new_table, row_group_size=new_table.num_rows)
+                finally:
+                    if writer is not None:
+                        writer.close()
                 output_files.append(src_file.name)
             if not single_file and len(output_files) > 1:
                 _write_parquet_dataset_metadata(out_path, output_files)
@@ -287,7 +333,8 @@ def _parquet_rowgroup_chunk_samples(src_files: list, total_rows: int) -> int:
     return min(mode_size, total_rows)
 
 
-def _setup_h5_variants(paths: dict, output_base: Path, name: str, info) -> None:
+def _setup_h5_variants(paths: dict, output_base: Path, name: str, info,
+                       cfg: dict | None = None) -> None:
     """Create two HDF5 layouts from the cached Parquet float32 snappy data."""
     src_path = paths["parquet"]
     src_files = list_parquet_files(src_path)
@@ -299,6 +346,7 @@ def _setup_h5_variants(paths: dict, output_base: Path, name: str, info) -> None:
     n_channels = len(all_cols)
     sample_freq = info.sample_freq
     total_rows = _count_total_rows(src_files)
+    batch_rows = _chunk_reader_max_rows(cfg)
 
     columnar_chunk_samples = _default_h5_chunk_samples(sample_freq, total_rows)
     rowgroup_chunk_samples = _parquet_rowgroup_chunk_samples(src_files, total_rows)
@@ -321,13 +369,14 @@ def _setup_h5_variants(paths: dict, output_base: Path, name: str, info) -> None:
                 hf.attrs["chunk_samples"] = columnar_chunk_samples
                 hf.attrs["chunk_policy"] = "time_seconds"
                 hf.attrs["chunk_seconds"] = H5_COLUMNAR_CHUNK_SECONDS
-                _write_h5_columnar(hf, src_files, all_cols, chunk_size=columnar_chunk_samples)
+                _write_h5_columnar(hf, src_files, all_cols, chunk_size=columnar_chunk_samples, batch_rows=batch_rows)
             else:
                 hf.attrs["chunk_samples"] = rowgroup_chunk_samples
                 hf.attrs["chunk_policy"] = "parquet_rowgroup"
                 _write_h5_rowgroup(
                     hf, src_files, all_cols, n_channels,
                     chunk_size=rowgroup_chunk_samples,
+                    batch_rows=batch_rows,
                 )
 
         paths[layout] = h5_path
@@ -350,7 +399,7 @@ def _build_chunk_index(stamps_ds: h5py.Dataset) -> np.ndarray:
 
 
 def _write_h5_columnar(hf: h5py.File, src_files: list, all_cols: list[str],
-                       chunk_size: int) -> None:
+                       chunk_size: int, batch_rows: int | None = None) -> None:
     total_rows = _count_total_rows(src_files)
     chunk_size = max(1, min(int(chunk_size), total_rows if total_rows > 0 else 1))
 
@@ -370,8 +419,7 @@ def _write_h5_columnar(hf: h5py.File, src_files: list, all_cols: list[str],
     )
 
     offset = 0
-    for src_file in src_files:
-        table = pq.read_table(str(src_file), columns=["samplestamp"] + all_cols)
+    for table in _iter_parquet_tables(src_files, columns=["samplestamp"] + all_cols, max_rows=batch_rows):
         n = table.num_rows
         stamp_ds[offset:offset + n] = table.column("samplestamp").to_numpy()
         for col in all_cols:
@@ -387,7 +435,7 @@ def _write_h5_columnar(hf: h5py.File, src_files: list, all_cols: list[str],
 
 def _write_h5_rowgroup(hf: h5py.File, src_files: list,
                        all_cols: list[str], n_channels: int,
-                       chunk_size: int) -> None:
+                       chunk_size: int, batch_rows: int | None = None) -> None:
     total_rows = _count_total_rows(src_files)
     chunk_size = max(1, min(int(chunk_size), total_rows if total_rows > 0 else 1))
 
@@ -402,8 +450,7 @@ def _write_h5_rowgroup(hf: h5py.File, src_files: list,
     hf.attrs["column_order"] = all_cols
 
     offset = 0
-    for src_file in src_files:
-        table = pq.read_table(str(src_file), columns=["samplestamp"] + all_cols)
+    for table in _iter_parquet_tables(src_files, columns=["samplestamp"] + all_cols, max_rows=batch_rows):
         n = table.num_rows
         stamp_ds[offset:offset + n] = table.column("samplestamp").to_numpy()
         block = np.column_stack([
@@ -444,14 +491,15 @@ def _setup_tuned_variants(paths: dict, output_base: Path, info: StudyInfo,
     block_sizes = _get_tuned_block_sizes(cfg, info.sample_freq)
     parquet_codecs = get_tuned_parquet_codecs(cfg)
     hdf5_compression = get_tuned_hdf5_compression(cfg)
+    batch_rows = _chunk_reader_max_rows(cfg)
 
     for label, block_samples in block_sizes.items():
-        _setup_tuned_parquet(paths, output_base, src_files, ch_cols, label, block_samples, parquet_codecs)
-        _setup_tuned_h5(paths, output_base, src_files, ch_cols, label, block_samples, info, hdf5_compression)
+        _setup_tuned_parquet(paths, output_base, src_files, ch_cols, label, block_samples, parquet_codecs, batch_rows)
+        _setup_tuned_h5(paths, output_base, src_files, ch_cols, label, block_samples, info, hdf5_compression, batch_rows)
 
 
 def _setup_tuned_parquet(paths, output_base, src_files, ch_cols,
-                         label, row_group_size, codecs):
+                         label, row_group_size, codecs, batch_rows):
     """Write single consolidated Parquet files with a specific row-group size."""
     import pyarrow as pa
 
@@ -480,8 +528,7 @@ def _setup_tuned_parquet(paths, output_base, src_files, ch_cols,
                 for writer in writers.values():
                     writer.write_table(table, row_group_size=row_group_size)
 
-            for f in src_files:
-                table = pq.read_table(str(f))
+            for table in _iter_parquet_tables(src_files, max_rows=batch_rows):
                 buf.append(table)
                 buf_rows += table.num_rows
 
@@ -510,7 +557,7 @@ def _setup_tuned_parquet(paths, output_base, src_files, ch_cols,
 
 
 def _setup_tuned_h5(paths, output_base, src_files, ch_cols,
-                    label, chunk_samples, info, compression):
+                    label, chunk_samples, info, compression, batch_rows):
     """Write an HDF5 columnar file with a specific chunk size."""
     if compression != "lz4":
         raise ValueError("tuned_comparison.hdf5_compression currently supports only lz4")
@@ -547,8 +594,7 @@ def _setup_tuned_h5(paths, output_base, src_files, ch_cols,
         )
 
         offset = 0
-        for src_file in src_files:
-            table = pq.read_table(str(src_file), columns=["samplestamp"] + ch_cols)
+        for table in _iter_parquet_tables(src_files, columns=["samplestamp"] + ch_cols, max_rows=batch_rows):
             n = table.num_rows
             stamp_ds[offset:offset + n] = table.column("samplestamp").to_numpy()
             for col in ch_cols:

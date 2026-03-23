@@ -535,7 +535,7 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
             _setup_parquet_compression_variants(
                 paths, paths[FormatKey.PARQUET], output_base, short_name, cfg)
         if Category.INT32_STORAGE in selected_ids and paths.get(FormatKey.PARQUET) and is_investigation_enabled(cfg, "int32_storage"):
-            _setup_int32_variants(paths, output_base, short_name)
+            _setup_int32_variants(paths, output_base, short_name, cfg)
         if Category.TUNED_COMPARISON in selected_ids and paths.get(FormatKey.PARQUET):
             _setup_tuned_variants(paths, output_base, info, cfg)
 

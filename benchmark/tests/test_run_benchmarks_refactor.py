@@ -1011,6 +1011,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
             )
             paths = {"parquet": src_file}
             cfg = {
+                "canonical_parquet": {"chunk_reader_max_rows": 1},
                 "parquet_investigations": {
                     "compression": {
                         "enabled": True,
@@ -1019,11 +1020,15 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 }
             }
 
-            setup._setup_parquet_compression_variants(paths, src_file, tmp_path / "variants", "demo", cfg)
+            with patch("benchmark.core.setup._iter_parquet_tables", wraps=setup._iter_parquet_tables) as mock_iter, \
+                 patch("benchmark.core.setup.pq.read_table", side_effect=AssertionError("read_table should not be used")):
+                setup._setup_parquet_compression_variants(paths, src_file, tmp_path / "variants", "demo", cfg)
 
             out_file = tmp_path / "variants" / "parquet_none.parquet"
             self.assertTrue(out_file.exists())
             self.assertEqual(paths["parquet_none"], out_file)
+            self.assertTrue(mock_iter.called)
+            self.assertTrue(all(call.kwargs["max_rows"] == 1 for call in mock_iter.call_args_list))
 
     def test_setup_int32_variants_accepts_single_file_source(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1039,10 +1044,19 @@ class BenchmarkRefactorTests(unittest.TestCase):
             )
             paths = {"parquet": src_file}
 
-            setup._setup_int32_variants(paths, tmp_path / "variants", "demo")
+            with patch("benchmark.core.setup._iter_parquet_tables", wraps=setup._iter_parquet_tables) as mock_iter, \
+                 patch("benchmark.core.setup.pq.read_table", side_effect=AssertionError("read_table should not be used")):
+                setup._setup_int32_variants(
+                    paths,
+                    tmp_path / "variants",
+                    "demo",
+                    {"canonical_parquet": {"chunk_reader_max_rows": 1}},
+                )
 
             self.assertTrue((tmp_path / "variants" / "parquet_int32_calibrated_zstd.parquet").exists())
             self.assertTrue((tmp_path / "variants" / "parquet_int32_nanovolt_snappy.parquet").exists())
+            self.assertTrue(mock_iter.called)
+            self.assertTrue(all(call.kwargs["max_rows"] == 1 for call in mock_iter.call_args_list))
 
     def test_setup_tuned_variants_respects_configured_codecs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1059,6 +1073,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
             info = StudyInfo.from_parquet(src_file, sample_freq=256)
             paths = {"parquet": src_file}
             cfg = {
+                "canonical_parquet": {"chunk_reader_max_rows": 1},
                 "tuned_comparison": {
                     "block_sizes_minutes": [5],
                     "parquet_codecs": ["lz4"],
@@ -1066,13 +1081,17 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 }
             }
 
-            setup._setup_tuned_variants(paths, tmp_path / "variants", info, cfg)
+            with patch("benchmark.core.setup._iter_parquet_tables", wraps=setup._iter_parquet_tables) as mock_iter, \
+                 patch("benchmark.core.setup.pq.read_table", side_effect=AssertionError("read_table should not be used")):
+                setup._setup_tuned_variants(paths, tmp_path / "variants", info, cfg)
 
             self.assertTrue((tmp_path / "variants" / "tuned_pq_lz4_5m.parquet").exists())
             self.assertFalse((tmp_path / "variants" / "tuned_pq_5m.parquet").exists())
             self.assertTrue((tmp_path / "variants" / "tuned_h5_5m.h5").exists())
             self.assertIn("tuned_pq_lz4_5m", paths)
             self.assertNotIn("tuned_pq_5m", paths)
+            self.assertTrue(mock_iter.called)
+            self.assertTrue(all(call.kwargs["max_rows"] == 1 for call in mock_iter.call_args_list))
 
     def test_bench_tuned_comparison_uses_configured_chunk_sec(self):
         info = SimpleNamespace(

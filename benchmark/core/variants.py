@@ -19,7 +19,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .parquet_paths import list_parquet_files
-from .setup import _build_chunk_index, _parquet_to_edf
+from .setup import _build_chunk_index, _iter_parquet_tables as _iter_setup_parquet_tables, _parquet_to_edf
 from .study_info import StudyInfo
 
 
@@ -48,10 +48,7 @@ def _register_root_variant(paths: dict, variant_id: str, fmt: str, reader_kind: 
 
 def _iter_parquet_tables(src_files: list[Path], *, columns: list[str] | None = None,
                          batch_rows: int | None = None):
-    for src_file in src_files:
-        parquet_file = pq.ParquetFile(str(src_file))
-        for batch in parquet_file.iter_batches(columns=columns, batch_size=batch_rows):
-            yield pa.Table.from_batches([batch])
+    yield from _iter_setup_parquet_tables(src_files, columns=columns, max_rows=batch_rows)
 
 
 def _write_streamed_parquet(writer: pq.ParquetWriter, tables, row_group_size: int) -> None:
