@@ -5,10 +5,16 @@ import numpy as np
 
 from .bench_utils import _chunk_ranges, _full_study_duration_hours, _throughput, _timed
 from .config_helpers import (
+    get_channel_subsets,
+    get_default_window,
     get_parquet_compression_variants,
+    get_read_positions,
+    get_repetitions,
     get_tuned_chunk_sec,
     get_tuned_hdf5_compression,
     get_tuned_parquet_codecs,
+    get_window_sizes,
+    get_core_variants_selector,
     is_investigation_enabled,
     tuned_parquet_key,
 )
@@ -31,32 +37,17 @@ from .setup import _get_tuned_block_sizes
 from .signal import _apply_bipolar_montage, _apply_filters, _build_sos
 
 
-def _available_window_formats(paths: dict):
-    formats = []
-    if "parquet" in paths:
-        formats.append(("parquet", None))
-    if "edf" in paths:
-        formats.append(("edf", None))
-    for h5_key, h5_fn in [
-        ("h5_columnar", _read_h5_columnar_window),
-        ("h5_rowgroup", _read_h5_rowgroup_window),
-    ]:
-        if h5_key in paths:
-            formats.append((h5_key, h5_fn))
-    return formats
-
-
-def _comparison_variant_context(variant: dict):
-    if variant["reader_kind"] == "edf":
-        return EdfFileReader(_edf_file(variant["path"]))
+def _target_context(target: dict):
+    if target["reader_kind"] == "edf":
+        return EdfFileReader(_edf_file(target["path"]))
     return nullcontext(None)
 
 
-def _read_comparison_variant(variant: dict, info, columns: list[str],
-                             start_stamp: int, end_stamp: int,
-                             reader_state=None) -> np.ndarray:
-    kind = variant["reader_kind"]
-    path = variant["path"]
+def _read_target_window(target: dict, info, columns: list[str],
+                        start_stamp: int, end_stamp: int,
+                        reader_state=None) -> np.ndarray:
+    kind = target["reader_kind"]
+    path = target["path"]
     if kind == "parquet":
         return _read_parquet_window(path, columns, start_stamp, end_stamp)
     if kind == "tuned_parquet":
@@ -72,7 +63,40 @@ def _read_comparison_variant(variant: dict, info, columns: list[str],
         n_samples = max(0, int(end_stamp) - int(start_stamp) + 1)
         channel_indices = [info.channel_columns.index(col) for col in columns]
         return reader_state.read_window(start_sample, n_samples, channel_indices)
-    raise ValueError(f"Unknown comparison reader kind: {kind}")
+    raise ValueError(f"Unknown target reader kind: {kind}")
+
+
+def _core_targets(paths: dict, cfg: dict, category: str) -> list[dict]:
+    selector = get_core_variants_selector(cfg, category)
+    root_variants = list(paths.get("__root_variants__", []))
+    if root_variants:
+        if selector == []:
+            return []
+        if selector == "all":
+            return root_variants
+        by_id = {target["variant_id"]: target for target in root_variants}
+        return [by_id[variant_id] for variant_id in selector]
+
+    if selector == []:
+        return []
+    if selector != "all":
+        raise ValueError(
+            f"benchmarks.core.{category}.variants cannot list explicit ids when no root variants exist"
+        )
+    source_target = paths.get("__source_target__")
+    return [source_target] if source_target else []
+
+
+def _core_result_fields(target: dict) -> dict:
+    return {
+        "format": target["artifact_id"],
+        "artifact_id": target["artifact_id"],
+        "variant_id": target.get("variant_id"),
+        "artifact_kind": target.get("artifact_kind"),
+        "format_family": target.get("format_family"),
+        "display_label": target.get("display_label", target["artifact_id"]),
+        "artifact_order": target.get("sort_index", 0),
+    }
 
 
 def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
@@ -100,9 +124,9 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
 
     print(f"\n  --- {section_letter}.1: Random access ({window_sec}s at 50%) ---")
     for variant in variants:
-        with _comparison_variant_context(variant) as reader_state:
+        with _target_context(variant) as reader_state:
             t, data = _timed(
-                lambda v=variant, rs=reader_state: _read_comparison_variant(v, info, ch_cols, start_stamp, end_stamp, rs),
+                lambda v=variant, rs=reader_state: _read_target_window(v, info, ch_cols, start_stamp, end_stamp, rs),
                 reps,
             )
         n_samples = data.shape[1] if data.ndim == 2 else 0
@@ -118,9 +142,9 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
     print(f"\n  --- {section_letter}.2: Channel subset (4 ch, {window_sec}s) ---")
     subset_cols = ch_cols[:4]
     for variant in variants:
-        with _comparison_variant_context(variant) as reader_state:
+        with _target_context(variant) as reader_state:
             t, data = _timed(
-                lambda v=variant, rs=reader_state: _read_comparison_variant(v, info, subset_cols, start_stamp, end_stamp, rs),
+                lambda v=variant, rs=reader_state: _read_target_window(v, info, subset_cols, start_stamp, end_stamp, rs),
                 reps,
             )
         n_samples = data.shape[1] if data.ndim == 2 else 0
@@ -141,9 +165,9 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
         s = mid_stamp
         e = info.stamp_at_row(min(total_stamps // 2 + ws_stamps - 1, info.total_rows - 1))
         for variant in variants:
-            with _comparison_variant_context(variant) as reader_state:
+            with _target_context(variant) as reader_state:
                 t, data = _timed(
-                    lambda v=variant, ss=s, ee=e, rs=reader_state: _read_comparison_variant(v, info, ch_cols, ss, ee, rs),
+                    lambda v=variant, ss=s, ee=e, rs=reader_state: _read_target_window(v, info, ch_cols, ss, ee, rs),
                     reps,
                 )
             n_samples = data.shape[1] if data.ndim == 2 else 0
@@ -164,9 +188,9 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
     for variant in variants:
         samples_read = 0
         t_wall_start = time.perf_counter()
-        with _comparison_variant_context(variant) as reader_state:
+        with _target_context(variant) as reader_state:
             for cs, ce in _chunk_ranges(bench_start, bench_end, chunk_stamps):
-                matrix = _read_comparison_variant(variant, info, ch_cols, cs, ce, reader_state)
+                matrix = _read_target_window(variant, info, ch_cols, cs, ce, reader_state)
                 samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
         t_wall = time.perf_counter() - t_wall_start
         results.append({
@@ -231,62 +255,32 @@ def _baseline_comparison_variants(paths: dict) -> list[dict]:
 
 def bench_random_access(info, paths: dict, cfg: dict) -> list[dict]:
     results = []
-    reps = cfg.get("repetitions", 3)
-    window_sec = cfg.get("default_window", 60)
+    reps = get_repetitions(cfg)
+    window_sec = get_default_window(cfg)
     window_stamps = int(window_sec * info.sample_freq)
-    positions = cfg.get("read_positions", [0.0, 0.5, 0.75, 0.95])
+    positions = get_read_positions(cfg)
     total_stamps = info.total_rows
     n_channels = len(info.channel_labels)
+    targets = _core_targets(paths, cfg, "random_access")
 
-    edf_path = _edf_file(paths["edf"]) if "edf" in paths else None
-    edf_cm = EdfFileReader(edf_path) if edf_path else nullcontext(None)
-    with edf_cm as edf_reader:
-        edf_total = edf_reader.total_samples if edf_reader else 0
-
-        for pos in positions:
-            label = f"{int(pos * 100)}%"
-            start_stamp = info.stamp_at_row(int(pos * total_stamps))
-            end_stamp = start_stamp + window_stamps - 1
-
-            if "parquet" in paths:
+    for target in targets:
+        with _target_context(target) as reader_state:
+            for pos in positions:
+                label = f"{int(pos * 100)}%"
+                start_stamp = info.stamp_at_row(int(pos * total_stamps))
+                end_stamp = start_stamp + window_stamps - 1
                 t, data = _timed(
-                    lambda s=start_stamp, e=end_stamp: _read_parquet_window(paths["parquet"], info.channel_columns, s, e),
+                    lambda s=start_stamp, e=end_stamp, rs=reader_state, tgt=target: _read_target_window(
+                        tgt, info, info.channel_columns, s, e, rs
+                    ),
                     reps,
                 )
                 n_samples = data.shape[1] if data.ndim == 2 else 0
                 results.append({
-                    "category": "random_access", "format": "parquet",
-                    "position": label, "window_seconds": window_sec,
-                    "wall_clock_seconds": round(t, 6),
-                    **_throughput(n_samples, n_channels, t),
-                })
-
-            if edf_reader:
-                start_sample = int(pos * edf_total)
-                n_samp = min(int(window_sec * info.sample_freq), edf_total - start_sample)
-                t, data = _timed(lambda s=start_sample, n=n_samp: edf_reader.read_window(s, n), reps)
-                n_samples = data.shape[1] if data.ndim == 2 else 0
-                results.append({
-                    "category": "random_access", "format": "edf",
-                    "position": label, "window_seconds": window_sec,
-                    "wall_clock_seconds": round(t, 6),
-                    **_throughput(n_samples, n_channels, t),
-                })
-
-            for h5_key, h5_read_fn in [
-                ("h5_columnar", _read_h5_columnar_window),
-                ("h5_rowgroup", _read_h5_rowgroup_window),
-            ]:
-                if h5_key not in paths:
-                    continue
-                t, data = _timed(
-                    lambda s=start_stamp, e=end_stamp, fn=h5_read_fn, p=paths[h5_key]: fn(p, info.channel_columns, s, e),
-                    reps,
-                )
-                n_samples = data.shape[1] if data.ndim == 2 else 0
-                results.append({
-                    "category": "random_access", "format": h5_key,
-                    "position": label, "window_seconds": window_sec,
+                    "category": "random_access",
+                    **_core_result_fields(target),
+                    "position": label,
+                    "window_seconds": window_sec,
                     "wall_clock_seconds": round(t, 6),
                     **_throughput(n_samples, n_channels, t),
                 })
@@ -296,64 +290,35 @@ def bench_random_access(info, paths: dict, cfg: dict) -> list[dict]:
 
 def bench_channel_subset(info, paths: dict, cfg: dict) -> list[dict]:
     results = []
-    reps = cfg.get("repetitions", 3)
-    window_sec = cfg.get("default_window", 60)
+    reps = get_repetitions(cfg)
+    window_sec = get_default_window(cfg)
     window_stamps = int(window_sec * info.sample_freq)
-    subsets = cfg.get("channel_subsets", [4, 10])
+    subsets = get_channel_subsets(cfg)
     mid_stamp = info.stamp_at_row(info.total_rows // 2)
     start_stamp = mid_stamp
     end_stamp = mid_stamp + window_stamps - 1
+    targets = _core_targets(paths, cfg, "channel_subset")
+    all_cols = info.channel_columns
+    n_all = len(all_cols)
+    counts = sorted(set([min(s, n_all) for s in subsets] + [n_all]))
 
-    edf_path = _edf_file(paths["edf"]) if "edf" in paths else None
-    edf_cm = EdfFileReader(edf_path) if edf_path else nullcontext(None)
-    with edf_cm as edf_reader:
-        edf_total = edf_reader.total_samples if edf_reader else 0
-        edf_start = edf_total // 2 if edf_reader else 0
-        edf_n = min(int(window_sec * info.sample_freq), edf_total - edf_start) if edf_reader else 0
-
-        all_cols = info.channel_columns
-        n_all = len(all_cols)
-        counts = sorted(set([min(s, n_all) for s in subsets] + [n_all]))
-
-        for n_ch in counts:
-            ch_label = f"{n_ch}" if n_ch < n_all else "all"
-            cols = all_cols[:n_ch]
-            ch_indices = list(range(n_ch))
-
-            if "parquet" in paths:
-                t, data = _timed(lambda c=cols: _read_parquet_window(paths["parquet"], c, start_stamp, end_stamp), reps)
-                n_samples = data.shape[1] if data.ndim == 2 else 0
-                results.append({
-                    "category": "channel_subset", "format": "parquet",
-                    "channels": ch_label, "window_seconds": window_sec,
-                    "wall_clock_seconds": round(t, 6),
-                    **_throughput(n_samples, n_ch, t),
-                })
-
-            if edf_reader:
-                t, data = _timed(lambda ci=ch_indices: edf_reader.read_window(edf_start, edf_n, ci), reps)
-                n_samples = data.shape[1] if data.ndim == 2 else 0
-                results.append({
-                    "category": "channel_subset", "format": "edf",
-                    "channels": ch_label, "window_seconds": window_sec,
-                    "wall_clock_seconds": round(t, 6),
-                    **_throughput(n_samples, n_ch, t),
-                })
-
-            for h5_key, h5_read_fn in [
-                ("h5_columnar", _read_h5_columnar_window),
-                ("h5_rowgroup", _read_h5_rowgroup_window),
-            ]:
-                if h5_key not in paths:
-                    continue
+    for target in targets:
+        with _target_context(target) as reader_state:
+            for n_ch in counts:
+                ch_label = f"{n_ch}" if n_ch < n_all else "all"
+                cols = all_cols[:n_ch]
                 t, data = _timed(
-                    lambda c=cols, fn=h5_read_fn, p=paths[h5_key]: fn(p, c, start_stamp, end_stamp),
+                    lambda c=cols, rs=reader_state, tgt=target: _read_target_window(
+                        tgt, info, c, start_stamp, end_stamp, rs
+                    ),
                     reps,
                 )
                 n_samples = data.shape[1] if data.ndim == 2 else 0
                 results.append({
-                    "category": "channel_subset", "format": h5_key,
-                    "channels": ch_label, "window_seconds": window_sec,
+                    "category": "channel_subset",
+                    **_core_result_fields(target),
+                    "channels": ch_label,
+                    "window_seconds": window_sec,
                     "wall_clock_seconds": round(t, 6),
                     **_throughput(n_samples, n_ch, t),
                 })
@@ -365,29 +330,19 @@ def bench_remontage(info, paths: dict, cfg: dict) -> list[dict]:
     import time
 
     results = []
-    reps = cfg.get("repetitions", 3)
-    window_sec = cfg.get("default_window", 60)
+    reps = get_repetitions(cfg)
+    window_sec = get_default_window(cfg)
     window_stamps = int(window_sec * info.sample_freq)
     mid_stamp = info.stamp_at_row(info.total_rows // 2)
     labels = list(info.channel_labels)
     n_channels = len(labels)
+    targets = _core_targets(paths, cfg, "remontage")
 
-    edf_path = _edf_file(paths["edf"]) if "edf" in paths else None
-    edf_cm = EdfFileReader(edf_path) if edf_path else nullcontext(None)
-    with edf_cm as edf_reader:
-        edf_total = edf_reader.total_samples if edf_reader else 0
-        edf_start = edf_total // 2 if edf_reader else 0
-        edf_n = min(int(window_sec * info.sample_freq), edf_total - edf_start) if edf_reader else 0
-
-        for fmt, h5_fn in _available_window_formats(paths):
-            def run(f=fmt, fn=h5_fn):
+    for target in targets:
+        with _target_context(target) as reader_state:
+            def run(rs=reader_state, tgt=target):
                 t_read_start = time.perf_counter()
-                if f == "parquet":
-                    matrix = _read_parquet_window(paths["parquet"], info.channel_columns, mid_stamp, mid_stamp + window_stamps - 1)
-                elif f == "edf":
-                    matrix = edf_reader.read_window(edf_start, edf_n)
-                else:
-                    matrix = fn(paths[f], info.channel_columns, mid_stamp, mid_stamp + window_stamps - 1)
+                matrix = _read_target_window(tgt, info, info.channel_columns, mid_stamp, mid_stamp + window_stamps - 1, rs)
                 read_sec = time.perf_counter() - t_read_start
                 t_mont_start = time.perf_counter()
                 derived = _apply_bipolar_montage(matrix, labels)
@@ -406,7 +361,8 @@ def bench_remontage(info, paths: dict, cfg: dict) -> list[dict]:
             total = read_sec + mont_sec
             n_samples = matrix.shape[1] if (matrix is not None and matrix.ndim == 2) else 0
             results.append({
-                "category": "remontage", "format": fmt,
+                "category": "remontage",
+                **_core_result_fields(target),
                 "window_seconds": window_sec,
                 "wall_clock_seconds": round(total, 6),
                 "read_seconds": round(read_sec, 6),
@@ -440,21 +396,20 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
 
     print(f"    Study: {hours}h ({bench_sec:.0f}s), {n_channels} ch, {sample_freq} Hz")
 
-    for fmt, h5_fn in _available_window_formats(paths):
-        edf_cm = EdfFileReader(_edf_file(paths["edf"])) if fmt == "edf" else nullcontext(None)
-        with edf_cm as edf_reader:
-            edf_bench_samples = min(int(hours * 3600 * sample_freq), edf_reader.total_samples) if edf_reader else 0
+    for target in _core_targets(paths, cfg, "filter_pipeline"):
+        with _target_context(target) as reader_state:
+            edf_bench_samples = min(int(hours * 3600 * sample_freq), reader_state.total_samples) if reader_state else 0
             t_read_total = t_mont_total = t_filt_total = 0.0
             total_samples_read = 0
 
             t_wall_start = time.perf_counter()
-            if fmt == "edf":
+            if target["reader_kind"] == "edf":
                 edf_pos = 0
                 while edf_pos < edf_bench_samples:
                     n = min(edf_chunk_samples, edf_bench_samples - edf_pos)
 
                     t0 = time.perf_counter()
-                    matrix = edf_reader.read_window(edf_pos, n)
+                    matrix = _read_target_window(target, info, info.channel_columns, edf_pos, edf_pos + n - 1, reader_state)
                     t_read_total += time.perf_counter() - t0
 
                     t1 = time.perf_counter()
@@ -470,10 +425,7 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
             else:
                 for cs, ce in _chunk_ranges(bench_start, bench_end, chunk_stamps):
                     t0 = time.perf_counter()
-                    if fmt == "parquet":
-                        matrix = _read_parquet_window(paths["parquet"], info.channel_columns, cs, ce)
-                    else:
-                        matrix = h5_fn(paths[fmt], info.channel_columns, cs, ce)
+                    matrix = _read_target_window(target, info, info.channel_columns, cs, ce, reader_state)
                     t_read_total += time.perf_counter() - t0
 
                     t1 = time.perf_counter()
@@ -488,7 +440,8 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
 
             t_wall = time.perf_counter() - t_wall_start
             results.append({
-                "category": "filter_pipeline_full", "format": fmt,
+                "category": "filter_pipeline_full",
+                **_core_result_fields(target),
                 "benchmark": "D.1",
                 "duration_hours": hours,
                 "duration_seconds": bench_sec,
@@ -509,10 +462,9 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
     n_fft_windows = int((bench_sec - fft_window_sec) / fft_stride_sec) + 1
     print(f"    FFT: {n_fft_windows} windows, {fft_window_sec}s window, {fft_stride_sec}s stride")
 
-    for fmt, h5_fn in _available_window_formats(paths):
-        edf_cm = EdfFileReader(_edf_file(paths["edf"])) if fmt == "edf" else nullcontext(None)
-        with edf_cm as edf_reader:
-            edf_bench_samples = min(int(hours * 3600 * sample_freq), edf_reader.total_samples) if edf_reader else 0
+    for target in _core_targets(paths, cfg, "filter_pipeline"):
+        with _target_context(target) as reader_state:
+            edf_bench_samples = min(int(hours * 3600 * sample_freq), reader_state.total_samples) if reader_state else 0
             t_read_total = t_mont_total = t_filt_total = t_fft_total = 0.0
             total_samples_read = 0
             fft_count = 0
@@ -522,14 +474,14 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
             read_chunk_stamps = int(read_chunk_sec * sample_freq)
             tail: np.ndarray | None = None
 
-            if fmt == "edf":
+            if target["reader_kind"] == "edf":
                 edf_pos = 0
                 edf_chunk = int(read_chunk_sec * sample_freq)
                 while edf_pos < edf_bench_samples:
                     n = min(edf_chunk, edf_bench_samples - edf_pos)
 
                     t0 = time.perf_counter()
-                    matrix = edf_reader.read_window(edf_pos, n)
+                    matrix = _read_target_window(target, info, info.channel_columns, edf_pos, edf_pos + n - 1, reader_state)
                     t_read_total += time.perf_counter() - t0
 
                     t1 = time.perf_counter()
@@ -555,10 +507,7 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
             else:
                 for cs, ce in _chunk_ranges(bench_start, bench_end, read_chunk_stamps):
                     t0 = time.perf_counter()
-                    if fmt == "parquet":
-                        matrix = _read_parquet_window(paths["parquet"], info.channel_columns, cs, ce)
-                    else:
-                        matrix = h5_fn(paths[fmt], info.channel_columns, cs, ce)
+                    matrix = _read_target_window(target, info, info.channel_columns, cs, ce, reader_state)
                     t_read_total += time.perf_counter() - t0
 
                     t1 = time.perf_counter()
@@ -584,12 +533,13 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
             t_wall = time.perf_counter() - t_wall_start
             if fft_count != n_fft_windows:
                 print(
-                    f"  [warn] D.2 {fmt}: expected {n_fft_windows} FFT windows, "
+                    f"  [warn] D.2 {target['artifact_id']}: expected {n_fft_windows} FFT windows, "
                     f"computed {fft_count} (delta {fft_count - n_fft_windows:+d})"
                 )
 
             results.append({
-                "category": "sliding_fft_full", "format": fmt,
+                "category": "sliding_fft_full",
+                **_core_result_fields(target),
                 "benchmark": "D.2",
                 "duration_hours": hours,
                 "duration_seconds": bench_sec,
@@ -613,62 +563,31 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
 
 def bench_window_scaling(info, paths: dict, cfg: dict) -> list[dict]:
     results = []
-    reps = cfg.get("repetitions", 3)
-    window_sizes = cfg.get("window_sizes", [10, 30, 60, 300, 900, 1800, 3600])
+    reps = get_repetitions(cfg)
+    window_sizes = get_window_sizes(cfg)
     n_channels = len(info.channel_labels)
     total_stamps = info.total_rows
-
-    edf_path = _edf_file(paths["edf"]) if "edf" in paths else None
-    edf_cm = EdfFileReader(edf_path) if edf_path else nullcontext(None)
     mid_stamp = info.stamp_at_row(total_stamps // 2)
 
-    with edf_cm as edf_reader:
-        edf_total = edf_reader.total_samples if edf_reader else 0
-
-        for window_sec in window_sizes:
-            window_stamps = int(window_sec * info.sample_freq)
-            if window_stamps > total_stamps:
-                continue
-
-            start_stamp = mid_stamp
-            end_stamp = start_stamp + window_stamps - 1
-
-            edf_start = edf_total // 2 if edf_reader else 0
-            edf_n = min(int(window_sec * info.sample_freq), edf_total - edf_start) if edf_reader else 0
-
-            if "parquet" in paths:
-                t, data = _timed(lambda: _read_parquet_window(paths["parquet"], info.channel_columns, start_stamp, end_stamp), reps)
-                n_samples = data.shape[1] if data.ndim == 2 else 0
-                results.append({
-                    "category": "window_scaling", "format": "parquet",
-                    "window_seconds": window_sec,
-                    "wall_clock_seconds": round(t, 6),
-                    **_throughput(n_samples, n_channels, t),
-                })
-
-            if edf_reader:
-                t, data = _timed(lambda s=edf_start, n=edf_n: edf_reader.read_window(s, n), reps)
-                n_samples = data.shape[1] if data.ndim == 2 else 0
-                results.append({
-                    "category": "window_scaling", "format": "edf",
-                    "window_seconds": window_sec,
-                    "wall_clock_seconds": round(t, 6),
-                    **_throughput(n_samples, n_channels, t),
-                })
-
-            for h5_key, h5_read_fn in [
-                ("h5_columnar", _read_h5_columnar_window),
-                ("h5_rowgroup", _read_h5_rowgroup_window),
-            ]:
-                if h5_key not in paths:
+    for target in _core_targets(paths, cfg, "window_scaling"):
+        with _target_context(target) as reader_state:
+            for window_sec in window_sizes:
+                window_stamps = int(window_sec * info.sample_freq)
+                if window_stamps > total_stamps:
                     continue
+
+                start_stamp = mid_stamp
+                end_stamp = start_stamp + window_stamps - 1
                 t, data = _timed(
-                    lambda fn=h5_read_fn, p=paths[h5_key]: fn(p, info.channel_columns, start_stamp, end_stamp),
+                    lambda s=start_stamp, e=end_stamp, rs=reader_state, tgt=target: _read_target_window(
+                        tgt, info, info.channel_columns, s, e, rs
+                    ),
                     reps,
                 )
                 n_samples = data.shape[1] if data.ndim == 2 else 0
                 results.append({
-                    "category": "window_scaling", "format": h5_key,
+                    "category": "window_scaling",
+                    **_core_result_fields(target),
                     "window_seconds": window_sec,
                     "wall_clock_seconds": round(t, 6),
                     **_throughput(n_samples, n_channels, t),

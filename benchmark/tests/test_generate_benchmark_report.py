@@ -218,6 +218,32 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         self.assertIn("Parquet has the lowest median 1-minute read time", rendered)
         self.assertIn("*This category was not present in the input results file.*", rendered)
 
+    def test_render_report_preserves_variant_order_for_core_results(self) -> None:
+        payload = {
+            "run_id": "2026-03-21T00-00-00",
+            "system": {"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16},
+            "studies": [
+                {
+                    "name": "demo",
+                    "channels": 2,
+                    "sample_freq": 100.0,
+                    "total_stamps": 1000,
+                    "duration_seconds": 10.0,
+                }
+            ],
+            "benchmarks": [
+                {"category": "random_access", "format": "pq_fast", "artifact_order": 0, "position": "0%", "wall_clock_seconds": 0.05, "mib_per_sec": 50.0},
+                {"category": "random_access", "format": "h5_mid", "artifact_order": 1, "position": "0%", "wall_clock_seconds": 0.10, "mib_per_sec": 25.0},
+                {"category": "random_access", "format": "pq_slow", "artifact_order": 2, "position": "0%", "wall_clock_seconds": 0.20, "mib_per_sec": 12.5},
+            ],
+        }
+        template = "# Report\n\n${a_results}\n"
+
+        rendered = render_report(payload, template, Path("benchmark/results/demo.json"))
+
+        self.assertLess(rendered.index("pq_fast"), rendered.index("h5_mid"))
+        self.assertLess(rendered.index("h5_mid"), rendered.index("pq_slow"))
+
     def test_generate_report_writes_markdown_and_html(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

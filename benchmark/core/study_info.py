@@ -9,12 +9,15 @@ import psutil
 import pyarrow.parquet as pq
 import yaml
 
+from .config_helpers import normalize_config, validate_config
 from .parquet_paths import list_parquet_files
 
 
 def load_config(path: str) -> dict:
     with open(path, "r") as f:
-        return yaml.safe_load(f)
+        cfg = normalize_config(yaml.safe_load(f))
+    validate_config(cfg)
+    return cfg
 
 
 def _system_info() -> dict:

@@ -758,7 +758,15 @@ def rows_for_categories(payload: dict[str, Any], categories: list[str]) -> list[
 def formats_in_rows(rows: list[dict[str, Any]]) -> list[str]:
     formats = {row.get("format") for row in rows if row.get("format")}
     ordered = [fmt for fmt in FORMAT_ORDER if fmt in formats]
-    extras = sorted(formats.difference(ordered))
+    order_by_format: dict[str, float] = {}
+    for row in rows:
+        fmt = row.get("format")
+        if not fmt or fmt in FORMAT_ORDER:
+            continue
+        order = row.get("artifact_order")
+        if fmt not in order_by_format or (isinstance(order, (int, float)) and order < order_by_format[fmt]):
+            order_by_format[fmt] = float(order) if isinstance(order, (int, float)) else float("inf")
+    extras = sorted(formats.difference(ordered), key=lambda fmt: (order_by_format.get(fmt, float("inf")), fmt))
     return ordered + extras
 
 

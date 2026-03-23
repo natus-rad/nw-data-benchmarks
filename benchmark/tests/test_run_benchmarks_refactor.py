@@ -19,7 +19,10 @@ from benchmark.core.config_helpers import (
     get_tuned_chunk_sec,
     get_tuned_hdf5_compression,
     get_tuned_parquet_codecs,
+    normalize_config,
+    validate_config,
 )
+from benchmark.core.ingest import ingest
 from benchmark.core.study_info import StudyInfo
 from benchmark.core.variants import generate_variants
 from benchmark.core.remote import bench_remote_query
@@ -114,6 +117,69 @@ class BenchmarkRefactorTests(unittest.TestCase):
         selected = run_benchmarks._selected_benchmarks(cfg, args)
 
         self.assertEqual([cat_id for cat_id, _, _ in selected], ["random_access"])
+
+    def test_validate_config_requires_variant_ids(self):
+        cfg = normalize_config({
+            "variants": [{"format": "parquet", "compression": "lz4", "row_group_minutes": 30}],
+        })
+
+        with self.assertRaisesRegex(ValueError, "must define a non-empty string 'id'"):
+            validate_config(cfg)
+
+    def test_ingest_materializes_parquet_input_to_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            parquet_file = tmp_path / "input.parquet"
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1, 2], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2, 0.3], type=pa.float32()),
+                }),
+                parquet_file,
+                compression="snappy",
+            )
+
+            canonical_dir, detected_fmt, sample_freq = ingest(
+                parquet_file,
+                tmp_path / "cache",
+                sample_freq=256,
+                canonical_cfg={"compression": "lz4", "row_group_minutes": 30},
+            )
+
+            self.assertEqual(detected_fmt, "parquet")
+            self.assertEqual(sample_freq, 256.0)
+            self.assertNotEqual(canonical_dir, parquet_file)
+            self.assertTrue((canonical_dir / "part_00000.parquet").exists())
+
+    def test_runner_rejects_no_variant_direct_source_erd_core_runs(self):
+        cfg = {
+            "studies": [{"name": "demo", "input": "demo.erd"}],
+            "benchmarks": ["random_access"],
+            "variants": [],
+        }
+        args = argparse.Namespace(
+            config="benchmark/config/default.yaml",
+            categories=None,
+            output=None,
+            dry_run=False,
+            no_report=True,
+            sas_token=None,
+        )
+        fake_info = SimpleNamespace(
+            sample_freq=256.0,
+            total_rows=1024,
+            n_segments=1,
+            segment_plans=[],
+            channel_labels=["Fp1"],
+            channel_columns=["ch_Fp1"],
+        )
+
+        with patch.object(run_benchmarks, "resolve_input_path", return_value=Path("demo.erd")), \
+             patch.object(run_benchmarks, "ingest", return_value=(Path("demo_canonical"), "erd", 256.0)), \
+             patch.object(run_benchmarks.StudyInfo, "from_parquet", return_value=fake_info), \
+             patch.object(run_benchmarks, "generate_variants", return_value={"parquet": Path("demo_canonical"), "__root_variants__": []}):
+            with self.assertRaisesRegex(ValueError, "not yet supported for ERD"):
+                run_benchmarks.run_benchmarks(cfg, args)
 
     def test_runner_wires_baseline_input_path_separately_from_canonical_parquet(self):
         cfg = {
@@ -284,6 +350,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "dtype=float32"):
                 generate_variants(canonical, info, [{
+                    "id": "h5_bad_dtype",
                     "format": "hdf5",
                     "layout": "columnar",
                     "chunk_minutes": 5,
@@ -292,6 +359,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "compression=lz4"):
                 generate_variants(canonical, info, [{
+                    "id": "h5_bad_codec",
                     "format": "hdf5",
                     "layout": "columnar",
                     "chunk_minutes": 5,
@@ -313,18 +381,19 @@ class BenchmarkRefactorTests(unittest.TestCase):
             )
             info = StudyInfo.from_parquet(canonical, sample_freq=256)
             output_base = tmp_path / "demo_study_variants"
-            spec = [{"format": "parquet", "row_group_minutes": 30, "compression": "lz4"}]
+            spec = [{"id": "pq_30m_lz4", "format": "parquet", "row_group_minutes": 30, "compression": "lz4"}]
 
-            generate_variants(canonical, info, spec, output_base)
-            out_file = output_base / "parquet_30m_flo_lz4.parquet"
+            first_paths = generate_variants(canonical, info, spec, output_base)
+            out_file = first_paths["variant__pq_30m_lz4"]
             self.assertTrue(out_file.exists())
 
             stdout = io.StringIO()
             with redirect_stdout(stdout):
                 paths = generate_variants(canonical, info, spec, output_base)
 
-            self.assertIn("[cached] parquet_30m_flo_lz4", stdout.getvalue())
-            self.assertEqual(paths["parquet"], out_file)
+            self.assertIn("[cached] variant__pq_30m_lz4", stdout.getvalue())
+            self.assertEqual(paths["parquet"], canonical)
+            self.assertEqual(paths["variant__pq_30m_lz4"], out_file)
 
     def test_study_info_from_parquet_accepts_single_file_path(self):
         with tempfile.TemporaryDirectory() as tmp:

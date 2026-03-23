@@ -17,13 +17,17 @@ from benchmark.core.azure_storage import resolve_input_path
 from benchmark.core.bench_utils import _estimate_runs, _print_result
 from benchmark.core.benchmarks import BENCHMARKS
 from benchmark.core.config_helpers import (
+    get_canonical_parquet_cfg,
     get_parquet_compression_variants,
     get_remote_query_cfg,
+    normalize_config,
+    selected_categories,
     get_tuned_block_sizes_minutes,
     get_tuned_chunk_sec,
     get_tuned_hdf5_compression,
     get_tuned_parquet_codecs,
     is_investigation_enabled,
+    validate_config,
 )
 from benchmark.core.constants import Category, FormatKey, InputFormat
 from benchmark.core.ingest import ingest
@@ -42,7 +46,8 @@ _RESULT_SAVE_RETRY_DELAY_SECONDS = 0.2
 
 
 def _selected_benchmarks(cfg: dict, args: argparse.Namespace) -> list[tuple[str, str, object]]:
-    categories = args.categories if args.categories else cfg.get("benchmarks", list(BENCHMARKS.keys()))
+    cfg = normalize_config(cfg)
+    categories = args.categories if args.categories else selected_categories(cfg)
     selected = []
     for cat in categories:
         if cat in BENCHMARKS:
@@ -75,6 +80,54 @@ def _baseline_input_paths(input_path: Path, detected_fmt: str) -> dict[str, Path
     return {}
 
 
+def _source_target(input_path: Path, detected_fmt: str) -> dict | None:
+    if detected_fmt == InputFormat.PARQUET:
+        return {
+            "artifact_id": "source_parquet",
+            "variant_id": None,
+            "artifact_kind": "source",
+            "format_family": "parquet",
+            "reader_kind": "parquet",
+            "path": Path(input_path),
+            "display_label": "source_parquet",
+            "sort_index": 0,
+        }
+    if detected_fmt == InputFormat.HDF5:
+        return {
+            "artifact_id": "source_hdf5",
+            "variant_id": None,
+            "artifact_kind": "source",
+            "format_family": "hdf5",
+            "reader_kind": "hdf5_input",
+            "path": Path(input_path),
+            "display_label": "source_hdf5",
+            "sort_index": 0,
+        }
+    if detected_fmt == InputFormat.EDF:
+        return {
+            "artifact_id": "source_edf",
+            "variant_id": None,
+            "artifact_kind": "source",
+            "format_family": "edf",
+            "reader_kind": "edf",
+            "path": Path(input_path),
+            "display_label": "source_edf",
+            "sort_index": 0,
+        }
+    if detected_fmt == InputFormat.ERD:
+        return {
+            "artifact_id": "source_erd",
+            "variant_id": None,
+            "artifact_kind": "source",
+            "format_family": "erd",
+            "reader_kind": "erd",
+            "path": Path(input_path),
+            "display_label": "source_erd",
+            "sort_index": 0,
+        }
+    return None
+
+
 def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str, str, object]]) -> None:
     print("\n=== DRY RUN ===")
     print(f"Config: {args.config}")
@@ -85,6 +138,9 @@ def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str
     print(f"\nSelected benchmarks ({len(selected)}):")
     for cat_id, cat_name, _ in selected:
         print(f"  - [{cat_id}] {cat_name}")
+        core_cfg = cfg.get("benchmarks", {}).get("core", {}).get(cat_id, {})
+        if isinstance(core_cfg, dict) and "variants" in core_cfg:
+            print(f"      variants={core_cfg['variants']}")
 
     selected_ids = {cat_id for cat_id, _, _ in selected}
     if any(cat in selected_ids for cat in (
@@ -130,6 +186,7 @@ def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str
 
     print(f"\nWindow sizes: {cfg.get('window_sizes', [])}")
     print(f"Repetitions: {cfg.get('repetitions', 3)}")
+    print(f"Canonical Parquet: {get_canonical_parquet_cfg(cfg)}")
     report_mode = "skip (--no-report)" if getattr(args, "no_report", False) else "auto-generate Markdown + HTML report"
     print(f"Report: {report_mode}")
     print(f"\nTotal benchmark runs: ~{_estimate_runs(cfg, selected)}")
@@ -159,6 +216,8 @@ def _save_results(output: dict, out_path: Path) -> None:
 
 
 def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
+    cfg = normalize_config(cfg)
+    validate_config(cfg)
     run_id = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     cache_dir = Path(cfg.get("cache_dir", ".benchmark_cache"))
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -182,17 +241,38 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
         print(f"\n{'=' * 60}\nStudy: {study_cfg['name']}\n{'=' * 60}")
         input_path = resolve_input_path(cfg, study_cfg, args)
         sample_freq = study_cfg.get("sample_freq")
-        canonical_pq, detected_fmt, sample_freq = ingest(input_path, cache_dir, sample_freq)
+        canonical_pq, detected_fmt, sample_freq = ingest(
+            input_path,
+            cache_dir,
+            sample_freq,
+            canonical_cfg=get_canonical_parquet_cfg(cfg),
+        )
         info = StudyInfo.from_parquet(canonical_pq, sample_freq=sample_freq)
         short_name = study_cfg["name"][:30]
         output_base = cache_dir / f"{short_name}_variants"
         variant_specs = cfg.get("variants", [])
         paths = generate_variants(canonical_pq, info, variant_specs, output_base)
         paths.update(_baseline_input_paths(input_path, detected_fmt))
+        paths["__source_target__"] = _source_target(input_path, detected_fmt)
+        paths["__canonical_parquet__"] = canonical_pq
         source_type = detected_fmt
         study_dir = input_path
 
         selected_ids = {cat_id for cat_id, _, _ in selected}
+        if not variant_specs and detected_fmt == InputFormat.ERD and any(
+            cat_id in {
+                Category.RANDOM_ACCESS,
+                Category.CHANNEL_SUBSET,
+                Category.REMONTAGE,
+                Category.FILTER_PIPELINE,
+                Category.WINDOW_SCALING,
+            }
+            for cat_id in selected_ids
+        ):
+            raise ValueError(
+                "Core source-direct benchmarking is not yet supported for ERD when root variants is empty. "
+                "Declare benchmark variants or disable core benchmarks for this run."
+            )
         if Category.COMPRESSION in selected_ids and paths.get(FormatKey.PARQUET) and is_investigation_enabled(cfg, "compression"):
             _setup_parquet_compression_variants(
                 paths, paths[FormatKey.PARQUET], output_base, short_name, cfg)
@@ -212,7 +292,7 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
             "total_stamps": info.total_rows,
             "duration_seconds": round(info.total_rows / info.sample_freq, 1),
             "segments": info.n_segments if hasattr(info, "n_segments") else len(info.segment_plans),
-            "paths": {k: str(v) for k, v in paths.items()},
+            "paths": {k: str(v) for k, v in paths.items() if isinstance(v, Path)},
         }
         output["studies"].append(study_meta)
 

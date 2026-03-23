@@ -8,6 +8,8 @@ same format.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 import h5py
@@ -21,6 +23,29 @@ from .setup import _build_chunk_index, _parquet_to_edf
 from .study_info import StudyInfo
 
 
+def _spec_hash(spec: dict) -> str:
+    encoded = json.dumps(spec, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha1(encoded).hexdigest()[:8]
+
+
+def _safe_id(value: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in value)[:64]
+
+
+def _register_root_variant(paths: dict, variant_id: str, fmt: str, reader_kind: str,
+                           path: Path, sort_index: int) -> None:
+    paths.setdefault("__root_variants__", []).append({
+        "artifact_id": variant_id,
+        "variant_id": variant_id,
+        "artifact_kind": "variant",
+        "format_family": fmt,
+        "reader_kind": reader_kind,
+        "path": path,
+        "display_label": variant_id,
+        "sort_index": sort_index,
+    })
+
+
 def generate_variants(canonical_pq: Path, info: StudyInfo,
                       variant_specs: list[dict],
                       output_base: Path) -> dict[str, Path]:
@@ -29,77 +54,54 @@ def generate_variants(canonical_pq: Path, info: StudyInfo,
     Returns a ``paths`` dict with keys the benchmark functions expect.
     If no variants are specified, returns just ``{"parquet": canonical_pq}``.
     """
-    paths: dict[str, Path] = {}
+    paths: dict[str, Path] = {
+        "parquet": canonical_pq,
+        "__root_variants__": [],
+    }
 
     if not variant_specs:
-        # No variants configured — benchmark the canonical Parquet only.
-        paths["parquet"] = canonical_pq
         return paths
 
     output_base.mkdir(parents=True, exist_ok=True)
 
-    # Track how many of each format we've seen for labeling.
-    fmt_counts: dict[str, int] = {}
-
-    for spec in variant_specs:
+    for index, spec in enumerate(variant_specs):
         fmt = spec["format"]
-        fmt_counts[fmt] = fmt_counts.get(fmt, 0) + 1
-        label = _variant_label(spec)
+        variant_id = spec["id"]
 
         if fmt == "parquet":
-            _generate_parquet_variant(canonical_pq, output_base, info, spec, label, paths)
+            _generate_parquet_variant(canonical_pq, output_base, info, spec, variant_id, index, paths)
         elif fmt == "hdf5":
-            _generate_hdf5_variant(canonical_pq, output_base, info, spec, label, paths)
+            _generate_hdf5_variant(canonical_pq, output_base, info, spec, variant_id, index, paths)
         elif fmt == "edf":
-            _generate_edf_variant(canonical_pq, output_base, info, spec, label, paths)
+            _generate_edf_variant(canonical_pq, output_base, info, spec, variant_id, index, paths)
         else:
             print(f"  [warn] Unknown variant format: {fmt}, skipping")
-
-    # Ensure "parquet" key exists (benchmarks check for it).
-    # Use the canonical if no Parquet variant was generated.
-    if "parquet" not in paths:
-        paths["parquet"] = canonical_pq
 
     return paths
 
 
-def _variant_label(spec: dict) -> str:
-    """Build a human-readable label from a variant spec."""
-    fmt = spec["format"]
-    if fmt == "edf":
-        return "edf"
-    parts = []
-    if fmt == "parquet":
-        rg = spec.get("row_group_minutes", 5)
-        parts.append(f"{rg}m")
-    elif fmt == "hdf5":
-        layout = spec.get("layout", "columnar")
-        parts.append(layout[:3])  # "col" or "row"
-        chunk = spec.get("chunk_minutes", 5)
-        parts.append(f"{chunk}m")
-    dtype = spec.get("dtype", "float32")
-    parts.append(dtype[:3])  # "flo" or "int"
-    comp = spec.get("compression", "lz4")
-    parts.append(comp)
-    return "_".join(parts)
-
-
 def _generate_parquet_variant(canonical_pq: Path, output_base: Path,
-                              info: StudyInfo, spec: dict, label: str,
-                              paths: dict) -> None:
+                              info: StudyInfo, spec: dict, variant_id: str,
+                              sort_index: int, paths: dict) -> None:
     """Re-partition canonical Parquet with specified row group size and codec."""
     rg_minutes = spec.get("row_group_minutes", 5)
     compression = spec.get("compression", "lz4")
     compression = None if compression == "none" else compression
     row_group_size = int(rg_minutes * 60 * info.sample_freq)
 
-    key = f"parquet_{label}"
-    out_file = output_base / f"{key}.parquet"
+    spec_token = _spec_hash({
+        "id": variant_id,
+        "format": "parquet",
+        "row_group_minutes": rg_minutes,
+        "compression": spec.get("compression", "lz4"),
+    })
+    key = f"variant__{variant_id}"
+    out_file = output_base / f"{_safe_id(variant_id)}_{spec_token}.parquet"
 
     if out_file.exists():
         print(f"  [cached] {key}")
     else:
-        print(f"  [variant] Parquet ({label}) ...")
+        print(f"  [variant] Parquet ({variant_id}) ...")
         output_base.mkdir(parents=True, exist_ok=True)
         src_files = list_parquet_files(canonical_pq)
         schema = pq.read_schema(str(src_files[0]))
@@ -131,17 +133,15 @@ def _generate_parquet_variant(canonical_pq: Path, output_base: Path,
 
         size_mib = out_file.stat().st_size / (1024 * 1024)
         n_rg = pq.ParquetFile(str(out_file)).metadata.num_row_groups
-        print(f"  [variant] {key}: {size_mib:.1f} MiB, {n_rg} row groups")
+        print(f"  [variant] {variant_id}: {size_mib:.1f} MiB, {n_rg} row groups")
 
     paths[key] = out_file
-    # First Parquet variant also gets the "parquet" key for backward compat.
-    if "parquet" not in paths:
-        paths["parquet"] = out_file
+    _register_root_variant(paths, variant_id, "parquet", "parquet", out_file, sort_index)
 
 
 def _generate_hdf5_variant(canonical_pq: Path, output_base: Path,
-                            info: StudyInfo, spec: dict, label: str,
-                            paths: dict) -> None:
+                            info: StudyInfo, spec: dict, variant_id: str,
+                            sort_index: int, paths: dict) -> None:
     """Write HDF5 variant from canonical Parquet."""
     layout = spec.get("layout", "columnar")
     chunk_minutes = spec.get("chunk_minutes", 5)
@@ -154,13 +154,21 @@ def _generate_hdf5_variant(canonical_pq: Path, output_base: Path,
     chunk_samples = int(chunk_minutes * 60 * info.sample_freq)
 
     layout_key = "h5_columnar" if layout == "columnar" else "h5_rowgroup"
-    key = f"{layout_key}_{label}"
-    out_file = output_base / f"{key}.h5"
+    spec_token = _spec_hash({
+        "id": variant_id,
+        "format": "hdf5",
+        "layout": layout,
+        "chunk_minutes": chunk_minutes,
+        "dtype": dtype,
+        "compression": compression,
+    })
+    key = f"variant__{variant_id}"
+    out_file = output_base / f"{_safe_id(variant_id)}_{spec_token}.h5"
 
     if out_file.exists():
         print(f"  [cached] {key}")
     else:
-        print(f"  [variant] HDF5 {layout} ({label}) ...")
+        print(f"  [variant] HDF5 {layout} ({variant_id}) ...")
         output_base.mkdir(parents=True, exist_ok=True)
         src_files = list_parquet_files(canonical_pq)
         schema = pq.read_schema(str(src_files[0]))
@@ -227,29 +235,33 @@ def _generate_hdf5_variant(canonical_pq: Path, output_base: Path,
             hf.attrs["total_samples"] = total_rows
 
         size_mib = out_file.stat().st_size / (1024 * 1024)
-        print(f"  [variant] {key}: {size_mib:.1f} MiB")
+        print(f"  [variant] {variant_id}: {size_mib:.1f} MiB")
 
     paths[key] = out_file
     # First of each layout type also gets the canonical key.
     if layout_key not in paths:
         paths[layout_key] = out_file
+    _register_root_variant(paths, variant_id, "hdf5", layout_key, out_file, sort_index)
 
 
 def _generate_edf_variant(canonical_pq: Path, output_base: Path,
-                           info: StudyInfo, spec: dict, label: str,
-                           paths: dict) -> None:
+                           info: StudyInfo, spec: dict, variant_id: str,
+                           sort_index: int, paths: dict) -> None:
     """Write EDF variant from canonical Parquet."""
-    key = "edf"
-    out_file = output_base / f"{canonical_pq.stem}.edf"
+    spec_token = _spec_hash({"id": variant_id, "format": "edf"})
+    key = f"variant__{variant_id}"
+    out_file = output_base / f"{_safe_id(variant_id)}_{spec_token}.edf"
 
     if out_file.exists():
         print(f"  [cached] {key}")
     else:
-        print(f"  [variant] EDF ...")
+        print(f"  [variant] EDF ({variant_id}) ...")
         _parquet_to_edf(canonical_pq, out_file, sample_freq=info.sample_freq)
         size_mib = out_file.stat().st_size / (1024 * 1024)
-        print(f"  [variant] EDF: {size_mib:.1f} MiB")
+        print(f"  [variant] {variant_id}: {size_mib:.1f} MiB")
 
     paths["edf"] = out_file
+    paths[key] = out_file
+    _register_root_variant(paths, variant_id, "edf", "edf", out_file, sort_index)
 
 
