@@ -16,6 +16,12 @@ if str(REPO_ROOT) not in sys.path:
 from benchmark.core.azure_storage import resolve_input_path
 from benchmark.core.bench_utils import _estimate_runs, _print_result
 from benchmark.core.benchmarks import BENCHMARKS
+from benchmark.core.config_helpers import (
+    get_parquet_compression_variants,
+    get_remote_query_cfg,
+    get_tuned_block_sizes_minutes,
+    is_investigation_enabled,
+)
 from benchmark.core.constants import Category, FormatKey
 from benchmark.core.ingest import ingest
 from benchmark.core.remote import bench_remote_query
@@ -61,39 +67,39 @@ def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str
     print("\nStudies:")
     for study in cfg.get("studies", []):
         print(f"  - {study['name']} (input: {_study_input_value(study)})")
-    print(f"\nCore benchmarks ({len(selected)}):")
+    print(f"\nSelected benchmarks ({len(selected)}):")
     for cat_id, cat_name, _ in selected:
         print(f"  - [{cat_id}] {cat_name}")
 
-    # Parquet investigations config section
-    pq_inv = cfg.get("parquet_investigations", {})
-    if pq_inv.get("enabled"):
-        print("\nParquet investigations (enabled):")
-        if pq_inv.get("compression"):
-            comp = pq_inv["compression"]
-            codecs = comp.get("codecs", [])
-            print(f"  - compression: codecs={codecs}")
-        if pq_inv.get("precision_loss"):
-            print("  - precision_loss: true")
-        if pq_inv.get("int32_storage"):
-            print("  - int32_storage: true")
-        rq = pq_inv.get("remote_query", {})
-        if rq.get("enabled"):
-            print(f"  - remote_query: {rq.get('remote_url', '(no URL)')}")
-    else:
-        # Legacy flat list compression variants
-        pq_comp = cfg.get("parquet_compression", [])
-        if pq_comp:
-            print(f"\nCompression variants ({len(pq_comp)}):")
-            for comp in pq_comp:
-                label = comp["codec"] + (f" level={comp['level']}" if comp.get("level") else "")
-                print(f"  - {label}")
+    selected_ids = {cat_id for cat_id, _, _ in selected}
+    if any(cat in selected_ids for cat in (
+        Category.COMPRESSION,
+        Category.PRECISION_LOSS,
+        Category.INT32_STORAGE,
+        Category.REMOTE_QUERY,
+    )):
+        print("\nParquet investigations config:")
+        if Category.COMPRESSION in selected_ids:
+            variants = get_parquet_compression_variants(cfg)
+            labels = [
+                v["codec"] + (f" level={v['level']}" if v.get("level") else "")
+                for v in variants
+            ]
+            print(f"  - compression: enabled={is_investigation_enabled(cfg, 'compression')} variants={labels}")
+        if Category.PRECISION_LOSS in selected_ids:
+            print(f"  - precision_loss: enabled={is_investigation_enabled(cfg, 'precision_loss')}")
+        if Category.INT32_STORAGE in selected_ids:
+            print(f"  - int32_storage: enabled={is_investigation_enabled(cfg, 'int32_storage')}")
+        if Category.REMOTE_QUERY in selected_ids:
+            rq = get_remote_query_cfg(cfg)
+            print(
+                "  - remote_query: "
+                f"enabled={is_investigation_enabled(cfg, 'remote_query')} "
+                f"float32={rq.get('remote_float32_path', '(unset)')}"
+            )
 
-    # Tuned comparison config section
-    tuned_cfg = cfg.get("tuned_comparison", {})
-    if tuned_cfg.get("enabled"):
-        sizes = tuned_cfg.get("block_sizes_minutes", [])
-        print(f"\nTuned comparison (enabled): block_sizes_minutes={sizes}")
+    if Category.TUNED_COMPARISON in selected_ids:
+        print(f"\nTuned comparison: block_sizes_minutes={get_tuned_block_sizes_minutes(cfg)}")
 
     print(f"\nWindow sizes: {cfg.get('window_sizes', [])}")
     print(f"Repetitions: {cfg.get('repetitions', 3)}")
@@ -158,28 +164,14 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
         source_type = detected_fmt
         study_dir = input_path
 
-        pq_inv = cfg.get("parquet_investigations", {})
-        if pq_inv.get("enabled") and paths.get(FormatKey.PARQUET):
-            if pq_inv.get("compression"):
-                _setup_parquet_compression_variants(
-                    paths, paths[FormatKey.PARQUET], output_base, short_name, cfg)
-            if pq_inv.get("int32_storage"):
-                _setup_int32_variants(paths, output_base, short_name)
-
-        tuned_cfg = cfg.get("tuned_comparison", {})
-        if tuned_cfg.get("enabled") and paths.get(FormatKey.PARQUET):
-            _setup_tuned_variants(paths, output_base, info, cfg)
-
         selected_ids = {cat_id for cat_id, _, _ in selected}
-        if not pq_inv.get("enabled"):
-            if Category.COMPRESSION in selected_ids and paths.get(FormatKey.PARQUET):
-                _setup_parquet_compression_variants(
-                    paths, paths[FormatKey.PARQUET], output_base, short_name, cfg)
-            if Category.INT32_STORAGE in selected_ids and paths.get(FormatKey.PARQUET):
-                _setup_int32_variants(paths, output_base, short_name)
-        if not tuned_cfg.get("enabled"):
-            if Category.TUNED_COMPARISON in selected_ids and paths.get(FormatKey.PARQUET):
-                _setup_tuned_variants(paths, output_base, info, cfg)
+        if Category.COMPRESSION in selected_ids and paths.get(FormatKey.PARQUET) and is_investigation_enabled(cfg, "compression"):
+            _setup_parquet_compression_variants(
+                paths, paths[FormatKey.PARQUET], output_base, short_name, cfg)
+        if Category.INT32_STORAGE in selected_ids and paths.get(FormatKey.PARQUET) and is_investigation_enabled(cfg, "int32_storage"):
+            _setup_int32_variants(paths, output_base, short_name)
+        if Category.TUNED_COMPARISON in selected_ids and paths.get(FormatKey.PARQUET):
+            _setup_tuned_variants(paths, output_base, info, cfg)
 
         study_meta = {
             "name": study_cfg["name"],
@@ -196,29 +188,7 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
         }
         output["studies"].append(study_meta)
 
-        # Build the effective benchmark list.
-        effective = list(selected)
-        already = {cat_id for cat_id, _, _ in selected}
-        if pq_inv.get("enabled"):
-            _inv_map = {
-                "compression": Category.COMPRESSION,
-                "precision_loss": Category.PRECISION_LOSS,
-                "int32_storage": Category.INT32_STORAGE,
-            }
-            for cfg_key, cat in _inv_map.items():
-                if pq_inv.get(cfg_key) and cat not in already and cat in BENCHMARKS:
-                    effective.append((cat, *BENCHMARKS[cat]))
-                    already.add(cat)
-            rq = pq_inv.get("remote_query", {})
-            if rq.get("enabled") and Category.REMOTE_QUERY not in already:
-                if Category.REMOTE_QUERY in BENCHMARKS:
-                    effective.append((Category.REMOTE_QUERY, *BENCHMARKS[Category.REMOTE_QUERY]))
-                    already.add(Category.REMOTE_QUERY)
-        if tuned_cfg.get("enabled") and Category.TUNED_COMPARISON not in already:
-            if Category.TUNED_COMPARISON in BENCHMARKS:
-                effective.append((Category.TUNED_COMPARISON, *BENCHMARKS[Category.TUNED_COMPARISON]))
-
-        for _, cat_name, bench_fn in effective:
+        for _, cat_name, bench_fn in selected:
             print(f"\n-- {cat_name} --")
             results = bench_fn(info, paths, cfg, args) if bench_fn is bench_remote_query else bench_fn(info, paths, cfg)
             for result in results:

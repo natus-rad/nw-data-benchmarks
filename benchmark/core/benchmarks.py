@@ -4,6 +4,7 @@ from contextlib import nullcontext
 import numpy as np
 
 from .bench_utils import _chunk_ranges, _full_study_duration_hours, _throughput, _timed
+from .config_helpers import get_parquet_compression_variants, is_investigation_enabled
 from .readers import (
     EdfFileReader,
     _edf_file,
@@ -488,6 +489,9 @@ def bench_compression(info, paths: dict, cfg: dict) -> list[dict]:
     results = []
     if "parquet" not in paths:
         return results
+    if not is_investigation_enabled(cfg, "compression"):
+        print("    [skip] parquet_investigations.compression.enabled is false.")
+        return results
     reps = cfg.get("repetitions", 3)
     window_sec = cfg.get("default_window", 60)
     window_stamps = int(window_sec * info.sample_freq)
@@ -496,7 +500,7 @@ def bench_compression(info, paths: dict, cfg: dict) -> list[dict]:
     end_stamp = mid_stamp + window_stamps - 1
     n_channels = len(info.channel_labels)
 
-    for comp_cfg in cfg.get("parquet_compression", []):
+    for comp_cfg in get_parquet_compression_variants(cfg):
         codec = comp_cfg["codec"]
         level = comp_cfg.get("level")
         label = f"{codec}_{level}" if level else codec
@@ -533,6 +537,9 @@ def bench_compression(info, paths: dict, cfg: dict) -> list[dict]:
 def bench_precision_loss(info, paths: dict, cfg: dict) -> list[dict]:
     results = []
     if "parquet" not in paths:
+        return results
+    if not is_investigation_enabled(cfg, "precision_loss"):
+        print("    [skip] parquet_investigations.precision_loss.enabled is false.")
         return results
     window_sec = cfg.get("default_window", 60)
     window_stamps = int(window_sec * info.sample_freq)
@@ -604,6 +611,9 @@ def bench_precision_loss(info, paths: dict, cfg: dict) -> list[dict]:
 def bench_int32_storage(info, paths: dict, cfg: dict) -> list[dict]:
     results = []
     if "parquet" not in paths:
+        return results
+    if not is_investigation_enabled(cfg, "int32_storage"):
+        print("    [skip] parquet_investigations.int32_storage.enabled is false.")
         return results
     reps = cfg.get("repetitions", 3)
     window_sec = cfg.get("default_window", 60)

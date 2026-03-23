@@ -8,10 +8,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from benchmark.core import azure_storage, bench_utils, benchmarks, readers, remote, setup, signal, study_info
+from benchmark.core.config_helpers import get_parquet_compression_variants, get_tuned_block_sizes_minutes
 from benchmark.core.study_info import StudyInfo
 from benchmark.core.variants import generate_variants
 from benchmark.core.remote import bench_remote_query
@@ -90,6 +92,35 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "Legacy study configs are no longer supported"):
             run_benchmarks.run_benchmarks(cfg, args)
+
+    def test_selected_benchmarks_come_only_from_benchmarks_list(self):
+        cfg = {
+            "benchmarks": ["random_access"],
+            "parquet_investigations": {
+                "compression": {"enabled": True},
+                "remote_query": {"enabled": True},
+            },
+            "tuned_comparison": {"block_sizes_minutes": [5, 10]},
+        }
+        args = argparse.Namespace(categories=None)
+
+        selected = run_benchmarks._selected_benchmarks(cfg, args)
+
+        self.assertEqual([cat_id for cat_id, _, _ in selected], ["random_access"])
+
+    def test_nested_config_helpers_read_new_schema(self):
+        cfg = {
+            "parquet_investigations": {
+                "compression": {
+                    "enabled": False,
+                    "variants": [{"codec": "snappy"}],
+                },
+            },
+            "tuned_comparison": {"block_sizes_minutes": [7, 15]},
+        }
+
+        self.assertEqual(get_parquet_compression_variants(cfg), [{"codec": "snappy"}])
+        self.assertEqual(get_tuned_block_sizes_minutes(cfg), [7, 15])
 
     def test_resolve_input_path_downloads_remote_prefix(self):
         class FakeDownload:
@@ -176,6 +207,110 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
             self.assertEqual(paths["parquet"], canonical)
             self.assertFalse(output_base.exists())
+
+    def test_generate_variants_rejects_unsupported_hdf5_dtype_and_compression(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            canonical = tmp_path / "demo_canonical"
+            canonical.mkdir()
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2], type=pa.float32()),
+                }),
+                canonical / "part_00000.parquet",
+                compression="snappy",
+            )
+            info = StudyInfo.from_parquet(canonical, sample_freq=256)
+            output_base = tmp_path / "demo_study_variants"
+
+            with self.assertRaisesRegex(ValueError, "dtype=float32"):
+                generate_variants(canonical, info, [{
+                    "format": "hdf5",
+                    "layout": "columnar",
+                    "chunk_minutes": 5,
+                    "dtype": "float64",
+                }], output_base)
+
+            with self.assertRaisesRegex(ValueError, "compression=lz4"):
+                generate_variants(canonical, info, [{
+                    "format": "hdf5",
+                    "layout": "columnar",
+                    "chunk_minutes": 5,
+                    "compression": "gzip",
+                }], output_base)
+
+    def test_bench_compression_uses_nested_variants_and_enabled_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pq_dir = Path(tmp) / "parquet_none"
+            pq_dir.mkdir()
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2], type=pa.float32()),
+                }),
+                pq_dir / "part_00000.parquet",
+                compression="snappy",
+            )
+            info = SimpleNamespace(
+                sample_freq=1.0,
+                channel_labels=["Fp1"],
+                channel_columns=["ch_Fp1"],
+                total_rows=2,
+                stamp_at_row=lambda row: row,
+            )
+            paths = {"parquet": pq_dir, "parquet_none": pq_dir}
+            cfg = {
+                "repetitions": 1,
+                "default_window": 1,
+                "parquet_investigations": {
+                    "compression": {
+                        "enabled": True,
+                        "variants": [{"codec": "none"}],
+                    }
+                },
+            }
+
+            with patch.object(benchmarks, "_timed", return_value=(0.1, np.zeros((1, 2), dtype=np.float32))):
+                results = benchmarks.bench_compression(info, paths, cfg)
+
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["codec"], "none")
+
+            cfg["parquet_investigations"]["compression"]["enabled"] = False
+            self.assertEqual(benchmarks.bench_compression(info, paths, cfg), [])
+
+    def test_bench_remote_query_uses_nested_remote_query_config(self):
+        class FakeCon:
+            def close(self):
+                return None
+
+        info = SimpleNamespace(
+            sample_freq=1.0,
+            channel_labels=["Fp1"],
+            channel_columns=["ch_Fp1"],
+            total_rows=100,
+            stamp_at_row=lambda row: row,
+            start_stamp=0,
+            end_stamp=99,
+        )
+        cfg = {
+            "azure": {"storage_account": "acct", "container": "waveforms"},
+            "parquet_investigations": {
+                "remote_query": {
+                    "enabled": True,
+                    "n_random_points": 1,
+                    "window_sec": 10,
+                    "remote_float32_path": "parquet/demo/",
+                }
+            },
+        }
+
+        with patch.object(remote, "_make_duckdb_connection", return_value=FakeCon()), \
+             patch.object(remote, "_duckdb_remote_read", return_value=(0.1, 10)):
+            results = remote.bench_remote_query(info, {"edf": Path("missing.edf")}, cfg)
+
+        self.assertTrue(any(r["category"] == "remote_query" for r in results))
 
     def test_save_results_retries_after_transient_permission_error(self):
         with tempfile.TemporaryDirectory() as tmp:

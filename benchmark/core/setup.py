@@ -8,6 +8,7 @@ import hdf5plugin
 import numpy as np
 import pyarrow.parquet as pq
 
+from .config_helpers import get_parquet_compression_variants, get_tuned_block_sizes_minutes
 from .study_info import StudyInfo
 
 
@@ -70,7 +71,7 @@ def _setup_parquet_compression_variants(paths: dict, src_dir: Path,
     if not src_files:
         return
 
-    for comp_cfg in cfg.get("parquet_compression", []):
+    for comp_cfg in get_parquet_compression_variants(cfg):
         codec = comp_cfg["codec"]
         level = comp_cfg.get("level")
         label = f"{codec}_{level}" if level else codec
@@ -393,12 +394,9 @@ def _write_h5_rowgroup(hf: h5py.File, src_files: list,
     hf.attrs["total_samples"] = total_rows
 
 
-DEFAULT_TUNED_BLOCK_MINUTES = [5, 10, 20, 30, 60, 120]
-
-
 def _get_tuned_block_sizes(cfg: dict, sample_freq: float) -> dict[str, int]:
     """Build {label: samples} dict from config or defaults."""
-    minutes = cfg.get("tuned_block_sizes_minutes", DEFAULT_TUNED_BLOCK_MINUTES)
+    minutes = get_tuned_block_sizes_minutes(cfg)
     sizes = {}
     for m in minutes:
         label = f"{int(m * 60)}s" if m < 1 else f"{m}m"

@@ -5,6 +5,8 @@ from typing import Any
 
 import numpy as np
 
+from .config_helpers import get_parquet_compression_variants, is_investigation_enabled
+
 
 BYTES_PER_FLOAT32 = 4
 
@@ -48,7 +50,6 @@ def _chunk_ranges(start_stamp: int, end_stamp: int, chunk_stamps: int):
         yield s, e
         s = e + 1
 
-
 def _estimate_runs(cfg: dict, selected: list) -> int:
     """Rough estimate of total benchmark invocations."""
     n = 0
@@ -65,9 +66,11 @@ def _estimate_runs(cfg: dict, selected: list) -> int:
         elif cat_id == "window_scaling":
             n += len(cfg.get("window_sizes", [])) * 2 * reps
         elif cat_id == "compression":
-            n += len(cfg.get("parquet_compression", [])) * reps
+            if is_investigation_enabled(cfg, "compression"):
+                n += len(get_parquet_compression_variants(cfg)) * reps
         elif cat_id == "precision_loss":
-            n += 1
+            if is_investigation_enabled(cfg, "precision_loss"):
+                n += 1
     return n
 
 

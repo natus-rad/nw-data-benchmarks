@@ -156,6 +156,12 @@ def _generate_hdf5_variant(canonical_pq: Path, output_base: Path,
     """Write HDF5 variant from canonical Parquet."""
     layout = spec.get("layout", "columnar")
     chunk_minutes = spec.get("chunk_minutes", 5)
+    dtype = spec.get("dtype", "float32")
+    compression = spec.get("compression", "lz4")
+    if dtype != "float32":
+        raise ValueError("HDF5 variants currently support only dtype=float32")
+    if compression != "lz4":
+        raise ValueError("HDF5 variants currently support only compression=lz4")
     chunk_samples = int(chunk_minutes * 60 * info.sample_freq)
 
     layout_key = "h5_columnar" if layout == "columnar" else "h5_rowgroup"

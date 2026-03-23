@@ -22,9 +22,9 @@
 #
 # AZURE AUTHENTICATION
 # --------------------
-#   Azure settings are only needed for the remote-query benchmark section
-#   further below. The default storage account uses anonymous (public) read
-#   access. For private containers:
+#   Azure settings are needed for remote `input:` resolution and for the
+#   optional remote-query benchmark section further below. The default storage
+#   account uses anonymous (public) read access. For private containers:
 #     1. Run `az login` (uses DefaultAzureCredential)
 #     2. Set AZURE_STORAGE_SAS_TOKEN env var
 #     3. Pass --sas-token on the command line
@@ -44,12 +44,14 @@ studies:
 
     # --- Sample frequency (Hz) ---
     # Required for EDF inputs. Optional for HDF5 / ERD when the source metadata
-    # can provide it. For Parquet inputs, keep specifying it explicitly unless
-    # your workflow guarantees the samplestamp unit matches the sampling rate.
+    # can provide it, but still recommended for reproducible cached reruns.
+    # For Parquet inputs, keep specifying it explicitly unless your workflow
+    # guarantees the samplestamp unit matches the sampling rate.
     sample_freq: 256
 
-    # If you enable the remote_query benchmark below, also update its Azure
-    # paths so they refer to the same study as this input.
+    # If you enable the `remote_query` benchmark below, also update the
+    # `parquet_investigations.remote_query` paths so they refer to the same
+    # study as this input.
 
 cache_dir: ".benchmark_cache"
 
@@ -65,22 +67,38 @@ benchmarks:
   - remote_query         # I: remote Parquet (DuckDB) vs EDF download
   - tuned_comparison     # J: tuned Parquet vs HDF5 (matched block sizes)
 
-# Parquet compression variants for category F.
-parquet_compression:
-  - codec: "none"
-  - codec: "snappy"
-  - codec: "zstd"
-    level: 3
-  - codec: "zstd"
-    level: 9
-  - codec: "lz4"
+# Parquet-specific benchmark configuration.
+parquet_investigations:
+  compression:
+    enabled: true
+    variants:
+      - codec: "none"
+      - codec: "snappy"
+      - codec: "zstd"
+        level: 3
+      - codec: "zstd"
+        level: 9
+      - codec: "lz4"
+  precision_loss:
+    enabled: true
+  int32_storage:
+    enabled: true
+  remote_query:
+    enabled: true
+    n_random_points: 2
+    window_sec: 600
+    full_study_chunk_sec: 3600   # chunk size for full-study sequential read; omit to skip
+    remote_float32_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"
+    remote_int32_nanovolt_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.int32_nanovolt.snappy.parquet/"
+    remote_single_file_path: "parquet/tuned_pq_lz4_10m.parquet"
 
 # Window sizes for category E (seconds).
 window_sizes: [10, 30, 60, 300, 900, 1800, 3600]
 
 # Block sizes for category J tuned comparison (minutes).
-# Each size generates a Parquet (snappy) and HDF5 (LZ4) variant.
-tuned_block_sizes_minutes: [5, 10, 20, 30, 60, 120]
+# Each size generates a Parquet (snappy + lz4) and HDF5 (LZ4) variant.
+tuned_comparison:
+  block_sizes_minutes: [5, 10, 20, 30, 60, 120]
 
 # Channel subsets for category B.
 channel_subsets: [4, 10]
@@ -89,6 +107,9 @@ channel_subsets: [4, 10]
 # The first Parquet variant becomes the default `parquet` path used by the
 # core benchmark categories, so keep the recommended baseline first.
 variants:
+  - format: parquet
+    row_group_minutes: 30
+    compression: lz4
 
 # Read positions for category A (fraction of total duration).
 read_positions: [0.0, 0.5, 0.75, 0.95]
@@ -99,11 +120,3 @@ default_window: 60
 # Number of repetitions per benchmark.
 repetitions: 3
 
-# Remote query benchmark (category I).
-remote_benchmark:
-  n_random_points: 2
-  window_sec: 600
-  full_study_chunk_sec: 3600   # chunk size for full-study sequential read; omit to skip
-  remote_float32_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"
-  remote_int32_nanovolt_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.int32_nanovolt.snappy.parquet/"
-  remote_single_file_path: "parquet/tuned_pq_lz4_10m.parquet"

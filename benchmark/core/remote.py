@@ -8,6 +8,7 @@ import numpy as np
 
 from .azure_storage import _download_edf_from_azure
 from .bench_utils import _chunk_ranges, _throughput
+from .config_helpers import get_remote_query_cfg, is_investigation_enabled
 from .readers import EdfFileReader, _edf_file
 from .signal import CHANNELS_10_20
 
@@ -54,9 +55,12 @@ def bench_remote_query(info, paths: dict, cfg: dict,
                        args: argparse.Namespace | None = None) -> list[dict]:
     """Benchmark I: Remote Parquet (DuckDB) vs Remote EDF (full download + local read)."""
     results = []
-    remote_cfg = cfg.get("remote_benchmark", {})
+    remote_cfg = get_remote_query_cfg(cfg)
     if not remote_cfg:
-        print("    [skip] No remote_benchmark config found.")
+        print("    [skip] No parquet_investigations.remote_query config found.")
+        return results
+    if not is_investigation_enabled(cfg, "remote_query"):
+        print("    [skip] parquet_investigations.remote_query.enabled is false.")
         return results
 
     sample_freq = info.sample_freq
@@ -72,7 +76,7 @@ def bench_remote_query(info, paths: dict, cfg: dict,
     # max_row_start is the last row index at which a window of window_stamps rows fits.
     max_row_start = info.total_rows - window_stamps - 1
     if max_row_start <= 0:
-        print(f"    [skip] Study too short for remote_benchmark window ({window_sec}s).")
+        print(f"    [skip] Study too short for remote_query window ({window_sec}s).")
         return results
     random_row_starts = np.sort(rng.integers(0, max_row_start + 1, size=n_points))
     # Convert row indices to actual samplestamps; window ends use stamp arithmetic
