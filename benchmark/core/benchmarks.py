@@ -203,7 +203,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
     sample_freq = info.sample_freq
     n_channels = len(info.channel_labels)
     ch_cols = info.channel_columns
-    reps = cfg.get("repetitions", 3)
+    reps = get_repetitions(cfg)
 
     total_rows = info.total_rows
 
@@ -211,7 +211,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
         print(f"    [skip] {skip_message}")
         return results
 
-    window_sec = cfg.get("default_window", 60)
+    window_sec = get_default_window(cfg)
     window_rows = max(1, int(window_sec * sample_freq))
     window_row_bounds = _mid_row_window(total_rows, window_rows)
     window_stamp_bounds = _stamp_bounds(info, window_row_bounds)
@@ -257,7 +257,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
         })
 
     print(f"\n  --- {section_letter}.3: Window scaling ---")
-    window_sizes = cfg.get("window_sizes", [10, 60, 300, 900, 3600])
+    window_sizes = get_window_sizes(cfg)
     scaling_bounds = []
     for ws in window_sizes:
         ws_rows = max(1, int(ws * sample_freq))
@@ -675,8 +675,8 @@ def bench_compression(info, paths: dict, cfg: dict) -> list[dict]:
     if not is_investigation_enabled(cfg, "compression"):
         print("    [skip] parquet_investigations.compression.enabled is false.")
         return results
-    reps = cfg.get("repetitions", 3)
-    window_sec = cfg.get("default_window", 60)
+    reps = get_repetitions(cfg)
+    window_sec = get_default_window(cfg)
     window_rows = max(1, int(window_sec * info.sample_freq))
     row_bounds = _mid_row_window(info.total_rows, window_rows)
     start_stamp, end_stamp = _stamp_bounds(info, row_bounds)
@@ -723,7 +723,7 @@ def bench_precision_loss(info, paths: dict, cfg: dict) -> list[dict]:
     if not is_investigation_enabled(cfg, "precision_loss"):
         print("    [skip] parquet_investigations.precision_loss.enabled is false.")
         return results
-    window_sec = cfg.get("default_window", 60)
+    window_sec = get_default_window(cfg)
     window_rows = max(1, int(window_sec * info.sample_freq))
     row_bounds = _mid_row_window(info.total_rows, window_rows)
     start_stamp, end_stamp = _stamp_bounds(info, row_bounds)
@@ -796,8 +796,8 @@ def bench_int32_storage(info, paths: dict, cfg: dict) -> list[dict]:
     if not is_investigation_enabled(cfg, "int32_storage"):
         print("    [skip] parquet_investigations.int32_storage.enabled is false.")
         return results
-    reps = cfg.get("repetitions", 3)
-    window_sec = cfg.get("default_window", 60)
+    reps = get_repetitions(cfg)
+    window_sec = get_default_window(cfg)
     window_rows = max(1, int(window_sec * info.sample_freq))
     row_bounds = _mid_row_window(info.total_rows, window_rows)
     start_stamp, end_stamp = _stamp_bounds(info, row_bounds)
