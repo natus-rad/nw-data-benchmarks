@@ -1985,6 +1985,53 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertTrue(results)
         self.assertTrue(all(row["peak_rss_mib"] == 321.0 for row in results))
 
+    def test_bench_remote_query_uses_row_end_stamp_for_gapped_windows(self):
+        class FakeCon:
+            def close(self):
+                return None
+
+        class FakeRng:
+            def integers(self, _low, _high=None, size=None):
+                if size != 1:
+                    raise AssertionError(f"expected one random point, got {size}")
+                return np.array([1])
+
+        stamps = [0, 1, 2, 100, 101, 102, 200, 201]
+        info = SimpleNamespace(
+            sample_freq=1.0,
+            channel_labels=["Fp1"],
+            channel_columns=["ch_Fp1"],
+            total_rows=len(stamps),
+            stamp_at_row=lambda row: stamps[row],
+            start_stamp=stamps[0],
+            end_stamp=stamps[-1],
+        )
+        cfg = normalize_config({
+            "azure": {"storage_account": "acct", "container": "waveforms"},
+            "benchmarks": {
+                "parquet_investigations": {
+                    "remote_query": {
+                        "enabled": True,
+                        "n_random_points": 1,
+                        "window_sec": 4,
+                        "remote_float32_path": "parquet/demo/",
+                    }
+                }
+            },
+        })
+        calls = []
+
+        def fake_duckdb_read(_con, _path, _columns, start_stamp, end_stamp):
+            calls.append((start_stamp, end_stamp))
+            return 0.1, 4
+
+        with patch.object(remote.np.random, "default_rng", return_value=FakeRng()), \
+             patch.object(remote, "_make_duckdb_connection", return_value=FakeCon()), \
+             patch.object(remote, "_duckdb_remote_read", side_effect=fake_duckdb_read):
+            remote.bench_remote_query(info, {"edf": Path("missing.edf")}, cfg)
+
+        self.assertEqual(calls, [(1, 101), (1, 101)])
+
     def test_bench_remote_query_skips_empty_10_20_subset(self):
         class FakeCon:
             def close(self):

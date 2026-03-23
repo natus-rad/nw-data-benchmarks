@@ -81,15 +81,20 @@ def bench_remote_query(info, paths: dict, cfg: dict,
     rng = np.random.default_rng(42)
     # Pick random start positions as row indices so we never do stamp arithmetic.
     # max_row_start is the last row index at which a window of window_stamps rows fits.
-    max_row_start = info.total_rows - window_stamps - 1
-    if max_row_start <= 0:
+    max_row_start = info.total_rows - window_stamps
+    if max_row_start < 0:
         print(f"    [skip] Study too short for remote_query window ({window_sec}s).")
         return results
     random_row_starts = np.sort(rng.integers(0, max_row_start + 1, size=n_points))
-    # Convert row indices to actual samplestamps; window ends use stamp arithmetic
-    # only to define a time-domain query range (window_sec seconds wide).
-    random_starts = [info.stamp_at_row(int(i)) for i in random_row_starts]
-    windows = [(s, s + window_stamps - 1) for s in random_starts]
+    # Convert fixed row-index windows to actual samplestamp windows so query
+    # bounds remain correct even if samplestamps have gaps or non-unit stride.
+    windows = []
+    for row_start in random_row_starts:
+        row_start_int = int(row_start)
+        row_end_int = min(row_start_int + window_stamps - 1, info.total_rows - 1)
+        start_stamp = info.stamp_at_row(row_start_int)
+        end_stamp = info.stamp_at_row(row_end_int)
+        windows.append((start_stamp, end_stamp))
 
     print(f"    {n_points} random windows × {window_sec}s = {n_points * window_sec}s total")
     print(f"    Stamps: {[f'{s}–{e}' for s, e in windows[:3]]} ...")
