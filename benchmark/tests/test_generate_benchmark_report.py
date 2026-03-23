@@ -7,6 +7,7 @@ from benchmark.scripts.generate_benchmark_report import (
     generate_report,
     latest_results_file,
     render_report,
+    validate_results,
 )
 
 
@@ -340,6 +341,17 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
 
         self.assertIn("Generated from `demo_benchmark_results.json`", rendered)
         self.assertNotIn("C:/secret/dev/path", rendered)
+
+    def test_validate_results_requires_explicit_total_stamps(self) -> None:
+        payload = {
+            "run_id": "2026-03-21T00-00-00",
+            "system": {"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16},
+            "studies": [{"name": "demo", "channels": 2, "sample_freq": 100.0, "duration_seconds": 12.5}],
+            "benchmarks": [{"category": "random_access", "format": "parquet", "position": "0%", "wall_clock_seconds": 0.5, "mib_per_sec": 10.0}],
+        }
+
+        with self.assertRaisesRegex(ReportGenerationError, "explicit total_stamps"):
+            validate_results(payload, Path("benchmark/results/demo.json"))
 
     def test_generate_report_writes_markdown_and_html(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

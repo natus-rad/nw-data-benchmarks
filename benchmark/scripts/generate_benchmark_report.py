@@ -96,19 +96,12 @@ def validate_results(payload: dict[str, Any], path: Path) -> None:
 
     study = payload["studies"][0]
 
-    # Back-fill total_stamps if the runner omitted it (older schema or refactor regression).
-    # total_stamps is the actual row count of the Parquet dataset — NOT end_stamp minus
-    # start_stamp, which overcounts whenever there are gaps between ERD segments.
-    # Write back into payload so render_report() sees the corrected value.
-    if "total_stamps" not in study:
-        if "duration_seconds" in study and "sample_freq" in study:
-            study["total_stamps"] = round(float(study["duration_seconds"]) * float(study["sample_freq"]))
-
     study_required = ["name", "channels", "sample_freq", "total_stamps", "duration_seconds"]
     missing = [key for key in study_required if key not in study]
     if missing:
         raise ReportGenerationError(
-            f"Results file {path} is missing required study field(s): {', '.join(missing)}."
+            f"Results file {path} is missing required study field(s): {', '.join(missing)}. "
+            "The benchmark runner must emit explicit total_stamps; the report generator will not infer it from duration_seconds."
         )
 
 
