@@ -762,9 +762,8 @@ class BenchmarkRefactorTests(unittest.TestCase):
              patch.object(benchmarks, "_chunk_ranges", return_value=[(0, 13)]) as mock_chunk_ranges:
             benchmarks.bench_tuned_comparison(info, paths, cfg)
 
-        self.assertEqual(mock_chunk_ranges.call_count, 2)
-        for call in mock_chunk_ranges.call_args_list:
-            self.assertEqual(call.args, (0, 19, 14))
+        self.assertEqual(mock_chunk_ranges.call_count, 1)
+        mock_chunk_ranges.assert_called_once_with(0, 19, 14)
 
     def test_bench_baseline_comparison_uses_baseline_input_path_and_chunk_sec(self):
         info = SimpleNamespace(
@@ -798,6 +797,141 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertEqual(mock_chunk_ranges.call_count, 1)
         mock_chunk_ranges.assert_called_once_with(0, 19, 14)
         self.assertEqual(mock_read.call_args_list[0].args[0], Path("baseline-input.parquet"))
+
+    def test_gap_safe_row_helpers_use_row_counts_not_stamp_spans(self):
+        stamps = [0, 1, 2, 3, 100, 101, 102, 103]
+        info = SimpleNamespace(stamp_at_row=lambda row: stamps[row])
+
+        row_bounds = benchmarks._mid_row_window(len(stamps), 5)
+        self.assertEqual(row_bounds, (3, 7))
+        self.assertEqual(benchmarks._stamp_bounds(info, row_bounds), (3, 103))
+        self.assertEqual(benchmarks._row_chunk_windows(len(stamps), 5), [(0, 4), (5, 7)])
+
+    def test_bench_random_access_precomputes_gap_safe_bounds_outside_timed_reads(self):
+        stamps = [0, 1, 2, 3, 100, 101, 102, 103]
+        info = SimpleNamespace(
+            sample_freq=1.0,
+            channel_labels=["Fp1"],
+            channel_columns=["ch_Fp1"],
+            total_rows=len(stamps),
+            stamp_at_row=lambda row: stamps[row],
+        )
+        cfg = {"repetitions": 1, "default_window": 5, "read_positions": [0.5]}
+        target = {
+            "artifact_id": "baseline_parquet",
+            "variant_id": None,
+            "artifact_kind": "baseline",
+            "format_family": "parquet",
+            "reader_kind": "parquet",
+            "path": Path("baseline.parquet"),
+            "display_label": "baseline_parquet",
+            "sort_index": 0,
+        }
+        captured = []
+
+        def fake_read(_target, _info, _columns, start_stamp, end_stamp, reader_state=None):
+            captured.append((start_stamp, end_stamp, reader_state))
+            return np.zeros((1, 5), dtype=np.float32)
+
+        def fake_timed(fn, reps):
+            original = info.stamp_at_row
+
+            def _fail(_row):
+                raise AssertionError("stamp_at_row should not be called inside timed reads")
+
+            info.stamp_at_row = _fail
+            try:
+                data = fn()
+            finally:
+                info.stamp_at_row = original
+            return 0.1, data
+
+        with patch.object(benchmarks, "_core_targets", return_value=[target]), \
+             patch.object(benchmarks, "_read_target_window", side_effect=fake_read), \
+             patch.object(benchmarks, "_timed", side_effect=fake_timed):
+            benchmarks.bench_random_access(info, {}, cfg)
+
+        self.assertEqual(captured, [(3, 103, None)])
+
+    def test_comparison_workload_full_study_uses_gap_safe_row_chunks(self):
+        stamps = [0, 1, 2, 3, 100, 101, 102, 103]
+        info = SimpleNamespace(
+            sample_freq=1.0,
+            channel_labels=["Fp1"],
+            channel_columns=["ch_Fp1"],
+            total_rows=len(stamps),
+            stamp_at_row=lambda row: stamps[row],
+        )
+        variant = {
+            "format": "parquet",
+            "reader_kind": "parquet",
+            "path": Path("variant.parquet"),
+            "result_fields": {"artifact": "variant"},
+        }
+        captured = []
+
+        def fake_read(_target, _info, _columns, start_stamp, end_stamp, reader_state=None):
+            captured.append((start_stamp, end_stamp, reader_state))
+            return np.zeros((1, 4), dtype=np.float32)
+
+        cfg = {
+            "repetitions": 1,
+            "default_window": 5,
+            "window_sizes": [5],
+            "tuned_comparison": {"chunk_sec": 5},
+        }
+
+        with patch.object(benchmarks, "_timed", return_value=(0.1, np.zeros((1, 5), dtype=np.float32))), \
+             patch.object(benchmarks, "_read_target_window", side_effect=fake_read):
+            results = benchmarks._run_comparison_workload_suite(
+                info,
+                [variant],
+                cfg,
+                category_prefix="baseline",
+                section_letter="K",
+                skip_message="skip",
+            )
+
+        self.assertIn("baseline_full_study", {row["category"] for row in results})
+        self.assertEqual(captured, [(0, 100, None), (101, 103, None)])
+
+    def test_bench_filter_pipeline_uses_gap_safe_row_chunks(self):
+        stamps = list(range(300)) + list(range(1000, 1300))
+        info = SimpleNamespace(
+            sample_freq=1.0,
+            channel_labels=["Fp1", "Fp2"],
+            channel_columns=["ch_Fp1", "ch_Fp2"],
+            total_rows=len(stamps),
+            stamp_at_row=lambda row: stamps[row],
+            start_stamp=stamps[0],
+            end_stamp=stamps[-1],
+        )
+        target = {
+            "artifact_id": "baseline_parquet",
+            "variant_id": None,
+            "artifact_kind": "baseline",
+            "format_family": "parquet",
+            "reader_kind": "parquet",
+            "path": Path("baseline.parquet"),
+            "display_label": "baseline_parquet",
+            "sort_index": 0,
+        }
+        captured = []
+
+        def fake_read(_target, _info, columns, start_stamp, end_stamp, reader_state=None):
+            captured.append((start_stamp, end_stamp, reader_state))
+            return np.zeros((len(columns), 300), dtype=np.float32)
+
+        with patch.object(benchmarks, "_core_targets", return_value=[target]), \
+             patch.object(benchmarks, "_read_target_window", side_effect=fake_read), \
+             patch.object(benchmarks, "_apply_bipolar_montage", side_effect=lambda matrix, _labels: matrix), \
+             patch.object(benchmarks, "_apply_filters", side_effect=lambda matrix, _sos: matrix), \
+             patch.object(benchmarks, "_build_sos", return_value="sos"), \
+             patch.object(np.fft, "rfft", return_value=np.zeros((2, 1), dtype=np.complex64)):
+            results = benchmarks.bench_filter_pipeline(info, {}, {})
+
+        self.assertEqual({row["benchmark"] for row in results}, {"D.1", "D.2"})
+        self.assertEqual(set((start, end) for start, end, _ in captured), {(0, 299), (1000, 1299)})
 
     def test_bench_random_access_edf_reopens_for_each_timed_read(self):
         info = SimpleNamespace(

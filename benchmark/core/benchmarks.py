@@ -111,6 +111,46 @@ def _core_result_fields(target: dict) -> dict:
     }
 
 
+def _clamp_row_window(total_rows: int, start_row: int, row_count: int) -> tuple[int, int]:
+    if total_rows <= 0:
+        raise ValueError("Benchmark windows require at least one row")
+    row_count = max(1, min(int(row_count), total_rows))
+    max_start = max(total_rows - row_count, 0)
+    start = min(max(int(start_row), 0), max_start)
+    return start, start + row_count - 1
+
+
+def _mid_row_window(total_rows: int, row_count: int) -> tuple[int, int]:
+    return _clamp_row_window(total_rows, total_rows // 2, row_count)
+
+
+def _position_row_window(total_rows: int, position: float, row_count: int) -> tuple[int, int]:
+    return _clamp_row_window(total_rows, int(position * total_rows), row_count)
+
+
+def _stamp_bounds(info, row_bounds: tuple[int, int]) -> tuple[int, int]:
+    start_row, end_row = row_bounds
+    return info.stamp_at_row(start_row), info.stamp_at_row(end_row)
+
+
+def _read_bounds_for_target(target: dict,
+                            row_bounds: tuple[int, int],
+                            stamp_bounds: tuple[int, int]) -> tuple[int, int]:
+    return row_bounds if target["reader_kind"] == "edf" else stamp_bounds
+
+
+def _row_chunk_windows(total_rows: int, chunk_rows: int,
+                       max_rows: int | None = None) -> list[tuple[int, int]]:
+    if total_rows <= 0:
+        return []
+    bench_rows = total_rows if max_rows is None else min(max(int(max_rows), 0), total_rows)
+    if bench_rows <= 0:
+        return []
+    chunk_rows = max(1, int(chunk_rows))
+    end_row = bench_rows - 1
+    return list(_chunk_ranges(0, end_row, chunk_rows))
+
+
 def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
                                    category_prefix: str, section_letter: str,
                                    skip_message: str) -> list[dict]:
@@ -122,23 +162,23 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
     ch_cols = info.channel_columns
     reps = cfg.get("repetitions", 3)
 
-    total_stamps = info.total_rows
-    mid_stamp = info.stamp_at_row(total_stamps // 2)
+    total_rows = info.total_rows
 
     if not variants:
         print(f"    [skip] {skip_message}")
         return results
 
     window_sec = cfg.get("default_window", 60)
-    window_stamps = int(window_sec * sample_freq)
-    start_stamp = mid_stamp
-    end_stamp = mid_stamp + window_stamps - 1
+    window_rows = max(1, int(window_sec * sample_freq))
+    window_row_bounds = _mid_row_window(total_rows, window_rows)
+    window_stamp_bounds = _stamp_bounds(info, window_row_bounds)
 
     print(f"\n  --- {section_letter}.1: Random access ({window_sec}s at 50%) ---")
     for variant in variants:
         with _target_context(variant) as reader_state:
+            start_bound, end_bound = _read_bounds_for_target(variant, window_row_bounds, window_stamp_bounds)
             t, data = _timed(
-                lambda v=variant, rs=reader_state: _read_target_window(v, info, ch_cols, start_stamp, end_stamp, rs),
+                lambda v=variant, rs=reader_state, s=start_bound, e=end_bound: _read_target_window(v, info, ch_cols, s, e, rs),
                 reps,
             )
         n_samples = data.shape[1] if data.ndim == 2 else 0
@@ -155,8 +195,9 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
     subset_cols = ch_cols[:4]
     for variant in variants:
         with _target_context(variant) as reader_state:
+            start_bound, end_bound = _read_bounds_for_target(variant, window_row_bounds, window_stamp_bounds)
             t, data = _timed(
-                lambda v=variant, rs=reader_state: _read_target_window(v, info, subset_cols, start_stamp, end_stamp, rs),
+                lambda v=variant, rs=reader_state, s=start_bound, e=end_bound: _read_target_window(v, info, subset_cols, s, e, rs),
                 reps,
             )
         n_samples = data.shape[1] if data.ndim == 2 else 0
@@ -172,14 +213,18 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
 
     print(f"\n  --- {section_letter}.3: Window scaling ---")
     window_sizes = cfg.get("window_sizes", [10, 60, 300, 900, 3600])
+    scaling_bounds = []
     for ws in window_sizes:
-        ws_stamps = int(ws * sample_freq)
-        s = mid_stamp
-        e = info.stamp_at_row(min(total_stamps // 2 + ws_stamps - 1, info.total_rows - 1))
+        ws_rows = max(1, int(ws * sample_freq))
+        row_bounds = _mid_row_window(total_rows, ws_rows)
+        scaling_bounds.append((ws, row_bounds, _stamp_bounds(info, row_bounds)))
+
+    for ws, row_bounds, stamp_bounds in scaling_bounds:
         for variant in variants:
             with _target_context(variant) as reader_state:
+                start_bound, end_bound = _read_bounds_for_target(variant, row_bounds, stamp_bounds)
                 t, data = _timed(
-                    lambda v=variant, ss=s, ee=e, rs=reader_state: _read_target_window(v, info, ch_cols, ss, ee, rs),
+                    lambda v=variant, ss=start_bound, ee=end_bound, rs=reader_state: _read_target_window(v, info, ch_cols, ss, ee, rs),
                     reps,
                 )
             n_samples = data.shape[1] if data.ndim == 2 else 0
@@ -194,14 +239,15 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
 
     print(f"\n  --- {section_letter}.4: Full-study sequential read ---")
     chunk_sec = get_tuned_chunk_sec(cfg)
-    chunk_stamps = int(chunk_sec * sample_freq)
-    bench_start = info.start_stamp
-    bench_end = info.end_stamp
+    chunk_rows = max(1, int(chunk_sec * sample_freq))
+    row_chunks = _row_chunk_windows(total_rows, chunk_rows)
+    stamp_chunks = [_stamp_bounds(info, row_bounds) for row_bounds in row_chunks]
     for variant in variants:
         samples_read = 0
+        chunk_bounds = row_chunks if variant["reader_kind"] == "edf" else stamp_chunks
         t_wall_start = time.perf_counter()
         with _target_context(variant) as reader_state:
-            for cs, ce in _chunk_ranges(bench_start, bench_end, chunk_stamps):
+            for cs, ce in chunk_bounds:
                 matrix = _read_target_window(variant, info, ch_cols, cs, ce, reader_state)
                 samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
         t_wall = time.perf_counter() - t_wall_start
@@ -269,20 +315,29 @@ def bench_random_access(info, paths: dict, cfg: dict) -> list[dict]:
     results = []
     reps = get_repetitions(cfg)
     window_sec = get_default_window(cfg)
-    window_stamps = int(window_sec * info.sample_freq)
+    window_rows = max(1, int(window_sec * info.sample_freq))
     positions = get_read_positions(cfg)
-    total_stamps = info.total_rows
+    total_rows = info.total_rows
     n_channels = len(info.channel_labels)
     targets = _core_targets(paths, cfg, "random_access")
+    position_bounds = [
+        (
+            f"{int(pos * 100)}%",
+            _position_row_window(total_rows, pos, window_rows),
+        )
+        for pos in positions
+    ]
+    position_bounds = [
+        (label, row_bounds, _stamp_bounds(info, row_bounds))
+        for label, row_bounds in position_bounds
+    ]
 
     for target in targets:
         with _target_context(target) as reader_state:
-            for pos in positions:
-                label = f"{int(pos * 100)}%"
-                start_stamp = info.stamp_at_row(int(pos * total_stamps))
-                end_stamp = start_stamp + window_stamps - 1
+            for label, row_bounds, stamp_bounds in position_bounds:
+                start_bound, end_bound = _read_bounds_for_target(target, row_bounds, stamp_bounds)
                 t, data = _timed(
-                    lambda s=start_stamp, e=end_stamp, rs=reader_state, tgt=target: _read_target_window(
+                    lambda s=start_bound, e=end_bound, rs=reader_state, tgt=target: _read_target_window(
                         tgt, info, info.channel_columns, s, e, rs
                     ),
                     reps,
@@ -304,11 +359,10 @@ def bench_channel_subset(info, paths: dict, cfg: dict) -> list[dict]:
     results = []
     reps = get_repetitions(cfg)
     window_sec = get_default_window(cfg)
-    window_stamps = int(window_sec * info.sample_freq)
+    window_rows = max(1, int(window_sec * info.sample_freq))
     subsets = get_channel_subsets(cfg)
-    mid_stamp = info.stamp_at_row(info.total_rows // 2)
-    start_stamp = mid_stamp
-    end_stamp = mid_stamp + window_stamps - 1
+    row_bounds = _mid_row_window(info.total_rows, window_rows)
+    stamp_bounds = _stamp_bounds(info, row_bounds)
     targets = _core_targets(paths, cfg, "channel_subset")
     all_cols = info.channel_columns
     n_all = len(all_cols)
@@ -316,12 +370,13 @@ def bench_channel_subset(info, paths: dict, cfg: dict) -> list[dict]:
 
     for target in targets:
         with _target_context(target) as reader_state:
+            start_bound, end_bound = _read_bounds_for_target(target, row_bounds, stamp_bounds)
             for n_ch in counts:
                 ch_label = f"{n_ch}" if n_ch < n_all else "all"
                 cols = all_cols[:n_ch]
                 t, data = _timed(
                     lambda c=cols, rs=reader_state, tgt=target: _read_target_window(
-                        tgt, info, c, start_stamp, end_stamp, rs
+                        tgt, info, c, start_bound, end_bound, rs
                     ),
                     reps,
                 )
@@ -344,17 +399,19 @@ def bench_remontage(info, paths: dict, cfg: dict) -> list[dict]:
     results = []
     reps = get_repetitions(cfg)
     window_sec = get_default_window(cfg)
-    window_stamps = int(window_sec * info.sample_freq)
-    mid_stamp = info.stamp_at_row(info.total_rows // 2)
+    window_rows = max(1, int(window_sec * info.sample_freq))
+    row_bounds = _mid_row_window(info.total_rows, window_rows)
+    stamp_bounds = _stamp_bounds(info, row_bounds)
     labels = list(info.channel_labels)
     n_channels = len(labels)
     targets = _core_targets(paths, cfg, "remontage")
 
     for target in targets:
         with _target_context(target) as reader_state:
+            start_bound, end_bound = _read_bounds_for_target(target, row_bounds, stamp_bounds)
             def run(rs=reader_state, tgt=target):
                 t_read_start = time.perf_counter()
-                matrix = _read_target_window(tgt, info, info.channel_columns, mid_stamp, mid_stamp + window_stamps - 1, rs)
+                matrix = _read_target_window(tgt, info, info.channel_columns, start_bound, end_bound, rs)
                 read_sec = time.perf_counter() - t_read_start
                 t_mont_start = time.perf_counter()
                 derived = _apply_bipolar_montage(matrix, labels)
@@ -397,58 +454,37 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
     hours = _full_study_duration_hours(info)
     if hours < 1:
         hours = 1
-    bench_stamps = int(hours * 3600 * sample_freq)
-    bench_start = info.stamp_at_row(0)
-    bench_end = info.stamp_at_row(min(bench_stamps - 1, info.total_rows - 1))
-    bench_sec = bench_stamps / sample_freq
+    bench_rows = min(max(1, int(hours * 3600 * sample_freq)), info.total_rows)
+    bench_sec = bench_rows / sample_freq
 
     chunk_sec = 300
-    chunk_stamps = int(chunk_sec * sample_freq)
-    edf_chunk_samples = int(chunk_sec * sample_freq)
+    chunk_rows = max(1, int(chunk_sec * sample_freq))
+    row_chunks = _row_chunk_windows(info.total_rows, chunk_rows, max_rows=bench_rows)
+    stamp_chunks = [_stamp_bounds(info, row_bounds) for row_bounds in row_chunks]
 
     print(f"    Study: {hours}h ({bench_sec:.0f}s), {n_channels} ch, {sample_freq} Hz")
 
     for target in _core_targets(paths, cfg, "filter_pipeline"):
         with _target_context(target) as reader_state:
-            edf_bench_samples = min(int(hours * 3600 * sample_freq), info.total_rows)
             t_read_total = t_mont_total = t_filt_total = 0.0
             total_samples_read = 0
+            chunk_bounds = row_chunks if target["reader_kind"] == "edf" else stamp_chunks
 
             t_wall_start = time.perf_counter()
-            if target["reader_kind"] == "edf":
-                edf_pos = 0
-                while edf_pos < edf_bench_samples:
-                    n = min(edf_chunk_samples, edf_bench_samples - edf_pos)
+            for cs, ce in chunk_bounds:
+                t0 = time.perf_counter()
+                matrix = _read_target_window(target, info, info.channel_columns, cs, ce, reader_state)
+                t_read_total += time.perf_counter() - t0
 
-                    t0 = time.perf_counter()
-                    matrix = _read_target_window(target, info, info.channel_columns, edf_pos, edf_pos + n - 1, reader_state)
-                    t_read_total += time.perf_counter() - t0
+                t1 = time.perf_counter()
+                derived = _apply_bipolar_montage(matrix, labels)
+                t_mont_total += time.perf_counter() - t1
 
-                    t1 = time.perf_counter()
-                    derived = _apply_bipolar_montage(matrix, labels)
-                    t_mont_total += time.perf_counter() - t1
+                t2 = time.perf_counter()
+                _apply_filters(derived, sos)
+                t_filt_total += time.perf_counter() - t2
 
-                    t2 = time.perf_counter()
-                    _apply_filters(derived, sos)
-                    t_filt_total += time.perf_counter() - t2
-
-                    total_samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
-                    edf_pos += n
-            else:
-                for cs, ce in _chunk_ranges(bench_start, bench_end, chunk_stamps):
-                    t0 = time.perf_counter()
-                    matrix = _read_target_window(target, info, info.channel_columns, cs, ce, reader_state)
-                    t_read_total += time.perf_counter() - t0
-
-                    t1 = time.perf_counter()
-                    derived = _apply_bipolar_montage(matrix, labels)
-                    t_mont_total += time.perf_counter() - t1
-
-                    t2 = time.perf_counter()
-                    _apply_filters(derived, sos)
-                    t_filt_total += time.perf_counter() - t2
-
-                    total_samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
+                total_samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
 
             t_wall = time.perf_counter() - t_wall_start
             results.append({
@@ -471,76 +507,47 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
     fft_stride_sec = 2
     fft_window_samples = int(fft_window_sec * sample_freq)
     fft_stride_samples = int(fft_stride_sec * sample_freq)
-    n_fft_windows = int((bench_sec - fft_window_sec) / fft_stride_sec) + 1
+    n_fft_windows = max(0, ((bench_rows - fft_window_samples) // fft_stride_samples) + 1)
+    read_chunk_sec = 300
+    read_chunk_rows = max(1, int(read_chunk_sec * sample_freq))
+    row_fft_chunks = _row_chunk_windows(info.total_rows, read_chunk_rows, max_rows=bench_rows)
+    stamp_fft_chunks = [_stamp_bounds(info, row_bounds) for row_bounds in row_fft_chunks]
     print(f"    FFT: {n_fft_windows} windows, {fft_window_sec}s window, {fft_stride_sec}s stride")
 
     for target in _core_targets(paths, cfg, "filter_pipeline"):
         with _target_context(target) as reader_state:
-            edf_bench_samples = min(int(hours * 3600 * sample_freq), info.total_rows)
             t_read_total = t_mont_total = t_filt_total = t_fft_total = 0.0
             total_samples_read = 0
             fft_count = 0
+            chunk_bounds = row_fft_chunks if target["reader_kind"] == "edf" else stamp_fft_chunks
 
             t_wall_start = time.perf_counter()
-            read_chunk_sec = 300
-            read_chunk_stamps = int(read_chunk_sec * sample_freq)
             tail: np.ndarray | None = None
 
-            if target["reader_kind"] == "edf":
-                edf_pos = 0
-                edf_chunk = int(read_chunk_sec * sample_freq)
-                while edf_pos < edf_bench_samples:
-                    n = min(edf_chunk, edf_bench_samples - edf_pos)
+            for cs, ce in chunk_bounds:
+                t0 = time.perf_counter()
+                matrix = _read_target_window(target, info, info.channel_columns, cs, ce, reader_state)
+                t_read_total += time.perf_counter() - t0
 
-                    t0 = time.perf_counter()
-                    matrix = _read_target_window(target, info, info.channel_columns, edf_pos, edf_pos + n - 1, reader_state)
-                    t_read_total += time.perf_counter() - t0
+                t1 = time.perf_counter()
+                derived = _apply_bipolar_montage(matrix, labels)
+                t_mont_total += time.perf_counter() - t1
 
-                    t1 = time.perf_counter()
-                    derived = _apply_bipolar_montage(matrix, labels)
-                    t_mont_total += time.perf_counter() - t1
+                t2 = time.perf_counter()
+                filtered = _apply_filters(derived, sos)
+                t_filt_total += time.perf_counter() - t2
 
-                    t2 = time.perf_counter()
-                    filtered = _apply_filters(derived, sos)
-                    t_filt_total += time.perf_counter() - t2
-
-                    total_samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
-                    combined = np.concatenate([tail, filtered], axis=1) if tail is not None and tail.shape[1] > 0 else filtered
-                    n_combined = combined.shape[1]
-                    t3 = time.perf_counter()
-                    pos = 0
-                    while pos + fft_window_samples <= n_combined:
-                        np.fft.rfft(combined[:, pos:pos + fft_window_samples], axis=1)
-                        fft_count += 1
-                        pos += fft_stride_samples
-                    t_fft_total += time.perf_counter() - t3
-                    tail = combined[:, pos:]
-                    edf_pos += n
-            else:
-                for cs, ce in _chunk_ranges(bench_start, bench_end, read_chunk_stamps):
-                    t0 = time.perf_counter()
-                    matrix = _read_target_window(target, info, info.channel_columns, cs, ce, reader_state)
-                    t_read_total += time.perf_counter() - t0
-
-                    t1 = time.perf_counter()
-                    derived = _apply_bipolar_montage(matrix, labels)
-                    t_mont_total += time.perf_counter() - t1
-
-                    t2 = time.perf_counter()
-                    filtered = _apply_filters(derived, sos)
-                    t_filt_total += time.perf_counter() - t2
-
-                    total_samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
-                    combined = np.concatenate([tail, filtered], axis=1) if tail is not None and tail.shape[1] > 0 else filtered
-                    n_combined = combined.shape[1]
-                    t3 = time.perf_counter()
-                    pos = 0
-                    while pos + fft_window_samples <= n_combined:
-                        np.fft.rfft(combined[:, pos:pos + fft_window_samples], axis=1)
-                        fft_count += 1
-                        pos += fft_stride_samples
-                    t_fft_total += time.perf_counter() - t3
-                    tail = combined[:, pos:]
+                total_samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
+                combined = np.concatenate([tail, filtered], axis=1) if tail is not None and tail.shape[1] > 0 else filtered
+                n_combined = combined.shape[1]
+                t3 = time.perf_counter()
+                pos = 0
+                while pos + fft_window_samples <= n_combined:
+                    np.fft.rfft(combined[:, pos:pos + fft_window_samples], axis=1)
+                    fft_count += 1
+                    pos += fft_stride_samples
+                t_fft_total += time.perf_counter() - t3
+                tail = combined[:, pos:]
 
             t_wall = time.perf_counter() - t_wall_start
             if fft_count != n_fft_windows:
@@ -578,20 +585,21 @@ def bench_window_scaling(info, paths: dict, cfg: dict) -> list[dict]:
     reps = get_repetitions(cfg)
     window_sizes = get_window_sizes(cfg)
     n_channels = len(info.channel_labels)
-    total_stamps = info.total_rows
-    mid_stamp = info.stamp_at_row(total_stamps // 2)
+    total_rows = info.total_rows
+    scaling_bounds = []
+    for window_sec in window_sizes:
+        window_rows = max(1, int(window_sec * info.sample_freq))
+        if window_rows > total_rows:
+            continue
+        row_bounds = _mid_row_window(total_rows, window_rows)
+        scaling_bounds.append((window_sec, row_bounds, _stamp_bounds(info, row_bounds)))
 
     for target in _core_targets(paths, cfg, "window_scaling"):
         with _target_context(target) as reader_state:
-            for window_sec in window_sizes:
-                window_stamps = int(window_sec * info.sample_freq)
-                if window_stamps > total_stamps:
-                    continue
-
-                start_stamp = mid_stamp
-                end_stamp = start_stamp + window_stamps - 1
+            for window_sec, row_bounds, stamp_bounds in scaling_bounds:
+                start_bound, end_bound = _read_bounds_for_target(target, row_bounds, stamp_bounds)
                 t, data = _timed(
-                    lambda s=start_stamp, e=end_stamp, rs=reader_state, tgt=target: _read_target_window(
+                    lambda s=start_bound, e=end_bound, rs=reader_state, tgt=target: _read_target_window(
                         tgt, info, info.channel_columns, s, e, rs
                     ),
                     reps,
@@ -617,10 +625,9 @@ def bench_compression(info, paths: dict, cfg: dict) -> list[dict]:
         return results
     reps = cfg.get("repetitions", 3)
     window_sec = cfg.get("default_window", 60)
-    window_stamps = int(window_sec * info.sample_freq)
-    mid_stamp = info.stamp_at_row(info.total_rows // 2)
-    start_stamp = mid_stamp
-    end_stamp = mid_stamp + window_stamps - 1
+    window_rows = max(1, int(window_sec * info.sample_freq))
+    row_bounds = _mid_row_window(info.total_rows, window_rows)
+    start_stamp, end_stamp = _stamp_bounds(info, row_bounds)
     n_channels = len(info.channel_labels)
 
     for comp_cfg in get_parquet_compression_variants(cfg):
@@ -665,10 +672,9 @@ def bench_precision_loss(info, paths: dict, cfg: dict) -> list[dict]:
         print("    [skip] parquet_investigations.precision_loss.enabled is false.")
         return results
     window_sec = cfg.get("default_window", 60)
-    window_stamps = int(window_sec * info.sample_freq)
-    mid_stamp = info.stamp_at_row(info.total_rows // 2)
-    start_stamp = mid_stamp
-    end_stamp = start_stamp + window_stamps - 1
+    window_rows = max(1, int(window_sec * info.sample_freq))
+    row_bounds = _mid_row_window(info.total_rows, window_rows)
+    start_stamp, end_stamp = _stamp_bounds(info, row_bounds)
 
     matrix = _read_parquet_window(paths["parquet"], info.channel_columns, start_stamp, end_stamp)
     labels = list(info.channel_labels)
@@ -740,10 +746,9 @@ def bench_int32_storage(info, paths: dict, cfg: dict) -> list[dict]:
         return results
     reps = cfg.get("repetitions", 3)
     window_sec = cfg.get("default_window", 60)
-    window_stamps = int(window_sec * info.sample_freq)
-    mid_stamp = info.stamp_at_row(info.total_rows // 2)
-    start_stamp = mid_stamp
-    end_stamp = start_stamp + window_stamps - 1
+    window_rows = max(1, int(window_sec * info.sample_freq))
+    row_bounds = _mid_row_window(info.total_rows, window_rows)
+    start_stamp, end_stamp = _stamp_bounds(info, row_bounds)
     n_channels = len(info.channel_labels)
     columns = info.channel_columns
 
@@ -798,9 +803,9 @@ def bench_int32_storage(info, paths: dict, cfg: dict) -> list[dict]:
 
     zstd_key = "parquet_zstd_3"
     if zstd_key in paths:
-        t, _ = _timed(lambda: _read_parquet_window(paths[zstd_key], columns, start_stamp, end_stamp), reps)
+        t, data = _timed(lambda: _read_parquet_window(paths[zstd_key], columns, start_stamp, end_stamp), reps)
         zstd_size = parquet_total_size_bytes(paths[zstd_key])
-        n_samples = int(window_sec * info.sample_freq)
+        n_samples = data.shape[1] if data.ndim == 2 else 0
         results.append({
             "category": "int32_storage",
             "mode": "float32",
