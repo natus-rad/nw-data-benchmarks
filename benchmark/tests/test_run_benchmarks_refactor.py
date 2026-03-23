@@ -449,6 +449,22 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertEqual(get_tuned_hdf5_compression(cfg), "lz4")
         self.assertEqual(get_tuned_chunk_sec(cfg), 123)
 
+    def test_normalize_config_tolerates_scalar_core_leaf_values(self):
+        cfg = normalize_config({
+            "benchmarks": {
+                "core": {
+                    "random_access": True,
+                    "channel_subset": False,
+                    "window_scaling": 123,
+                }
+            }
+        })
+
+        self.assertEqual(cfg["benchmarks"]["core"]["random_access"]["read_positions"], [0.0, 0.5, 0.75, 0.95])
+        self.assertEqual(cfg["benchmarks"]["core"]["channel_subset"]["channel_subsets"], [4, 10])
+        self.assertEqual(cfg["benchmarks"]["core"]["window_scaling"]["window_sizes"], [10, 30, 60, 300, 900, 1800, 3600])
+        self.assertFalse(cfg["benchmarks"]["core"]["random_access"]["enabled"])
+
     def test_core_targets_can_append_canonical_for_root_variants(self):
         cfg = normalize_config({
             "canonical_parquet": {"id": "canonical_pq"},

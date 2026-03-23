@@ -57,6 +57,9 @@ def normalize_config(cfg: dict | None) -> dict:
     raw_core = _dict_or_empty(raw_benchmarks.get("core"))
     raw_parquet = _dict_or_empty(raw_benchmarks.get("parquet_investigations"))
     raw_other = _dict_or_empty(raw_benchmarks.get("other"))
+    raw_random_access = _dict_or_empty(raw_core.get(Category.RANDOM_ACCESS))
+    raw_channel_subset = _dict_or_empty(raw_core.get(Category.CHANNEL_SUBSET))
+    raw_window_scaling = _dict_or_empty(raw_core.get(Category.WINDOW_SCALING))
     legacy_parquet = _dict_or_empty(cfg.get("parquet_investigations"))
     legacy_tuned = _dict_or_empty(cfg.get("tuned_comparison"))
     legacy_baseline = _dict_or_empty(cfg.get("baseline_comparison"))
@@ -67,16 +70,16 @@ def normalize_config(cfg: dict | None) -> dict:
     }
     core = {
         Category.RANDOM_ACCESS: _normalize_core_leaf(
-            raw_core.get(Category.RANDOM_ACCESS),
+            raw_random_access,
             _enabled_from_legacy(legacy_categories, Category.RANDOM_ACCESS),
             "all",
-            {"read_positions": _list_or_empty(raw_core.get(Category.RANDOM_ACCESS, {}).get("read_positions", cfg.get("read_positions", [0.0, 0.5, 0.75, 0.95])))}
+            {"read_positions": _list_or_empty(raw_random_access.get("read_positions", cfg.get("read_positions", [0.0, 0.5, 0.75, 0.95])))}
         ),
         Category.CHANNEL_SUBSET: _normalize_core_leaf(
-            raw_core.get(Category.CHANNEL_SUBSET),
+            raw_channel_subset,
             _enabled_from_legacy(legacy_categories, Category.CHANNEL_SUBSET),
             "all",
-            {"channel_subsets": _list_or_empty(raw_core.get(Category.CHANNEL_SUBSET, {}).get("channel_subsets", cfg.get("channel_subsets", [4, 10])))}
+            {"channel_subsets": _list_or_empty(raw_channel_subset.get("channel_subsets", cfg.get("channel_subsets", [4, 10])))}
         ),
         Category.REMONTAGE: _normalize_core_leaf(
             raw_core.get(Category.REMONTAGE),
@@ -89,10 +92,10 @@ def normalize_config(cfg: dict | None) -> dict:
             "all",
         ),
         Category.WINDOW_SCALING: _normalize_core_leaf(
-            raw_core.get(Category.WINDOW_SCALING),
+            raw_window_scaling,
             _enabled_from_legacy(legacy_categories, Category.WINDOW_SCALING),
             "all",
-            {"window_sizes": _list_or_empty(raw_core.get(Category.WINDOW_SCALING, {}).get("window_sizes", cfg.get("window_sizes", [10, 30, 60, 300, 900, 1800, 3600])))}
+            {"window_sizes": _list_or_empty(raw_window_scaling.get("window_sizes", cfg.get("window_sizes", [10, 30, 60, 300, 900, 1800, 3600])))}
         ),
     }
     parquet_investigations = {
