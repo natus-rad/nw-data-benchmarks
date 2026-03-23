@@ -239,6 +239,15 @@ class BenchmarkRefactorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "canonical_parquet.chunk_reader_max_rows"):
             validate_config(cfg)
 
+    def test_validate_config_rejects_removed_canonical_alias_keys(self):
+        cfg = normalize_config({"canonical_parquet": {"write_row_groups_per_chunk": 2}})
+        with self.assertRaisesRegex(ValueError, "write_row_groups_per_chunk"):
+            validate_config(cfg)
+
+        cfg = normalize_config({"canonical_parquet": {"variant_read_batch_rows": 1024}})
+        with self.assertRaisesRegex(ValueError, "variant_read_batch_rows"):
+            validate_config(cfg)
+
     def test_validate_config_rejects_canonical_id_collision(self):
         cfg = normalize_config({
             "canonical_parquet": {"id": "pq_main"},
@@ -565,17 +574,21 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
     def test_nested_config_helpers_read_new_schema(self):
         cfg = {
-            "parquet_investigations": {
-                "compression": {
-                    "enabled": False,
-                    "variants": [{"codec": "snappy"}],
+            "benchmarks": {
+                "parquet_investigations": {
+                    "compression": {
+                        "enabled": False,
+                        "variants": [{"codec": "snappy"}],
+                    },
                 },
-            },
-            "tuned_comparison": {
-                "block_sizes_minutes": [7, 15],
-                "parquet_codecs": ["lz4"],
-                "hdf5_compression": "lz4",
-                "chunk_sec": 123,
+                "other": {
+                    "tuned_comparison": {
+                        "block_sizes_minutes": [7, 15],
+                        "parquet_codecs": ["lz4"],
+                        "hdf5_compression": "lz4",
+                        "chunk_sec": 123,
+                    }
+                },
             },
         }
 
@@ -1010,15 +1023,17 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 compression="snappy",
             )
             paths = {"parquet": src_file}
-            cfg = {
+            cfg = normalize_config({
                 "canonical_parquet": {"chunk_reader_max_rows": 1},
-                "parquet_investigations": {
-                    "compression": {
-                        "enabled": True,
-                        "variants": [{"codec": "none"}],
+                "benchmarks": {
+                    "parquet_investigations": {
+                        "compression": {
+                            "enabled": True,
+                            "variants": [{"codec": "none"}],
+                        }
                     }
-                }
-            }
+                },
+            })
 
             with patch("benchmark.core.setup._iter_parquet_tables", wraps=setup._iter_parquet_tables) as mock_iter, \
                  patch("benchmark.core.setup.pq.read_table", side_effect=AssertionError("read_table should not be used")):
@@ -1072,14 +1087,18 @@ class BenchmarkRefactorTests(unittest.TestCase):
             )
             info = StudyInfo.from_parquet(src_file, sample_freq=256)
             paths = {"parquet": src_file}
-            cfg = {
+            cfg = normalize_config({
                 "canonical_parquet": {"chunk_reader_max_rows": 1},
-                "tuned_comparison": {
-                    "block_sizes_minutes": [5],
-                    "parquet_codecs": ["lz4"],
-                    "hdf5_compression": "lz4",
-                }
-            }
+                "benchmarks": {
+                    "other": {
+                        "tuned_comparison": {
+                            "block_sizes_minutes": [5],
+                            "parquet_codecs": ["lz4"],
+                            "hdf5_compression": "lz4",
+                        }
+                    }
+                },
+            })
 
             with patch("benchmark.core.setup._iter_parquet_tables", wraps=setup._iter_parquet_tables) as mock_iter, \
                  patch("benchmark.core.setup.pq.read_table", side_effect=AssertionError("read_table should not be used")):
@@ -1103,17 +1122,20 @@ class BenchmarkRefactorTests(unittest.TestCase):
             start_stamp=0,
             end_stamp=19,
         )
-        cfg = {
-            "repetitions": 1,
-            "default_window": 1,
-            "window_sizes": [1],
-            "tuned_comparison": {
-                "block_sizes_minutes": [5],
-                "parquet_codecs": ["lz4"],
-                "hdf5_compression": "lz4",
-                "chunk_sec": 7,
-            },
-        }
+        cfg = normalize_config({
+            "benchmarks": {
+                "common": {"repetitions": 1, "default_window": 1},
+                "core": {"window_scaling": {"window_sizes": [1]}},
+                "other": {
+                    "tuned_comparison": {
+                        "block_sizes_minutes": [5],
+                        "parquet_codecs": ["lz4"],
+                        "hdf5_compression": "lz4",
+                        "chunk_sec": 7,
+                    }
+                },
+            }
+        })
         paths = {
             "tuned_pq_lz4_5m": Path("dummy.parquet"),
             "tuned_h5_5m": Path("dummy.h5"),
@@ -1138,12 +1160,13 @@ class BenchmarkRefactorTests(unittest.TestCase):
             start_stamp=0,
             end_stamp=19,
         )
-        cfg = {
-            "repetitions": 1,
-            "default_window": 1,
-            "window_sizes": [1],
-            "tuned_comparison": {"chunk_sec": 7},
-        }
+        cfg = normalize_config({
+            "benchmarks": {
+                "common": {"repetitions": 1, "default_window": 1},
+                "core": {"window_scaling": {"window_sizes": [1]}},
+                "other": {"tuned_comparison": {"chunk_sec": 7}},
+            }
+        })
         paths = {"baseline_parquet": Path("baseline-input.parquet")}
 
         with patch.object(benchmarks, "_timed", return_value=(0.1, np.zeros((5, 2), dtype=np.float32))), \
@@ -1271,7 +1294,12 @@ class BenchmarkRefactorTests(unittest.TestCase):
             total_rows=len(stamps),
             stamp_at_row=lambda row: stamps[row],
         )
-        cfg = {"repetitions": 1, "default_window": 5, "read_positions": [0.5]}
+        cfg = normalize_config({
+            "benchmarks": {
+                "common": {"repetitions": 1, "default_window": 5},
+                "core": {"random_access": {"read_positions": [0.5]}},
+            }
+        })
         target = {
             "artifact_id": "baseline_parquet",
             "variant_id": None,
@@ -1330,12 +1358,13 @@ class BenchmarkRefactorTests(unittest.TestCase):
             captured.append((start_stamp, end_stamp, reader_state))
             return np.zeros((1, 4), dtype=np.float32)
 
-        cfg = {
-            "repetitions": 1,
-            "default_window": 5,
-            "window_sizes": [5],
-            "tuned_comparison": {"chunk_sec": 5},
-        }
+        cfg = normalize_config({
+            "benchmarks": {
+                "common": {"repetitions": 1, "default_window": 5},
+                "core": {"window_scaling": {"window_sizes": [5]}},
+                "other": {"tuned_comparison": {"chunk_sec": 5}},
+            }
+        })
 
         with patch.object(benchmarks, "_timed", return_value=(0.1, np.zeros((1, 5), dtype=np.float32))), \
              patch.object(benchmarks, "_read_target_window", side_effect=fake_read):
@@ -1397,7 +1426,12 @@ class BenchmarkRefactorTests(unittest.TestCase):
             total_rows=100,
             stamp_at_row=lambda row: row,
         )
-        cfg = {"repetitions": 3, "default_window": 1, "read_positions": [0.0, 0.5]}
+        cfg = normalize_config({
+            "benchmarks": {
+                "common": {"repetitions": 3, "default_window": 1},
+                "core": {"random_access": {"read_positions": [0.0, 0.5]}},
+            }
+        })
         target = {
             "artifact_id": "baseline_edf",
             "variant_id": None,
@@ -1513,16 +1547,17 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 stamp_at_row=lambda row: row,
             )
             paths = {"parquet": pq_dir, "parquet_none": pq_dir}
-            cfg = {
-                "repetitions": 1,
-                "default_window": 1,
-                "parquet_investigations": {
-                    "compression": {
-                        "enabled": True,
-                        "variants": [{"codec": "none"}],
-                    }
+            cfg = normalize_config({
+                "benchmarks": {
+                    "common": {"repetitions": 1, "default_window": 1},
+                    "parquet_investigations": {
+                        "compression": {
+                            "enabled": True,
+                            "variants": [{"codec": "none"}],
+                        }
+                    },
                 },
-            }
+            })
 
             with patch.object(benchmarks, "_timed", return_value=(0.1, np.zeros((1, 2), dtype=np.float32))):
                 results = benchmarks.bench_compression(info, paths, cfg)
@@ -1530,7 +1565,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
             self.assertEqual(len(results), 1)
             self.assertEqual(results[0]["codec"], "none")
 
-            cfg["parquet_investigations"]["compression"]["enabled"] = False
+            cfg["benchmarks"]["parquet_investigations"]["compression"]["enabled"] = False
             self.assertEqual(benchmarks.bench_compression(info, paths, cfg), [])
 
     def test_bench_compression_reports_size_for_single_file_parquet(self):
@@ -1553,16 +1588,17 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 stamp_at_row=lambda row: row,
             )
             paths = {"parquet": pq_file, "parquet_none": pq_file}
-            cfg = {
-                "repetitions": 1,
-                "default_window": 1,
-                "parquet_investigations": {
-                    "compression": {
-                        "enabled": True,
-                        "variants": [{"codec": "none"}],
-                    }
+            cfg = normalize_config({
+                "benchmarks": {
+                    "common": {"repetitions": 1, "default_window": 1},
+                    "parquet_investigations": {
+                        "compression": {
+                            "enabled": True,
+                            "variants": [{"codec": "none"}],
+                        }
+                    },
                 },
-            }
+            })
 
             with patch.object(benchmarks, "_timed", return_value=(0.1, np.zeros((1, 2), dtype=np.float32))):
                 results = benchmarks.bench_compression(info, paths, cfg)
@@ -1584,17 +1620,19 @@ class BenchmarkRefactorTests(unittest.TestCase):
             start_stamp=0,
             end_stamp=99,
         )
-        cfg = {
+        cfg = normalize_config({
             "azure": {"storage_account": "acct", "container": "waveforms"},
-            "parquet_investigations": {
-                "remote_query": {
-                    "enabled": True,
-                    "n_random_points": 1,
-                    "window_sec": 10,
-                    "remote_float32_path": "parquet/demo/",
+            "benchmarks": {
+                "parquet_investigations": {
+                    "remote_query": {
+                        "enabled": True,
+                        "n_random_points": 1,
+                        "window_sec": 10,
+                        "remote_float32_path": "parquet/demo/",
+                    }
                 }
             },
-        }
+        })
 
         with patch.object(remote, "_make_duckdb_connection", return_value=FakeCon()), \
              patch.object(remote, "_duckdb_remote_read", return_value=(0.1, 10)):
@@ -1616,17 +1654,19 @@ class BenchmarkRefactorTests(unittest.TestCase):
             start_stamp=0,
             end_stamp=99,
         )
-        cfg = {
+        cfg = normalize_config({
             "azure": {"storage_account": "acct", "container": "waveforms"},
-            "parquet_investigations": {
-                "remote_query": {
-                    "enabled": True,
-                    "n_random_points": 1,
-                    "window_sec": 10,
-                    "remote_float32_path": "parquet/demo/",
+            "benchmarks": {
+                "parquet_investigations": {
+                    "remote_query": {
+                        "enabled": True,
+                        "n_random_points": 1,
+                        "window_sec": 10,
+                        "remote_float32_path": "parquet/demo/",
+                    }
                 }
             },
-        }
+        })
 
         stdout = io.StringIO()
         with patch.object(remote, "_make_duckdb_connection", return_value=FakeCon()), \
@@ -1665,18 +1705,20 @@ class BenchmarkRefactorTests(unittest.TestCase):
             start_stamp=0,
             end_stamp=99,
         )
-        cfg = {
+        cfg = normalize_config({
             "azure": {"storage_account": "acct", "container": "waveforms"},
-            "parquet_investigations": {
-                "remote_query": {
-                    "enabled": True,
-                    "n_random_points": 1,
-                    "window_sec": 10,
-                    "full_study_chunk_sec": 20,
-                    "remote_float32_path": "parquet/demo/",
+            "benchmarks": {
+                "parquet_investigations": {
+                    "remote_query": {
+                        "enabled": True,
+                        "n_random_points": 1,
+                        "window_sec": 10,
+                        "full_study_chunk_sec": 20,
+                        "remote_float32_path": "parquet/demo/",
+                    }
                 }
             },
-        }
+        })
 
         with patch.object(remote, "_PeakRssTracker", FakeTracker), \
              patch.object(remote, "_make_duckdb_connection", return_value=FakeCon()), \
@@ -1700,18 +1742,20 @@ class BenchmarkRefactorTests(unittest.TestCase):
             start_stamp=0,
             end_stamp=99,
         )
-        cfg = {
+        cfg = normalize_config({
             "azure": {"storage_account": "acct", "container": "waveforms"},
-            "parquet_investigations": {
-                "remote_query": {
-                    "enabled": True,
-                    "n_random_points": 1,
-                    "window_sec": 10,
-                    "full_study_chunk_sec": 20,
-                    "remote_float32_path": "parquet/demo/",
+            "benchmarks": {
+                "parquet_investigations": {
+                    "remote_query": {
+                        "enabled": True,
+                        "n_random_points": 1,
+                        "window_sec": 10,
+                        "full_study_chunk_sec": 20,
+                        "remote_float32_path": "parquet/demo/",
+                    }
                 }
             },
-        }
+        })
         calls = []
 
         def fake_duckdb_read(_con, _path, columns, _start, _end):

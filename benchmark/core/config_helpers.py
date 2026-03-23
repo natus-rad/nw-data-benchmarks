@@ -137,10 +137,6 @@ def normalize_config(cfg: dict | None) -> dict:
         baseline["enabled"] = _enabled_from_legacy(legacy_categories, Category.BASELINE_COMPARISON)
 
     canonical_cfg = _dict_or_empty(cfg.get("canonical_parquet"))
-    if "write_row_groups_per_chunk" in canonical_cfg and "chunk_writer_max_rowgroups" not in canonical_cfg:
-        canonical_cfg = {**canonical_cfg, "chunk_writer_max_rowgroups": canonical_cfg["write_row_groups_per_chunk"]}
-    if "variant_read_batch_rows" in canonical_cfg and "chunk_reader_max_rows" not in canonical_cfg:
-        canonical_cfg = {**canonical_cfg, "chunk_reader_max_rows": canonical_cfg["variant_read_batch_rows"]}
     cfg["canonical_parquet"] = {
         **DEFAULT_CANONICAL_PARQUET,
         **canonical_cfg,
@@ -168,6 +164,18 @@ def normalize_config(cfg: dict | None) -> dict:
 
 
 def validate_config(cfg: dict) -> None:
+    raw_canonical_cfg = _dict_or_empty(cfg.get("canonical_parquet"))
+    if "write_row_groups_per_chunk" in raw_canonical_cfg:
+        raise ValueError(
+            "canonical_parquet.write_row_groups_per_chunk is no longer supported; "
+            "use canonical_parquet.chunk_writer_max_rowgroups"
+        )
+    if "variant_read_batch_rows" in raw_canonical_cfg:
+        raise ValueError(
+            "canonical_parquet.variant_read_batch_rows is no longer supported; "
+            "use canonical_parquet.chunk_reader_max_rows"
+        )
+
     canonical_cfg = get_canonical_parquet_cfg(cfg)
     canonical_id = canonical_cfg.get("id")
     if not isinstance(canonical_id, str) or not canonical_id.strip():
@@ -277,36 +285,31 @@ def selected_categories(cfg: dict) -> list[str]:
 
 
 def get_canonical_parquet_cfg(cfg: dict) -> dict:
-    canonical_cfg = _dict_or_empty(cfg.get("canonical_parquet"))
-    if "write_row_groups_per_chunk" in canonical_cfg and "chunk_writer_max_rowgroups" not in canonical_cfg:
-        canonical_cfg = {**canonical_cfg, "chunk_writer_max_rowgroups": canonical_cfg["write_row_groups_per_chunk"]}
-    if "variant_read_batch_rows" in canonical_cfg and "chunk_reader_max_rows" not in canonical_cfg:
-        canonical_cfg = {**canonical_cfg, "chunk_reader_max_rows": canonical_cfg["variant_read_batch_rows"]}
-    return {**DEFAULT_CANONICAL_PARQUET, **canonical_cfg}
+    return {**DEFAULT_CANONICAL_PARQUET, **_dict_or_empty(cfg.get("canonical_parquet"))}
 
 
 def get_repetitions(cfg: dict) -> int:
-    return int(get_common_benchmark_cfg(cfg).get("repetitions", cfg.get("repetitions", 3)))
+    return int(get_common_benchmark_cfg(cfg).get("repetitions", 3))
 
 
 def get_default_window(cfg: dict) -> int:
-    return int(get_common_benchmark_cfg(cfg).get("default_window", cfg.get("default_window", 60)))
+    return int(get_common_benchmark_cfg(cfg).get("default_window", 60))
 
 
 def get_read_positions(cfg: dict) -> list[float]:
-    return list(get_core_category_cfg(cfg, Category.RANDOM_ACCESS).get("read_positions", cfg.get("read_positions", [0.0, 0.5, 0.75, 0.95])))
+    return list(get_core_category_cfg(cfg, Category.RANDOM_ACCESS).get("read_positions", [0.0, 0.5, 0.75, 0.95]))
 
 
 def get_channel_subsets(cfg: dict) -> list[int]:
-    return list(get_core_category_cfg(cfg, Category.CHANNEL_SUBSET).get("channel_subsets", cfg.get("channel_subsets", [4, 10])))
+    return list(get_core_category_cfg(cfg, Category.CHANNEL_SUBSET).get("channel_subsets", [4, 10]))
 
 
 def get_window_sizes(cfg: dict) -> list[int]:
-    return list(get_core_category_cfg(cfg, Category.WINDOW_SCALING).get("window_sizes", cfg.get("window_sizes", [10, 30, 60, 300, 900, 1800, 3600])))
+    return list(get_core_category_cfg(cfg, Category.WINDOW_SCALING).get("window_sizes", [10, 30, 60, 300, 900, 1800, 3600]))
 
 
 def get_parquet_investigations(cfg: dict) -> dict:
-    value = get_benchmarks_cfg(cfg).get("parquet_investigations", cfg.get("parquet_investigations", {}))
+    value = get_benchmarks_cfg(cfg).get("parquet_investigations", {})
     return value if isinstance(value, dict) else {}
 
 
@@ -335,12 +338,12 @@ def get_remote_query_cfg(cfg: dict) -> dict:
 
 
 def get_tuned_comparison_cfg(cfg: dict) -> dict:
-    value = _dict_or_empty(_dict_or_empty(get_benchmarks_cfg(cfg).get("other", {})).get(Category.TUNED_COMPARISON, cfg.get("tuned_comparison", {})))
+    value = _dict_or_empty(_dict_or_empty(get_benchmarks_cfg(cfg).get("other", {})).get(Category.TUNED_COMPARISON, {}))
     return value if isinstance(value, dict) else {}
 
 
 def get_baseline_comparison_cfg(cfg: dict) -> dict:
-    value = _dict_or_empty(_dict_or_empty(get_benchmarks_cfg(cfg).get("other", {})).get(Category.BASELINE_COMPARISON, cfg.get("baseline_comparison", {})))
+    value = _dict_or_empty(_dict_or_empty(get_benchmarks_cfg(cfg).get("other", {})).get(Category.BASELINE_COMPARISON, {}))
     return value if isinstance(value, dict) else {}
 
 
