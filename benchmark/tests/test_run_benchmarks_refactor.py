@@ -652,6 +652,55 @@ class BenchmarkRefactorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "list-style benchmark selection"):
             normalize_config({"benchmarks": ["random_access"]})
 
+    def test_normalize_config_rejects_removed_top_level_benchmark_fields(self):
+        cases = {
+            "repetitions": 2,
+            "default_window": 30,
+            "read_positions": [0.5],
+            "channel_subsets": [4],
+            "window_sizes": [60],
+            "parquet_investigations": {"compression": {"enabled": True}},
+            "tuned_comparison": {"enabled": True},
+            "baseline_comparison": {"enabled": True},
+        }
+
+        for field, value in cases.items():
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, field):
+                    normalize_config({field: value})
+
+    def test_normalize_config_does_not_write_removed_top_level_mirrors(self):
+        cfg = normalize_config({
+            "benchmarks": {
+                "common": {"repetitions": 2, "default_window": 30},
+                "core": {
+                    "random_access": {"enabled": True, "read_positions": [0.5]},
+                    "channel_subset": {"enabled": True, "channel_subsets": [4]},
+                    "window_scaling": {"enabled": True, "window_sizes": [60]},
+                },
+                "parquet_investigations": {
+                    "compression": {"enabled": True},
+                },
+                "other": {
+                    "tuned_comparison": {"enabled": True},
+                    "baseline_comparison": {"enabled": True},
+                },
+            }
+        })
+
+        for field in (
+            "repetitions",
+            "default_window",
+            "read_positions",
+            "channel_subsets",
+            "window_sizes",
+            "parquet_investigations",
+            "tuned_comparison",
+            "baseline_comparison",
+        ):
+            with self.subTest(field=field):
+                self.assertNotIn(field, cfg)
+
     def test_core_targets_can_append_canonical_for_root_variants(self):
         cfg = normalize_config({
             "canonical_parquet": {"id": "canonical_pq"},

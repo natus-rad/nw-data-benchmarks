@@ -24,6 +24,17 @@ DEFAULT_CANONICAL_PARQUET = {
     "chunk_reader_max_rows": 65_536,
 }
 
+REMOVED_TOP_LEVEL_BENCHMARK_FIELDS = {
+    "repetitions": "benchmarks.common.repetitions",
+    "default_window": "benchmarks.common.default_window",
+    "read_positions": "benchmarks.core.random_access.read_positions",
+    "channel_subsets": "benchmarks.core.channel_subset.channel_subsets",
+    "window_sizes": "benchmarks.core.window_scaling.window_sizes",
+    "parquet_investigations": "benchmarks.parquet_investigations",
+    "tuned_comparison": "benchmarks.other.tuned_comparison",
+    "baseline_comparison": "benchmarks.other.baseline_comparison",
+}
+
 
 def _list_or_empty(value) -> list:
     return list(value) if isinstance(value, list) else []
@@ -60,6 +71,9 @@ def normalize_config(cfg: dict | None) -> dict:
             "Config field 'benchmarks' must be a mapping/object; list-style benchmark selection is no longer supported. "
             "Use benchmarks.common/core/parquet_investigations/other with explicit enabled flags."
         )
+    for field, replacement in REMOVED_TOP_LEVEL_BENCHMARK_FIELDS.items():
+        if field in cfg:
+            raise ValueError(f"Config field '{field}' is no longer supported; use '{replacement}'.")
 
     raw_benchmarks = _require_mapping(cfg.get("benchmarks"), "benchmarks")
     raw_common = _require_mapping(raw_benchmarks.get("common"), "benchmarks.common")
