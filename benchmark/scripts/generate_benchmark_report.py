@@ -156,7 +156,8 @@ def build_overview(study: dict[str, Any], system: dict[str, Any], categories: se
     ]
     note = (
         "The report is generated directly from benchmark result JSON. "
-        "Sections for categories not present in the input file are called out explicitly, so partial benchmark runs still produce a readable report."
+        "Sections for categories not present in the input file are called out explicitly, so partial benchmark runs still produce a readable report. "
+        "All reported throughput values use the theoretical decoded float32 payload size: rows × channels × 4 bytes."
     )
     return note + "\n\n" + markdown_table(["Property", "Value"], rows)
 
@@ -352,7 +353,7 @@ def baseline_placeholder_specs() -> list[dict[str, Any]]:
             "k1_results",
             "baseline_random_access",
             lambda rows, _: pivot_table(
-                rows, "artifact", "format", "wall_clock_seconds", "time",
+                rows, "artifact", "format", "wall_clock_seconds", "time_rate",
                 row_header="Artifact", row_sort_key=lambda value: str(value),
             ),
         ),
@@ -361,7 +362,7 @@ def baseline_placeholder_specs() -> list[dict[str, Any]]:
             "k2_results",
             "baseline_channel_subset",
             lambda rows, _: pivot_table(
-                rows, "artifact", "format", "wall_clock_seconds", "time",
+                rows, "artifact", "format", "wall_clock_seconds", "time_rate",
                 row_header="Artifact", row_sort_key=lambda value: str(value),
             ),
         ),
@@ -376,7 +377,7 @@ def baseline_placeholder_specs() -> list[dict[str, Any]]:
             "k4_results",
             "baseline_full_study",
             lambda rows, _: pivot_table(
-                rows, "artifact", "format", "wall_clock_seconds", "time",
+                rows, "artifact", "format", "wall_clock_seconds", "time_rate",
                 row_header="Artifact", row_sort_key=lambda value: str(value),
             ),
         ),
@@ -650,14 +651,14 @@ def render_tuned_comparison(payload: dict[str, Any]) -> str:
 
 def render_baseline_comparison(payload: dict[str, Any]) -> str:
     sections = [
-        "This section runs the Benchmark J workload suite on the resolved baseline input artifact(s) only, without generating tuned comparison variants."
+        "This section runs the Benchmark J workload suite on the resolved baseline input artifact(s) only, without generating tuned comparison variants. Reported MiB/s values use theoretical decoded float32 payload size = rows × channels × 4 bytes."
     ]
     random_rows = rows_for(payload, "baseline_random_access")
     if random_rows:
         sections.append(
             "### K.1 Random Access\n\n"
             + pivot_table(
-                random_rows, "artifact", "format", "wall_clock_seconds", "time",
+                random_rows, "artifact", "format", "wall_clock_seconds", "time_rate",
                 row_header="Artifact", row_sort_key=lambda value: str(value),
             )
         )
@@ -666,7 +667,7 @@ def render_baseline_comparison(payload: dict[str, Any]) -> str:
         sections.append(
             "### K.2 Channel Subset\n\n"
             + pivot_table(
-                subset_rows, "artifact", "format", "wall_clock_seconds", "time",
+                subset_rows, "artifact", "format", "wall_clock_seconds", "time_rate",
                 row_header="Artifact", row_sort_key=lambda value: str(value),
             )
         )
@@ -678,7 +679,7 @@ def render_baseline_comparison(payload: dict[str, Any]) -> str:
         sections.append(
             "### K.4 Full-Study Sequential Read\n\n"
             + pivot_table(
-                full_rows, "artifact", "format", "wall_clock_seconds", "time",
+                full_rows, "artifact", "format", "wall_clock_seconds", "time_rate",
                 row_header="Artifact", row_sort_key=lambda value: str(value),
             )
         )
@@ -701,6 +702,8 @@ def pivot_table(rows: list[dict[str, Any]], row_key: str, col_key: str, value_ke
                 cells.append("—")
             elif value_kind == "time":
                 cells.append(format_seconds(row[value_key]))
+            elif value_kind == "time_rate":
+                cells.append(metric_cell(row, value_key, "mib_per_sec"))
             else:
                 cells.append(format_rate(row[value_key]))
         body.append(cells)

@@ -194,6 +194,8 @@ ${j4_results}${j_notes}
 
 This group runs the Benchmark J workload suite on the resolved baseline input artifact(s) only, without generating tuned comparison variants.
 
+Reported throughput values use the theoretical decoded float32 payload size: rows × channels × 4 bytes.
+
 ### K.1 Random Access
 
 **What it tests:** A single 60-second all-channel read at mid-study on the baseline input artifact.

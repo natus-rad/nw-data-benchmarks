@@ -54,6 +54,7 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         rendered = render_report(payload, template, Path("benchmark/results/demo.json"))
         self.assertIn("Random access (median 1-minute read)", rendered)
         self.assertIn("Ratio vs raw float32", rendered)
+        self.assertIn("rows × channels × 4 bytes", rendered)
         self.assertIn("This category was not present in the input results file.", rendered)
 
     def test_latest_results_file_errors_when_directory_has_no_results(self) -> None:
@@ -168,7 +169,8 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         self.assertIn("## J. Tuned Format Comparison", rendered)
         self.assertIn("## K. Baseline Format Comparison", rendered)
         self.assertIn("Baseline input Parquet", rendered)
-        self.assertIn("| Baseline input | 0.0810s |", rendered)
+        self.assertIn("| Baseline input | 0.0810s / 33.1 MiB/s |", rendered)
+        self.assertIn("| Baseline input | 16.20s / 128.0 MiB/s |", rendered)
 
     def test_render_report_handles_zero_artifact_size_without_crashing(self) -> None:
         payload = {
