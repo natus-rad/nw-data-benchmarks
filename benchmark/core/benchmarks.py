@@ -431,10 +431,10 @@ def bench_channel_subset(info, paths: dict, cfg: dict) -> list[dict]:
                 results.append({
                     "category": "channel_subset",
                     **_core_result_fields(target),
-                    "channels": ch_label,
                     "window_seconds": window_sec,
                     **timing_fields,
                     **_throughput(n_samples, n_ch, t),
+                    "channels": ch_label,
                 })
 
     return results

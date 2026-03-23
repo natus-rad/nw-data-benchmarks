@@ -1424,6 +1424,42 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertEqual(captured, [(3, 103, None)])
         self.assertTrue(all(row["first_wall_clock_seconds"] == row["wall_clock_seconds"] for row in results))
 
+    def test_bench_channel_subset_preserves_all_label_in_results(self):
+        info = SimpleNamespace(
+            sample_freq=1.0,
+            channel_labels=["Fp1", "Fp2"],
+            channel_columns=["ch_Fp1", "ch_Fp2"],
+            total_rows=20,
+            stamp_at_row=lambda row: row,
+        )
+        cfg = normalize_config({
+            "benchmarks": {
+                "common": {"repetitions": 1, "default_window": 5},
+                "core": {"channel_subset": {"enabled": True, "channel_subsets": [1]}},
+            }
+        })
+        target = {
+            "artifact_id": "baseline_parquet",
+            "variant_id": None,
+            "artifact_kind": "baseline",
+            "format_family": "parquet",
+            "reader_kind": "parquet",
+            "path": Path("baseline.parquet"),
+            "display_label": "baseline_parquet",
+            "sort_index": 0,
+        }
+
+        def fake_timed_call(fn, _reps, precision=6):
+            data = fn()
+            return 0.1, data, {"wall_clock_seconds": round(0.1, precision), "first_wall_clock_seconds": round(0.1, precision)}
+
+        with patch.object(benchmarks, "_core_targets", return_value=[target]), \
+             patch.object(benchmarks, "_read_target_window", return_value=np.zeros((2, 5), dtype=np.float32)), \
+             patch.object(benchmarks, "_timed_call", side_effect=fake_timed_call):
+            results = benchmarks.bench_channel_subset(info, {}, cfg)
+
+        self.assertEqual([row["channels"] for row in results], ["1", "all"])
+
     def test_comparison_workload_full_study_uses_gap_safe_row_chunks(self):
         stamps = [0, 1, 2, 3, 100, 101, 102, 103]
         info = SimpleNamespace(
