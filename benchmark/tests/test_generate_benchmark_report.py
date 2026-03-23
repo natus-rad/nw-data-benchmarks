@@ -118,6 +118,58 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         self.assertIn("| 5m | 0.0669s | 0.0553s |", rendered)
         self.assertIn("| 5m | 14.59s | 12.22s |", rendered)
 
+    def test_render_report_includes_separate_k_section(self) -> None:
+        payload = {
+            "run_id": "2026-03-21T00-00-00",
+            "system": {"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16},
+            "studies": [
+                {
+                    "name": "demo",
+                    "channels": 46,
+                    "sample_freq": 256.0,
+                    "total_stamps": 11854000,
+                    "duration_seconds": 46304.7,
+                }
+            ],
+            "benchmarks": [
+                {
+                    "category": "tuned_random_access",
+                    "format": "parquet_snappy",
+                    "block_size": "5m",
+                    "variant": "tuned_pq_5m",
+                    "window_seconds": 60,
+                    "wall_clock_seconds": 0.066929,
+                    "mib_per_sec": 40.271,
+                },
+                {
+                    "category": "baseline_random_access",
+                    "format": "baseline_parquet",
+                    "artifact": "Baseline input",
+                    "variant": "baseline_parquet",
+                    "window_seconds": 60,
+                    "wall_clock_seconds": 0.081,
+                    "mib_per_sec": 33.1,
+                },
+                {
+                    "category": "baseline_full_study",
+                    "format": "baseline_parquet",
+                    "artifact": "Baseline input",
+                    "variant": "baseline_parquet",
+                    "total_samples": 11854000,
+                    "wall_clock_seconds": 16.2,
+                    "mib_per_sec": 128.0,
+                },
+            ],
+        }
+        template = "# Report\n\n${sections}\n"
+
+        rendered = render_report(payload, template, Path("benchmark/results/demo.json"))
+
+        self.assertIn("## J. Tuned Format Comparison", rendered)
+        self.assertIn("## K. Baseline Format Comparison", rendered)
+        self.assertIn("Baseline input Parquet", rendered)
+        self.assertIn("| Baseline input | 0.0810s |", rendered)
+
     def test_render_report_handles_zero_artifact_size_without_crashing(self) -> None:
         payload = {
             "run_id": "2026-03-21T00-00-00",

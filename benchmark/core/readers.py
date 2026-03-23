@@ -159,6 +159,71 @@ def _read_h5_rowgroup_window(h5_path: Path, columns: list[str],
         return data[:, reindex].T.astype(np.float32, copy=False)
 
 
+def _read_h5_input_window(h5_path: Path, columns: list[str],
+                          start_stamp: int, end_stamp: int) -> np.ndarray:
+    """Read a stamp window directly from an input HDF5 file.
+
+    Supports the same baseline HDF5 layouts accepted by ingest.py:
+    - a ``channels`` group with one dataset per channel
+    - a 2D ``data`` dataset with channel labels in attrs or inferred names
+    """
+    with h5py.File(str(h5_path), "r") as hf:
+        stamps = None
+        for name in ("samplestamp", "timestamps", "time", "sample_index"):
+            if name in hf:
+                stamps = hf[name][:]
+                break
+
+        if "channels" in hf and isinstance(hf["channels"], h5py.Group):
+            grp = hf["channels"]
+            total = grp[next(iter(grp.keys()))].shape[0] if grp.keys() else 0
+            labels = list(grp.keys())
+            if stamps is None:
+                i_start = max(0, int(start_stamp))
+                i_end = min(total, int(end_stamp) + 1)
+            else:
+                i_start = int(np.searchsorted(stamps, start_stamp, side="left"))
+                i_end = int(np.searchsorted(stamps, end_stamp, side="right"))
+            if i_end <= i_start:
+                return np.empty((len(columns), 0), dtype=np.float32)
+            rows = []
+            for col in columns:
+                label = col[3:] if col.startswith("ch_") else col
+                if label not in labels:
+                    raise KeyError(f"Channel '{label}' not found in {h5_path}")
+                rows.append(grp[label][i_start:i_end])
+            return np.vstack(rows).astype(np.float32, copy=False)
+
+        if "data" in hf and len(hf["data"].shape) == 2:
+            data_ds = hf["data"]
+            total = data_ds.shape[0]
+            raw_labels = hf.attrs.get("channel_labels")
+            if raw_labels is None:
+                labels = [f"ch_{i}" for i in range(data_ds.shape[1])]
+            else:
+                labels = [
+                    x.decode("utf-8") if isinstance(x, (bytes, np.bytes_)) else str(x)
+                    for x in raw_labels
+                ]
+            if stamps is None:
+                i_start = max(0, int(start_stamp))
+                i_end = min(total, int(end_stamp) + 1)
+            else:
+                i_start = int(np.searchsorted(stamps, start_stamp, side="left"))
+                i_end = int(np.searchsorted(stamps, end_stamp, side="right"))
+            if i_end <= i_start:
+                return np.empty((len(columns), 0), dtype=np.float32)
+            col_indices = []
+            for col in columns:
+                label = col[3:] if col.startswith("ch_") else col
+                if label not in labels:
+                    raise KeyError(f"Channel '{label}' not found in {h5_path}")
+                col_indices.append(labels.index(label))
+            return data_ds[i_start:i_end, col_indices].T.astype(np.float32, copy=False)
+
+        raise ValueError(f"Cannot determine baseline HDF5 layout for {h5_path}")
+
+
 def _h5_total_samples(h5_path: Path) -> int:
     """Return total number of samples in an HDF5 file."""
     with h5py.File(str(h5_path), "r") as hf:

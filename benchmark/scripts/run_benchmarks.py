@@ -25,7 +25,7 @@ from benchmark.core.config_helpers import (
     get_tuned_parquet_codecs,
     is_investigation_enabled,
 )
-from benchmark.core.constants import Category, FormatKey
+from benchmark.core.constants import Category, FormatKey, InputFormat
 from benchmark.core.ingest import ingest
 from benchmark.core.remote import bench_remote_query
 from benchmark.core.setup import (
@@ -61,6 +61,18 @@ def _study_input_value(study_cfg: dict) -> str:
             "the universal input format."
         )
     return str(study_cfg["input"])
+
+
+def _baseline_input_paths(input_path: Path, detected_fmt: str) -> dict[str, Path]:
+    if detected_fmt == InputFormat.PARQUET:
+        return {"baseline_parquet": Path(input_path)}
+    if detected_fmt == InputFormat.HDF5:
+        return {"baseline_hdf5": Path(input_path)}
+    if detected_fmt == InputFormat.EDF:
+        return {"baseline_edf": Path(input_path)}
+    if detected_fmt == InputFormat.ERD:
+        return {"baseline_erd": Path(input_path)}
+    return {}
 
 
 def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str, str, object]]) -> None:
@@ -108,6 +120,12 @@ def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str
             f"parquet_codecs={get_tuned_parquet_codecs(cfg)} "
             f"hdf5_compression={get_tuned_hdf5_compression(cfg)} "
             f"chunk_sec={get_tuned_chunk_sec(cfg)}"
+        )
+    if Category.BASELINE_COMPARISON in selected_ids:
+        print(
+            "\nBaseline format comparison: "
+            "uses J-style workloads on the resolved study input artifact "
+            f"with chunk_sec={get_tuned_chunk_sec(cfg)}"
         )
 
     print(f"\nWindow sizes: {cfg.get('window_sizes', [])}")
@@ -170,6 +188,7 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
         output_base = cache_dir / f"{short_name}_variants"
         variant_specs = cfg.get("variants", [])
         paths = generate_variants(canonical_pq, info, variant_specs, output_base)
+        paths.update(_baseline_input_paths(input_path, detected_fmt))
         source_type = detected_fmt
         study_dir = input_path
 

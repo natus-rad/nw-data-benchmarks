@@ -37,6 +37,7 @@ class Category(_StrEnum):
 
     # Group 3: Cross-format comparison.
     TUNED_COMPARISON = "tuned_comparison"
+    BASELINE_COMPARISON = "baseline_comparison"
 
 
 # Convenience sets for the three benchmark groups.
@@ -57,6 +58,7 @@ PARQUET_INVESTIGATIONS: frozenset[Category] = frozenset({
 
 CROSS_FORMAT: frozenset[Category] = frozenset({
     Category.TUNED_COMPARISON,
+    Category.BASELINE_COMPARISON,
 })
 
 
@@ -97,6 +99,10 @@ FORMAT_LABELS: dict[str, str] = {
     "hdf5_lz4": "HDF5 LZ4",
     "parquet_float32_snappy": "Parquet float32 snappy",
     "parquet_int32_nV_snappy": "Parquet int32 nV snappy",
+    "baseline_parquet": "Baseline input Parquet",
+    "baseline_hdf5": "Baseline input HDF5",
+    "baseline_edf": "Baseline input EDF",
+    "baseline_erd": "Baseline input ERD",
 }
 
 # Preferred display order for format keys in reports.
@@ -110,5 +116,9 @@ FORMAT_ORDER: list[str] = [
     "hdf5_lz4",
     "parquet_float32_snappy",
     "parquet_int32_nV_snappy",
+    "baseline_parquet",
+    "baseline_hdf5",
+    "baseline_edf",
+    "baseline_erd",
 ]
 

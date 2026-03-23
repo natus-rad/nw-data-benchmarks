@@ -189,3 +189,55 @@ ${j3_results}
 **Question answered:** Which tuned layout is best for whole-study scans rather than isolated random reads?
 
 ${j4_results}${j_notes}
+
+## K. Baseline Format Comparison
+
+This group runs the Benchmark J workload suite on the resolved baseline input artifact(s) only, without generating tuned comparison variants.
+
+### K.1 Random Access
+
+**What it tests:** A single 60-second all-channel read at mid-study on the baseline input artifact.
+
+**What varies:** Baseline input format.
+
+**What stays fixed:** Read position, read size, and channel count.
+
+**Question answered:** How does the baseline input format perform on the same random-access workload used in Benchmark J?
+
+${k1_results}
+
+### K.2 Channel Subset
+
+**What it tests:** A 60-second read of only 4 channels on the baseline input artifact.
+
+**What varies:** Baseline input format.
+
+**What stays fixed:** Read position, read duration, and requested channel count.
+
+**Question answered:** How well does the baseline input format support selective channel retrieval on the J-style workload?
+
+${k2_results}
+
+### K.3 Throughput vs Window Size
+
+**What it tests:** How read throughput for the baseline input artifact scales as the requested window grows, from small random reads (10s) to large sequential reads (3600s).
+
+**What varies:** Requested window size.
+
+**What stays fixed:** Channel count, read position (mid-study), and the use of the baseline input artifact only.
+
+**Question answered:** How does the baseline input format scale on the same workload family used for Benchmark J?
+
+${k3_results}
+
+### K.4 Full-Study Sequential Read
+
+**What it tests:** Reading the entire study chunk-by-chunk using the baseline input artifact.
+
+**What varies:** Baseline input format.
+
+**What stays fixed:** Full-study coverage, channel count, and sequential chunked access pattern.
+
+**Question answered:** How does the baseline input artifact perform on whole-study scans compared with the tuned variants in Benchmark J?
+
+${k4_results}${k_notes}

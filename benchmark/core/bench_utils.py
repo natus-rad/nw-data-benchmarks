@@ -78,6 +78,8 @@ def _estimate_runs(cfg: dict, selected: list) -> int:
         elif cat_id == "tuned_comparison":
             tuned_variants = len(get_tuned_parquet_codecs(cfg)) + 1  # one HDF5 variant
             n += tuned_variants * ((2 + len(cfg.get("window_sizes", []))) * reps + 1)
+        elif cat_id == "baseline_comparison":
+            n += ((2 + len(cfg.get("window_sizes", []))) * reps + 1)
     return n
 
 

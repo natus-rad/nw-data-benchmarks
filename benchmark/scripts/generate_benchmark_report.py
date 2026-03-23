@@ -256,18 +256,31 @@ def build_sections(payload: dict[str, Any]) -> str:
             payload,
         )
     )
+    sections.append(
+        section(
+            "K. Baseline Format Comparison",
+            rows_for_categories(payload, baseline_section_categories()),
+            lambda rows, p: render_baseline_comparison(p),
+            payload,
+        )
+    )
     return "\n\n".join(sections)
 
 
 def build_section_placeholders(payload: dict[str, Any]) -> dict[str, str]:
     placeholders = {
         spec["placeholder"]: render_section_results(spec["rows_getter"](payload), spec["renderer"], payload)
-        for spec in report_section_specs() + tuned_placeholder_specs()
+        for spec in report_section_specs() + tuned_placeholder_specs() + baseline_placeholder_specs()
     }
     full_rows = rows_for(payload, "tuned_full_study")
     placeholders["j_notes"] = (
         "\n\nPer-variant artifact sizes are not currently recorded in the result JSON, so this generated report limits Benchmark J to performance-derived comparisons."
         if full_rows else ""
+    )
+    baseline_rows = rows_for_categories(payload, baseline_section_categories())
+    placeholders["k_notes"] = (
+        "\n\nBenchmark K runs the Benchmark J workload family on the resolved baseline input artifact(s) without generating tuned comparison variants."
+        if baseline_rows else ""
     )
     return placeholders
 
@@ -330,6 +343,48 @@ def tuned_placeholder_specs() -> list[dict[str, Any]]:
 
 def tuned_section_categories() -> list[str]:
     return [spec["category"] for spec in tuned_placeholder_specs()]
+
+
+def baseline_placeholder_specs() -> list[dict[str, Any]]:
+    return [
+        section_spec(
+            "K.1 Random Access",
+            "k1_results",
+            "baseline_random_access",
+            lambda rows, _: pivot_table(
+                rows, "artifact", "format", "wall_clock_seconds", "time",
+                row_header="Artifact", row_sort_key=lambda value: str(value),
+            ),
+        ),
+        section_spec(
+            "K.2 Channel Subset",
+            "k2_results",
+            "baseline_channel_subset",
+            lambda rows, _: pivot_table(
+                rows, "artifact", "format", "wall_clock_seconds", "time",
+                row_header="Artifact", row_sort_key=lambda value: str(value),
+            ),
+        ),
+        section_spec(
+            "K.3 Throughput vs Window Size",
+            "k3_results",
+            "baseline_window_scaling",
+            lambda rows, _: comparison_window_scaling_table(rows),
+        ),
+        section_spec(
+            "K.4 Full-Study Sequential Read",
+            "k4_results",
+            "baseline_full_study",
+            lambda rows, _: pivot_table(
+                rows, "artifact", "format", "wall_clock_seconds", "time",
+                row_header="Artifact", row_sort_key=lambda value: str(value),
+            ),
+        ),
+    ]
+
+
+def baseline_section_categories() -> list[str]:
+    return [spec["category"] for spec in baseline_placeholder_specs()]
 
 
 def section_spec(title: str, placeholder: str, category: str, renderer) -> dict[str, Any]:
@@ -593,9 +648,49 @@ def render_tuned_comparison(payload: dict[str, Any]) -> str:
     return "\n\n".join(sections)
 
 
-def pivot_table(rows: list[dict[str, Any]], row_key: str, col_key: str, value_key: str, value_kind: str) -> str:
+def render_baseline_comparison(payload: dict[str, Any]) -> str:
+    sections = [
+        "This section runs the Benchmark J workload suite on the resolved baseline input artifact(s) only, without generating tuned comparison variants."
+    ]
+    random_rows = rows_for(payload, "baseline_random_access")
+    if random_rows:
+        sections.append(
+            "### K.1 Random Access\n\n"
+            + pivot_table(
+                random_rows, "artifact", "format", "wall_clock_seconds", "time",
+                row_header="Artifact", row_sort_key=lambda value: str(value),
+            )
+        )
+    subset_rows = rows_for(payload, "baseline_channel_subset")
+    if subset_rows:
+        sections.append(
+            "### K.2 Channel Subset\n\n"
+            + pivot_table(
+                subset_rows, "artifact", "format", "wall_clock_seconds", "time",
+                row_header="Artifact", row_sort_key=lambda value: str(value),
+            )
+        )
+    scaling_rows = rows_for(payload, "baseline_window_scaling")
+    if scaling_rows:
+        sections.append("### K.3 Throughput vs Window Size\n\n" + comparison_window_scaling_table(scaling_rows))
+    full_rows = rows_for(payload, "baseline_full_study")
+    if full_rows:
+        sections.append(
+            "### K.4 Full-Study Sequential Read\n\n"
+            + pivot_table(
+                full_rows, "artifact", "format", "wall_clock_seconds", "time",
+                row_header="Artifact", row_sort_key=lambda value: str(value),
+            )
+        )
+    return "\n\n".join(sections)
+
+
+def pivot_table(rows: list[dict[str, Any]], row_key: str, col_key: str, value_key: str,
+                value_kind: str, row_header: str = "Block size", row_sort_key=None) -> str:
     columns = formats_in_rows(rows)
-    row_values = sorted({row[row_key] for row in rows}, key=block_sort_key)
+    if row_sort_key is None:
+        row_sort_key = block_sort_key if row_key == "block_size" else lambda value: str(value)
+    row_values = sorted({row[row_key] for row in rows}, key=row_sort_key)
     body = []
     for row_value in row_values:
         pivot = {row[col_key]: row for row in rows if row[row_key] == row_value}
@@ -609,17 +704,11 @@ def pivot_table(rows: list[dict[str, Any]], row_key: str, col_key: str, value_ke
             else:
                 cells.append(format_rate(row[value_key]))
         body.append(cells)
-    return markdown_table(["Block size", *[label(column) for column in columns]], body)
+    return markdown_table([row_header, *[label(column) for column in columns]], body)
 
 
-def tuned_window_scaling_table(rows: list[dict[str, Any]]) -> str:
-    """Build a window-size × format table for J.3.
-
-    Rows are window sizes (the actual scaling axis).
-    Columns are formats.
-    Each cell shows the best throughput across all block sizes for that
-    window × format combination, with the winning block size annotated.
-    """
+def comparison_window_scaling_table(rows: list[dict[str, Any]], qualifier_key: str | None = None,
+                                    qualifier_label: str | None = None) -> str:
     columns = formats_in_rows(rows)
     window_sizes = sorted({row["window_seconds"] for row in rows})
     body = []
@@ -633,13 +722,23 @@ def tuned_window_scaling_table(rows: list[dict[str, Any]]) -> str:
                 cells.append("—")
                 continue
             best = max(fmt_rows, key=lambda r: r["mib_per_sec"])
-            cells.append(f"{format_rate(best['mib_per_sec'])} ({best['block_size']} block)")
+            if qualifier_key and qualifier_label:
+                cells.append(f"{format_rate(best['mib_per_sec'])} ({best[qualifier_key]} {qualifier_label})")
+            else:
+                cells.append(format_rate(best["mib_per_sec"]))
         body.append(cells)
-    note = (
-        "Each cell shows the best throughput across all block sizes tested for that "
-        "window × format combination, with the winning block size in parentheses."
-    )
+    if qualifier_key and qualifier_label:
+        note = (
+            f"Each cell shows the best throughput across all {qualifier_label}s tested for that "
+            f"window × format combination, with the winning {qualifier_label} in parentheses."
+        )
+    else:
+        note = "Each cell shows the measured throughput for the baseline input artifact(s) at that window size."
     return note + "\n\n" + markdown_table(["Window", *[label(c) for c in columns]], body)
+
+
+def tuned_window_scaling_table(rows: list[dict[str, Any]]) -> str:
+    return comparison_window_scaling_table(rows, qualifier_key="block_size", qualifier_label="block")
 
 
 def rows_for(payload: dict[str, Any], category: str) -> list[dict[str, Any]]:

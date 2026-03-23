@@ -17,6 +17,7 @@ from .readers import (
     EdfFileReader,
     _edf_file,
     _read_h5_columnar_window,
+    _read_h5_input_window,
     _read_h5_rowgroup_window,
     _read_int32_calibrated,
     _read_int32_calibrated_arrow,
@@ -43,6 +44,189 @@ def _available_window_formats(paths: dict):
         if h5_key in paths:
             formats.append((h5_key, h5_fn))
     return formats
+
+
+def _comparison_variant_context(variant: dict):
+    if variant["reader_kind"] == "edf":
+        return EdfFileReader(_edf_file(variant["path"]))
+    return nullcontext(None)
+
+
+def _read_comparison_variant(variant: dict, info, columns: list[str],
+                             start_stamp: int, end_stamp: int,
+                             reader_state=None) -> np.ndarray:
+    kind = variant["reader_kind"]
+    path = variant["path"]
+    if kind == "parquet":
+        return _read_parquet_window(path, columns, start_stamp, end_stamp)
+    if kind == "tuned_parquet":
+        return _read_tuned_pq(path, columns, start_stamp, end_stamp)
+    if kind == "hdf5_columnar":
+        return _read_h5_columnar_window(path, columns, start_stamp, end_stamp)
+    if kind == "hdf5_input":
+        return _read_h5_input_window(path, columns, start_stamp, end_stamp)
+    if kind == "edf":
+        if reader_state is None:
+            raise ValueError("EDF comparison reads require an open EdfFileReader")
+        start_sample = int(start_stamp)
+        n_samples = max(0, int(end_stamp) - int(start_stamp) + 1)
+        channel_indices = [info.channel_columns.index(col) for col in columns]
+        return reader_state.read_window(start_sample, n_samples, channel_indices)
+    raise ValueError(f"Unknown comparison reader kind: {kind}")
+
+
+def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
+                                   category_prefix: str, section_letter: str,
+                                   skip_message: str) -> list[dict]:
+    import time
+
+    results = []
+    sample_freq = info.sample_freq
+    n_channels = len(info.channel_labels)
+    ch_cols = info.channel_columns
+    reps = cfg.get("repetitions", 3)
+
+    total_stamps = info.total_rows
+    mid_stamp = info.stamp_at_row(total_stamps // 2)
+
+    if not variants:
+        print(f"    [skip] {skip_message}")
+        return results
+
+    window_sec = cfg.get("default_window", 60)
+    window_stamps = int(window_sec * sample_freq)
+    start_stamp = mid_stamp
+    end_stamp = mid_stamp + window_stamps - 1
+
+    print(f"\n  --- {section_letter}.1: Random access ({window_sec}s at 50%) ---")
+    for variant in variants:
+        with _comparison_variant_context(variant) as reader_state:
+            t, data = _timed(
+                lambda v=variant, rs=reader_state: _read_comparison_variant(v, info, ch_cols, start_stamp, end_stamp, rs),
+                reps,
+            )
+        n_samples = data.shape[1] if data.ndim == 2 else 0
+        results.append({
+            "category": f"{category_prefix}_random_access",
+            "format": variant["format"],
+            **variant["result_fields"],
+            "window_seconds": window_sec,
+            "wall_clock_seconds": round(t, 6),
+            **_throughput(n_samples, n_channels, t),
+        })
+
+    print(f"\n  --- {section_letter}.2: Channel subset (4 ch, {window_sec}s) ---")
+    subset_cols = ch_cols[:4]
+    for variant in variants:
+        with _comparison_variant_context(variant) as reader_state:
+            t, data = _timed(
+                lambda v=variant, rs=reader_state: _read_comparison_variant(v, info, subset_cols, start_stamp, end_stamp, rs),
+                reps,
+            )
+        n_samples = data.shape[1] if data.ndim == 2 else 0
+        results.append({
+            "category": f"{category_prefix}_channel_subset",
+            "format": variant["format"],
+            **variant["result_fields"],
+            "channels": 4,
+            "window_seconds": window_sec,
+            "wall_clock_seconds": round(t, 6),
+            **_throughput(n_samples, 4, t),
+        })
+
+    print(f"\n  --- {section_letter}.3: Window scaling ---")
+    window_sizes = cfg.get("window_sizes", [10, 60, 300, 900, 3600])
+    for ws in window_sizes:
+        ws_stamps = int(ws * sample_freq)
+        s = mid_stamp
+        e = info.stamp_at_row(min(total_stamps // 2 + ws_stamps - 1, info.total_rows - 1))
+        for variant in variants:
+            with _comparison_variant_context(variant) as reader_state:
+                t, data = _timed(
+                    lambda v=variant, ss=s, ee=e, rs=reader_state: _read_comparison_variant(v, info, ch_cols, ss, ee, rs),
+                    reps,
+                )
+            n_samples = data.shape[1] if data.ndim == 2 else 0
+            results.append({
+                "category": f"{category_prefix}_window_scaling",
+                "format": variant["format"],
+                **variant["result_fields"],
+                "window_seconds": ws,
+                "wall_clock_seconds": round(t, 6),
+                **_throughput(n_samples, n_channels, t),
+            })
+
+    print(f"\n  --- {section_letter}.4: Full-study sequential read ---")
+    chunk_sec = get_tuned_chunk_sec(cfg)
+    chunk_stamps = int(chunk_sec * sample_freq)
+    bench_start = info.start_stamp
+    bench_end = info.end_stamp
+    for variant in variants:
+        samples_read = 0
+        t_wall_start = time.perf_counter()
+        with _comparison_variant_context(variant) as reader_state:
+            for cs, ce in _chunk_ranges(bench_start, bench_end, chunk_stamps):
+                matrix = _read_comparison_variant(variant, info, ch_cols, cs, ce, reader_state)
+                samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
+        t_wall = time.perf_counter() - t_wall_start
+        results.append({
+            "category": f"{category_prefix}_full_study",
+            "format": variant["format"],
+            **variant["result_fields"],
+            "total_samples": samples_read,
+            "wall_clock_seconds": round(t_wall, 3),
+            **_throughput(samples_read, n_channels, t_wall),
+        })
+
+    return results
+
+
+def _tuned_comparison_variants(paths: dict, cfg: dict, sample_freq: float) -> list[dict]:
+    block_sizes = _get_tuned_block_sizes(cfg, sample_freq)
+    parquet_codecs = get_tuned_parquet_codecs(cfg)
+    hdf5_compression = get_tuned_hdf5_compression(cfg)
+    variants = []
+    for label in block_sizes:
+        for codec in parquet_codecs:
+            pq_key = tuned_parquet_key(codec, label)
+            if pq_key in paths:
+                variants.append({
+                    "key": pq_key,
+                    "format": f"parquet_{codec}",
+                    "path": paths[pq_key],
+                    "reader_kind": "tuned_parquet",
+                    "result_fields": {"block_size": label, "variant": pq_key},
+                })
+        h5_key = f"tuned_h5_{label}"
+        if h5_key in paths:
+            variants.append({
+                "key": h5_key,
+                "format": f"hdf5_{hdf5_compression}",
+                "path": paths[h5_key],
+                "reader_kind": "hdf5_columnar",
+                "result_fields": {"block_size": label, "variant": h5_key},
+            })
+    return variants
+
+
+def _baseline_comparison_variants(paths: dict) -> list[dict]:
+    variants = []
+    for key, reader_kind in (
+        ("baseline_parquet", "parquet"),
+        ("baseline_hdf5", "hdf5_input"),
+        ("baseline_edf", "edf"),
+    ):
+        if key in paths:
+            variants.append({
+                "key": key,
+                "format": key,
+                "path": paths[key],
+                "reader_kind": reader_kind,
+                "result_fields": {"artifact": "Baseline input", "variant": key},
+            })
+    if "baseline_erd" in paths:
+        print("    [skip] Benchmark K does not yet support direct ERD reads.")
+    return variants
 
 
 def bench_random_access(info, paths: dict, cfg: dict) -> list[dict]:
@@ -706,114 +890,27 @@ def bench_int32_storage(info, paths: dict, cfg: dict) -> list[dict]:
 
 
 def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
-    import time
+    variants = _tuned_comparison_variants(paths, cfg, info.sample_freq)
+    return _run_comparison_workload_suite(
+        info,
+        variants,
+        cfg,
+        category_prefix="tuned",
+        section_letter="J",
+        skip_message="No tuned variants found.",
+    )
 
-    results = []
-    sample_freq = info.sample_freq
-    n_channels = len(info.channel_labels)
-    ch_cols = info.channel_columns
-    reps = cfg.get("repetitions", 3)
 
-    total_stamps = info.total_rows
-    mid_stamp = info.stamp_at_row(total_stamps // 2)
-
-    block_sizes = _get_tuned_block_sizes(cfg, sample_freq)
-    parquet_codecs = get_tuned_parquet_codecs(cfg)
-    hdf5_compression = get_tuned_hdf5_compression(cfg)
-    variants = []
-    for label in block_sizes:
-        for codec in parquet_codecs:
-            pq_key = tuned_parquet_key(codec, label)
-            if pq_key in paths:
-                variants.append((pq_key, label, f"parquet_{codec}", paths[pq_key]))
-        h5_key = f"tuned_h5_{label}"
-        if h5_key in paths:
-            variants.append((h5_key, label, f"hdf5_{hdf5_compression}", paths[h5_key]))
-
-    if not variants:
-        print("    [skip] No tuned variants found.")
-        return results
-
-    window_sec = cfg.get("default_window", 60)
-    window_stamps = int(window_sec * sample_freq)
-    start_stamp = mid_stamp
-    end_stamp = mid_stamp + window_stamps - 1
-
-    print(f"\n  --- J.1: Random access ({window_sec}s at 50%) ---")
-    for key, block_label, codec, path in variants:
-        if "pq" in key:
-            t, data = _timed(lambda p=path: _read_tuned_pq(p, ch_cols, start_stamp, end_stamp), reps)
-        else:
-            t, data = _timed(lambda p=path: _read_h5_columnar_window(p, ch_cols, start_stamp, end_stamp), reps)
-        n_samples = data.shape[1] if data.ndim == 2 else 0
-        results.append({
-            "category": "tuned_random_access", "format": codec,
-            "block_size": block_label, "variant": key,
-            "window_seconds": window_sec,
-            "wall_clock_seconds": round(t, 6),
-            **_throughput(n_samples, n_channels, t),
-        })
-
-    print(f"\n  --- J.2: Channel subset (4 ch, {window_sec}s) ---")
-    subset_cols = ch_cols[:4]
-    for key, block_label, codec, path in variants:
-        if "pq" in key:
-            t, data = _timed(lambda p=path: _read_tuned_pq(p, subset_cols, start_stamp, end_stamp), reps)
-        else:
-            t, data = _timed(lambda p=path: _read_h5_columnar_window(p, subset_cols, start_stamp, end_stamp), reps)
-        n_samples = data.shape[1] if data.ndim == 2 else 0
-        results.append({
-            "category": "tuned_channel_subset", "format": codec,
-            "block_size": block_label, "variant": key,
-            "channels": 4, "window_seconds": window_sec,
-            "wall_clock_seconds": round(t, 6),
-            **_throughput(n_samples, 4, t),
-        })
-
-    print("\n  --- J.3: Window scaling ---")
-    window_sizes = cfg.get("window_sizes", [10, 60, 300, 900, 3600])
-    for ws in window_sizes:
-        ws_stamps = int(ws * sample_freq)
-        s = mid_stamp
-        e = info.stamp_at_row(min(total_stamps // 2 + ws_stamps - 1, info.total_rows - 1))
-        for key, block_label, codec, path in variants:
-            if "pq" in key:
-                t, data = _timed(lambda p=path, ss=s, ee=e: _read_tuned_pq(p, ch_cols, ss, ee), reps)
-            else:
-                t, data = _timed(lambda p=path, ss=s, ee=e: _read_h5_columnar_window(p, ch_cols, ss, ee), reps)
-            n_samples = data.shape[1] if data.ndim == 2 else 0
-            results.append({
-                "category": "tuned_window_scaling", "format": codec,
-                "block_size": block_label, "variant": key,
-                "window_seconds": ws,
-                "wall_clock_seconds": round(t, 6),
-                **_throughput(n_samples, n_channels, t),
-            })
-
-    print("\n  --- J.4: Full-study sequential read ---")
-    chunk_sec = get_tuned_chunk_sec(cfg)
-    chunk_stamps = int(chunk_sec * sample_freq)
-    bench_start = info.start_stamp
-    bench_end = info.end_stamp
-    for key, block_label, codec, path in variants:
-        samples_read = 0
-        t_wall_start = time.perf_counter()
-        for cs, ce in _chunk_ranges(bench_start, bench_end, chunk_stamps):
-            if "pq" in key:
-                matrix = _read_tuned_pq(path, ch_cols, cs, ce)
-            else:
-                matrix = _read_h5_columnar_window(path, ch_cols, cs, ce)
-            samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
-        t_wall = time.perf_counter() - t_wall_start
-        results.append({
-            "category": "tuned_full_study", "format": codec,
-            "block_size": block_label, "variant": key,
-            "total_samples": samples_read,
-            "wall_clock_seconds": round(t_wall, 3),
-            **_throughput(samples_read, n_channels, t_wall),
-        })
-
-    return results
+def bench_baseline_comparison(info, paths: dict, cfg: dict) -> list[dict]:
+    variants = _baseline_comparison_variants(paths)
+    return _run_comparison_workload_suite(
+        info,
+        variants,
+        cfg,
+        category_prefix="baseline",
+        section_letter="K",
+        skip_message="No supported baseline input artifacts found.",
+    )
 
 
 BENCHMARKS = {
@@ -827,4 +924,5 @@ BENCHMARKS = {
     "int32_storage": ("H: Int32 storage comparison", bench_int32_storage),
     "remote_query": ("I: Remote query — DuckDB Parquet vs EDF download", bench_remote_query),
     "tuned_comparison": ("J: Tuned Parquet vs HDF5 (matched block sizes)", bench_tuned_comparison),
+    "baseline_comparison": ("K: Baseline format comparison using J-style workloads", bench_baseline_comparison),
 }

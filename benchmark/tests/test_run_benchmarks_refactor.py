@@ -49,6 +49,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
             "int32_storage",
             "remote_query",
             "tuned_comparison",
+            "baseline_comparison",
         }
         self.assertEqual(expected, set(benchmarks.BENCHMARKS))
 
@@ -113,6 +114,49 @@ class BenchmarkRefactorTests(unittest.TestCase):
         selected = run_benchmarks._selected_benchmarks(cfg, args)
 
         self.assertEqual([cat_id for cat_id, _, _ in selected], ["random_access"])
+
+    def test_runner_wires_baseline_input_path_separately_from_canonical_parquet(self):
+        cfg = {
+            "studies": [{"name": "demo", "input": "demo-source.parquet", "sample_freq": 256}],
+            "benchmarks": ["baseline_comparison"],
+            "variants": [],
+        }
+        args = argparse.Namespace(
+            config="benchmark/config/default.yaml",
+            categories=None,
+            output=None,
+            dry_run=False,
+            no_report=True,
+            sas_token=None,
+        )
+        canonical = Path("demo_canonical.parquet")
+        captured = {}
+
+        def _fake_bench(_info, paths, _cfg):
+            captured.update(paths)
+            return []
+
+        selected = [("baseline_comparison", "K", _fake_bench)]
+        fake_info = SimpleNamespace(
+            sample_freq=256.0,
+            channel_labels=["Fp1"],
+            start_stamp=0,
+            end_stamp=1,
+            total_rows=2,
+            n_segments=1,
+            segment_plans=[object()],
+        )
+
+        with patch.object(run_benchmarks, "_selected_benchmarks", return_value=selected), \
+             patch.object(run_benchmarks, "resolve_input_path", return_value=Path("demo-source.parquet")), \
+             patch.object(run_benchmarks, "ingest", return_value=(canonical, "parquet", 256.0)), \
+             patch.object(run_benchmarks.StudyInfo, "from_parquet", return_value=fake_info), \
+             patch.object(run_benchmarks, "generate_variants", return_value={"parquet": canonical}), \
+             patch.object(run_benchmarks, "_save_results"):
+            run_benchmarks.run_benchmarks(cfg, args)
+
+        self.assertEqual(captured["parquet"], canonical)
+        self.assertEqual(captured["baseline_parquet"], Path("demo-source.parquet"))
 
     def test_nested_config_helpers_read_new_schema(self):
         cfg = {
@@ -413,6 +457,39 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertEqual(mock_chunk_ranges.call_count, 2)
         for call in mock_chunk_ranges.call_args_list:
             self.assertEqual(call.args, (0, 19, 14))
+
+    def test_bench_baseline_comparison_uses_baseline_input_path_and_chunk_sec(self):
+        info = SimpleNamespace(
+            sample_freq=2.0,
+            channel_labels=["Fp1", "Fp2", "C3", "C4", "O1"],
+            channel_columns=["ch_Fp1", "ch_Fp2", "ch_C3", "ch_C4", "ch_O1"],
+            total_rows=20,
+            stamp_at_row=lambda row: row,
+            start_stamp=0,
+            end_stamp=19,
+        )
+        cfg = {
+            "repetitions": 1,
+            "default_window": 1,
+            "window_sizes": [1],
+            "tuned_comparison": {"chunk_sec": 7},
+        }
+        paths = {"baseline_parquet": Path("baseline-input.parquet")}
+
+        with patch.object(benchmarks, "_timed", return_value=(0.1, np.zeros((5, 2), dtype=np.float32))), \
+             patch.object(benchmarks, "_read_parquet_window", return_value=np.zeros((5, 2), dtype=np.float32)) as mock_read, \
+             patch.object(benchmarks, "_chunk_ranges", return_value=[(0, 13)]) as mock_chunk_ranges:
+            results = benchmarks.bench_baseline_comparison(info, paths, cfg)
+
+        self.assertEqual(
+            {row["category"] for row in results},
+            {"baseline_random_access", "baseline_channel_subset", "baseline_window_scaling", "baseline_full_study"},
+        )
+        self.assertTrue(all(row["artifact"] == "Baseline input" for row in results))
+        self.assertTrue(all(row["format"] == "baseline_parquet" for row in results))
+        self.assertEqual(mock_chunk_ranges.call_count, 1)
+        mock_chunk_ranges.assert_called_once_with(0, 19, 14)
+        self.assertEqual(mock_read.call_args_list[0].args[0], Path("baseline-input.parquet"))
 
     def test_bench_compression_uses_nested_variants_and_enabled_flag(self):
         with tempfile.TemporaryDirectory() as tmp:
