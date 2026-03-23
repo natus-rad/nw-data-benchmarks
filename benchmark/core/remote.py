@@ -98,6 +98,9 @@ def bench_remote_query(info, paths: dict, cfg: dict,
     label_to_col = dict(zip(info.channel_labels, info.channel_columns))
     subset_cols = [label_to_col[lbl] for lbl in CHANNELS_10_20 if lbl in label_to_col]
     n_subset = len(subset_cols)
+    channel_variants = [("all", all_cols)]
+    if subset_cols:
+        channel_variants.append(("10-20 (19ch)", subset_cols))
     print(f"    All channels: {len(all_cols)}, 10-20 subset: {n_subset}")
 
     parquet_variants = []
@@ -112,7 +115,7 @@ def bench_remote_query(info, paths: dict, cfg: dict,
 
     con = _make_duckdb_connection(account, container)
     for pq_label, pq_az_path in parquet_variants:
-        for ch_label, cols in [("all", all_cols), ("10-20 (19ch)", subset_cols)]:
+        for ch_label, cols in channel_variants:
             query_cols = list(cols)
             times = []
             total_rows = 0
@@ -156,7 +159,7 @@ def bench_remote_query(info, paths: dict, cfg: dict,
         print(f"\n    Full-study sequential read ({total_study_sec:.0f}s in {n_chunks} × {chunk_sec}s chunks)")
 
         for pq_label, pq_az_path in parquet_variants:
-            for ch_label, cols in [("all", all_cols), ("10-20 (19ch)", subset_cols)]:
+            for ch_label, cols in channel_variants:
                 query_cols = list(cols)
                 total_rows = 0
                 print(f"    DuckDB full-study {pq_label} [{ch_label}] ... ", end="", flush=True)
@@ -214,8 +217,11 @@ def bench_remote_query(info, paths: dict, cfg: dict,
         edf_label_to_idx = {lbl: i for i, lbl in enumerate(edf_labels)}
         matched = [edf_label_to_idx[lbl.upper()] for lbl in CHANNELS_10_20 if lbl.upper() in edf_label_to_idx]
         subset_indices = matched[:n_subset] if len(matched) >= n_subset else list(range(min(n_subset, n_channels)))
+        edf_channel_variants = [("all", None)]
+        if subset_indices:
+            edf_channel_variants.append(("10-20 (19ch)", subset_indices))
 
-        for ch_label, ch_indices in [("all", None), ("10-20 (19ch)", subset_indices)]:
+        for ch_label, ch_indices in edf_channel_variants:
             print(f"    EDF local read [{ch_label}] ... ", end="", flush=True)
             local_times = []
             for row_start in random_row_starts:

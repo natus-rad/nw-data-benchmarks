@@ -1221,6 +1221,45 @@ class BenchmarkRefactorTests(unittest.TestCase):
             text.index("DuckDB float32_snappy [10-20 (19ch)]"),
         )
 
+    def test_bench_remote_query_skips_empty_10_20_subset(self):
+        class FakeCon:
+            def close(self):
+                return None
+
+        info = SimpleNamespace(
+            sample_freq=1.0,
+            channel_labels=["X1", "X2"],
+            channel_columns=["ch_X1", "ch_X2"],
+            total_rows=100,
+            stamp_at_row=lambda row: row,
+            start_stamp=0,
+            end_stamp=99,
+        )
+        cfg = {
+            "azure": {"storage_account": "acct", "container": "waveforms"},
+            "parquet_investigations": {
+                "remote_query": {
+                    "enabled": True,
+                    "n_random_points": 1,
+                    "window_sec": 10,
+                    "full_study_chunk_sec": 20,
+                    "remote_float32_path": "parquet/demo/",
+                }
+            },
+        }
+        calls = []
+
+        def fake_duckdb_read(_con, _path, columns, _start, _end):
+            calls.append(list(columns))
+            return 0.1, 10
+
+        with patch.object(remote, "_make_duckdb_connection", return_value=FakeCon()), \
+             patch.object(remote, "_duckdb_remote_read", side_effect=fake_duckdb_read):
+            results = remote.bench_remote_query(info, {"edf": Path("missing.edf")}, cfg)
+
+        self.assertEqual(calls, [["ch_X1", "ch_X2"]] * 6)
+        self.assertEqual([row["channel_subset"] for row in results], ["all", "all"])
+
     def test_runner_skips_duplicate_print_for_inline_logged_results(self):
         def fake_bench(_info, _paths, _cfg):
             return [{
