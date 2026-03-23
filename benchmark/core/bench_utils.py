@@ -89,7 +89,9 @@ def _print_result(r: dict) -> None:
     t = r.get("wall_clock_seconds") or r.get("total_wall_seconds", 0)
 
     mode = r.get("mode", fmt)
-    parts = [f"    {mode:20s}"]
+    benchmark = str(r.get("benchmark", ""))
+    prefix = f"[{benchmark}] " if "." in benchmark else ""
+    parts = [f"    {prefix}{mode:20s}"]
     if "read_method" in r:
         parts.append(f"via={r['read_method']:>5s}")
     if "position" in r:

@@ -815,11 +815,28 @@ class BenchmarkRefactorTests(unittest.TestCase):
             {row["category"] for row in results},
             {"baseline_random_access", "baseline_channel_subset", "baseline_window_scaling", "baseline_full_study"},
         )
+        self.assertEqual({row["benchmark"] for row in results}, {"K.1", "K.2", "K.3", "K.4"})
         self.assertTrue(all(row["artifact"] == "Baseline input" for row in results))
         self.assertTrue(all(row["format"] == "baseline_parquet" for row in results))
         self.assertEqual(mock_chunk_ranges.call_count, 1)
         mock_chunk_ranges.assert_called_once_with(0, 19, 14)
         self.assertEqual(mock_read.call_args_list[0].args[0], Path("baseline-input.parquet"))
+
+    def test_print_result_prefixes_dotted_benchmark_ids(self):
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            bench_utils._print_result({
+                "benchmark": "K.3",
+                "format": "baseline_parquet",
+                "window_seconds": 300,
+                "wall_clock_seconds": 0.0663,
+                "mib_per_sec": 203.4,
+            })
+
+        line = stdout.getvalue().strip()
+        self.assertIn("[K.3] baseline_parquet", line)
+        self.assertIn("win=  300s", line)
+        self.assertIn("time=0.0663s", line)
 
     def test_gap_safe_row_helpers_use_row_counts_not_stamp_spans(self):
         stamps = [0, 1, 2, 3, 100, 101, 102, 103]

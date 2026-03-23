@@ -186,6 +186,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
         n_samples = data.shape[1] if data.ndim == 2 else 0
         results.append({
             "category": f"{category_prefix}_random_access",
+            "benchmark": f"{section_letter}.1",
             "format": variant["format"],
             **variant["result_fields"],
             "window_seconds": window_sec,
@@ -205,6 +206,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
         n_samples = data.shape[1] if data.ndim == 2 else 0
         results.append({
             "category": f"{category_prefix}_channel_subset",
+            "benchmark": f"{section_letter}.2",
             "format": variant["format"],
             **variant["result_fields"],
             "channels": 4,
@@ -232,6 +234,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
             n_samples = data.shape[1] if data.ndim == 2 else 0
             results.append({
                 "category": f"{category_prefix}_window_scaling",
+                "benchmark": f"{section_letter}.3",
                 "format": variant["format"],
                 **variant["result_fields"],
                 "window_seconds": ws,
@@ -255,6 +258,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
         t_wall = time.perf_counter() - t_wall_start
         results.append({
             "category": f"{category_prefix}_full_study",
+            "benchmark": f"{section_letter}.4",
             "format": variant["format"],
             **variant["result_fields"],
             "total_samples": samples_read,
