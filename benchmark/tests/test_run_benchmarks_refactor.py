@@ -1686,21 +1686,33 @@ class BenchmarkRefactorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out_path = Path(tmp) / "results.json"
             attempts = {"count": 0}
-            real_replace = Path.replace
+            real_replace = run_benchmarks._replace_results_file
 
-            def flaky_replace(self, target):
+            def flaky_replace(tmp_path, target):
                 attempts["count"] += 1
                 if attempts["count"] < 3:
                     raise PermissionError("transient lock")
-                return real_replace(self, target)
+                return real_replace(tmp_path, target)
 
-            with patch.object(Path, "replace", new=flaky_replace), \
+            with patch.object(run_benchmarks, "_replace_results_file", new=flaky_replace), \
                  patch.object(run_benchmarks.time, "sleep") as mock_sleep:
                 run_benchmarks._save_results({"ok": True}, out_path)
 
             self.assertEqual(attempts["count"], 3)
             self.assertEqual(json.loads(out_path.read_text(encoding="utf-8")), {"ok": True})
             self.assertEqual(mock_sleep.call_count, 2)
+
+    def test_save_results_keeps_previous_file_as_backup_on_windows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "results.json"
+            out_path.write_text(json.dumps({"old": True}), encoding="utf-8")
+
+            with patch.object(run_benchmarks.sys, "platform", "win32"):
+                run_benchmarks._save_results({"new": True}, out_path)
+
+            backup_path = out_path.with_name("results.json.bak")
+            self.assertEqual(json.loads(out_path.read_text(encoding="utf-8")), {"new": True})
+            self.assertEqual(json.loads(backup_path.read_text(encoding="utf-8")), {"old": True})
 
     def test_runner_generates_report_by_default(self):
         def fake_bench(_info, _paths, _cfg):

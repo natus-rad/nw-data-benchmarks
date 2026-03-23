@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -44,6 +45,29 @@ from benchmark.scripts.generate_benchmark_report import generate_report
 
 _RESULT_SAVE_RETRIES = 10
 _RESULT_SAVE_RETRY_DELAY_SECONDS = 0.2
+
+
+def _results_backup_path(out_path: Path) -> Path:
+    return out_path.with_name(f"{out_path.name}.bak")
+
+
+def _replace_results_file(tmp_path: Path, out_path: Path) -> None:
+    if sys.platform != "win32":
+        os.replace(tmp_path, out_path)
+        return
+
+    backup_path = _results_backup_path(out_path)
+    backup_created = False
+    if out_path.exists():
+        os.replace(out_path, backup_path)
+        backup_created = True
+
+    try:
+        os.replace(tmp_path, out_path)
+    except Exception:
+        if backup_created and backup_path.exists() and not out_path.exists():
+            os.replace(backup_path, out_path)
+        raise
 
 
 def _selected_benchmarks(cfg: dict, args: argparse.Namespace) -> list[tuple[str, str, object]]:
@@ -449,25 +473,31 @@ def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str
 
 def _save_results(output: dict, out_path: Path) -> None:
     """Atomically overwrite the results file with the current output dict."""
-    tmp = out_path.with_suffix(".tmp")
+    tmp = out_path.with_name(f"{out_path.name}.{os.getpid()}.{time.time_ns()}.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
     last_exc: PermissionError | None = None
-    for attempt in range(_RESULT_SAVE_RETRIES):
-        try:
-            tmp.replace(out_path)
-            return
-        except PermissionError as exc:
-            last_exc = exc
-            if attempt == _RESULT_SAVE_RETRIES - 1:
-                break
-            time.sleep(_RESULT_SAVE_RETRY_DELAY_SECONDS)
+    try:
+        for attempt in range(_RESULT_SAVE_RETRIES):
+            try:
+                _replace_results_file(tmp, out_path)
+                return
+            except PermissionError as exc:
+                last_exc = exc
+                if attempt == _RESULT_SAVE_RETRIES - 1:
+                    break
+                time.sleep(_RESULT_SAVE_RETRY_DELAY_SECONDS)
 
-    raise PermissionError(
-        f"Unable to replace results file '{out_path}' after {_RESULT_SAVE_RETRIES} attempts. "
-        "Another process may be temporarily locking the file (editor preview, antivirus, "
-        "indexer, etc.)."
-    ) from last_exc
+        raise PermissionError(
+            f"Unable to replace results file '{out_path}' after {_RESULT_SAVE_RETRIES} attempts. "
+            "Another process may be temporarily locking the file (editor preview, antivirus, "
+            "indexer, etc.)."
+        ) from last_exc
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
