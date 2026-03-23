@@ -327,6 +327,20 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         self.assertLess(rendered.index("pq_fast"), rendered.index("h5_mid"))
         self.assertLess(rendered.index("h5_mid"), rendered.index("pq_slow"))
 
+    def test_render_report_uses_results_filename_not_absolute_path(self) -> None:
+        payload = {
+            "run_id": "2026-03-21T00-00-00",
+            "system": {"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16},
+            "studies": [{"name": "demo", "channels": 2, "sample_freq": 100.0, "total_stamps": 1000, "duration_seconds": 10.0}],
+            "benchmarks": [{"category": "random_access", "format": "parquet", "position": "0%", "wall_clock_seconds": 0.5, "mib_per_sec": 10.0}],
+        }
+        template = "# Report\n\n_Generated from `${source_file}` (run `${run_id}`)._\n"
+
+        rendered = render_report(payload, template, Path("C:/secret/dev/path/demo_benchmark_results.json"))
+
+        self.assertIn("Generated from `demo_benchmark_results.json`", rendered)
+        self.assertNotIn("C:/secret/dev/path", rendered)
+
     def test_generate_report_writes_markdown_and_html(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

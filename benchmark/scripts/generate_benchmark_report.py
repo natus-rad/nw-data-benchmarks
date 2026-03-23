@@ -125,7 +125,7 @@ def render_report(payload: dict[str, Any], template_text: str, source_path: Path
         template = Template(template_text)
         return template.substitute(
             run_id=payload["run_id"],
-            source_file=source_path.as_posix(),
+            source_file=source_path.name,
             benchmark_count=str(len(benchmarks)),
             category_count=str(len(categories)),
             overview=build_overview(study, payload["system"], categories),

@@ -1,12 +1,12 @@
 # Benchmark Report
 
-_Generated from `C:/dev/nw/perforce/NW10_GMA4/Source/sdk/nw-data-benchmarks/benchmark/results/2026-03-23T11-28-36_benchmark_results.json` (run `2026-03-23T11-28-36`)._
+_Generated from `2026-03-23T13-01-44_benchmark_results.json` (run `2026-03-23T13-01-44`)._
 
 This report is automatically generated from benchmark result JSON and is intended to replace manual Markdown edits.
 
 ## Run Overview
 
-The report is generated directly from benchmark result JSON. Sections for categories not present in the input file are called out explicitly, so partial benchmark runs still produce a readable report. All reported throughput values use the theoretical decoded float32 payload size: rows × channels × 4 bytes.
+The report is generated directly from benchmark result JSON. Sections for categories not present in the input file are called out explicitly, so partial benchmark runs still produce a readable report. All reported throughput values use the theoretical decoded float32 payload size: rows × channels × 4 bytes. HDF5 timings in this benchmark use a custom benchmark-specific `chunk_index` lookup structure built at conversion time, which intentionally gives HDF5 a best-case seek/read path rather than representing plain generic HDF5 without that helper.
 
 | Property | Value |
 | --- | --- |
@@ -15,26 +15,23 @@ The report is generated directly from benchmark result JSON. Sections for catego
 | Sample rate | 256.0 Hz |
 | Duration | 12.86 h (11,854,000 samples) |
 | System | Windows 11 / Python 3.12.9 / 12 CPU threads / 31.7 GiB RAM |
-| Categories present | channel_subset, compression, filter_pipeline_full, int32_storage, precision_loss, random_access, remontage, remote_query, remote_query_full_study, sliding_fft_full, tuned_channel_subset, tuned_full_study, tuned_random_access, tuned_window_scaling, window_scaling |
+| Categories present | baseline_channel_subset, baseline_full_study, baseline_random_access, baseline_window_scaling, channel_subset, filter_pipeline_full, precision_loss, random_access, remontage, remote_query, remote_query_full_study, sliding_fft_full, window_scaling |
 
 ## Executive Summary
 
-Benchmark rows: **232** across **15** categories.
+Benchmark rows: **44** across **13** categories.
 
 | Area | Winner | Result |
 | --- | --- | --- |
-| Random access (median 1-minute read) | pq_30m_lz4 | 0.0813s |
-| 4-channel subset | pq_30m_lz4 | 0.0546s |
-| Full-study filter pipeline | pq_30m_lz4 | 20.45s |
-| Peak window-scaling throughput | pq_30m_lz4 @ 3600s | 308.1 MiB/s |
-| Best tuned full-study read | Parquet snappy (30m) | 6.247s |
+| Random access (median 1-minute read) | pq_30m_lz4 | 0.0818s |
+| 4-channel subset | pq_30m_lz4 | 0.0780s |
+| Full-study filter pipeline | pq_30m_lz4 | 23.37s |
+| Peak window-scaling throughput | pq_30m_lz4 @ 3600s | 291.8 MiB/s |
 
 ## Key Observations
 
-- **Random access:** pq_30m_lz4 has the lowest median 1-minute read time at 0.0813s, about 1.37× faster than canonical.
-- **Compression trade-off:** smallest Parquet artifact is zstd_9 at 615.6 MiB, while the fastest 1-minute read is snappy at 0.1384s.
-- **Int32 variants:** the most compact measured variant is int32_nanovolt (zstd) at 579.2 MiB; its reported SNR vs float32 is 144.36 dB.
-- **Remote access:** the fastest remote query path in this run is duckdb_remote for 10-20 (19ch) at 1.255s total over 2 windows.
+- **Random access:** pq_30m_lz4 has the lowest median 1-minute read time at 0.0818s, about 1.62× faster than canonical.
+- **Remote access:** the fastest remote query path in this run is duckdb_remote for 10-20 (19ch) at 1.087s total over 2 windows.
 
 ## A. Random Access
 
@@ -46,14 +43,14 @@ Benchmark rows: **232** across **15** categories.
 
 **Question answered:** How sensitive is each format to where in the study a random read occurs?
 
-pq_30m_lz4 has the lowest median 1-minute read time across read positions at 0.0813s.
+pq_30m_lz4 has the lowest median 1-minute read time across read positions at 0.0818s.
 
 | Position | pq_30m_lz4 | canonical |
 | --- | --- | --- |
-| 0% | 0.0835s / 32.3 MiB/s | 0.0954s / 28.3 MiB/s |
-| 50% | 0.0792s / 34.0 MiB/s | 0.1327s / 20.3 MiB/s |
-| 75% | 0.0786s / 34.3 MiB/s | 0.1269s / 21.2 MiB/s |
-| 95% | 0.0888s / 30.4 MiB/s | 0.0928s / 29.0 MiB/s |
+| 0% | 0.1054s / 25.6 MiB/s | 0.0755s / 35.7 MiB/s |
+| 50% | 0.0782s / 34.4 MiB/s | 0.0659s / 40.9 MiB/s |
+| 75% | 0.0853s / 31.6 MiB/s | 0.1887s / 14.3 MiB/s |
+| 95% | 0.0631s / 42.7 MiB/s | 0.2595s / 10.4 MiB/s |
 
 ## B. Channel Subset
 
@@ -65,13 +62,13 @@ pq_30m_lz4 has the lowest median 1-minute read time across read positions at 0.0
 
 **Question answered:** Which formats benefit most when the workload only needs a subset of channels?
 
-4 channels → pq_30m_lz4 is fastest at 0.0546s. 10 channels → pq_30m_lz4 is fastest at 0.0523s. 46 channels → pq_30m_lz4 is fastest at 0.1104s.
+4 channels → pq_30m_lz4 is fastest at 0.0780s. 10 channels → pq_30m_lz4 is fastest at 0.0957s. 46 channels → pq_30m_lz4 is fastest at 0.1080s.
 
 | Channels | pq_30m_lz4 |
 | --- | --- |
-| 4 | 0.0546s / 4.3 MiB/s |
-| 10 | 0.0523s / 11.2 MiB/s |
-| 46 | 0.1104s / 24.4 MiB/s |
+| 4 | 0.0780s / 3.0 MiB/s |
+| 10 | 0.0957s / 6.1 MiB/s |
+| 46 | 0.1080s / 25.0 MiB/s |
 
 ## C. Re-montage
 
@@ -83,11 +80,11 @@ pq_30m_lz4 has the lowest median 1-minute read time across read positions at 0.0
 
 **Question answered:** Once downstream signal processing is included, how much of total time is storage I/O versus lightweight computation?
 
-Montage is a relatively small fraction of end-to-end time in this benchmark (average 1.5% of total wall time).
+Montage is a relatively small fraction of end-to-end time in this benchmark (average 1.4% of total wall time).
 
 | Format | Read | Montage | Total | Montage share |
 | --- | --- | --- | --- | --- |
-| pq_30m_lz4 | 0.1537s | 0.0024s | 0.1561s | 1.5% |
+| pq_30m_lz4 | 0.1679s | 0.0023s | 0.1702s | 1.4% |
 
 ## D.1 Full-Study Filter Pipeline
 
@@ -99,11 +96,11 @@ Montage is a relatively small fraction of end-to-end time in this benchmark (ave
 
 **Question answered:** Which format is best for whole-study offline processing workloads that must read and transform all signal data?
 
-For the full-study read → montage → filter pipeline, pq_30m_lz4 is fastest at 20.45s.
+For the full-study read → montage → filter pipeline, pq_30m_lz4 is fastest at 23.37s.
 
 | Format | Read | Montage | Filter | Total | Throughput |
 | --- | --- | --- | --- | --- | --- |
-| pq_30m_lz4 | 15.05s | 0.8150s | 4.583s | 20.45s | 94.9 MiB/s |
+| pq_30m_lz4 | 16.80s | 1.235s | 5.337s | 23.37s | 83.0 MiB/s |
 
 ## D.2 Sliding FFT
 
@@ -119,7 +116,7 @@ This stage computed 21,596 overlapping FFT windows across the full study.
 
 | Format | Read | Montage | Filter | FFT | Total |
 | --- | --- | --- | --- | --- | --- |
-| pq_30m_lz4 | 15.40s | 0.9460s | 5.163s | 12.24s | 34.30s |
+| pq_30m_lz4 | 15.11s | 1.202s | 4.963s | 11.26s | 33.05s |
 
 ## E. Window Scaling
 
@@ -131,17 +128,17 @@ This stage computed 21,596 overlapping FFT windows across the full study.
 
 **Question answered:** How does each format transition from small random reads to large sustained reads?
 
-Best measured throughput is 308.1 MiB/s from pq_30m_lz4 at a 3600s window.
+Best measured throughput is 291.8 MiB/s from pq_30m_lz4 at a 3600s window.
 
 | Window | pq_30m_lz4 |
 | --- | --- |
-| 10s | 4.8 MiB/s |
-| 30s | 12.8 MiB/s |
-| 60s | 23.5 MiB/s |
-| 300s | 55.5 MiB/s |
-| 900s | 123.3 MiB/s |
-| 1800s | 225.6 MiB/s |
-| 3600s | 308.1 MiB/s |
+| 10s | 3.1 MiB/s |
+| 30s | 12.7 MiB/s |
+| 60s | 25.8 MiB/s |
+| 300s | 74.6 MiB/s |
+| 900s | 157.8 MiB/s |
+| 1800s | 183.6 MiB/s |
+| 3600s | 291.8 MiB/s |
 
 ## F. Compression
 
@@ -153,15 +150,7 @@ Best measured throughput is 308.1 MiB/s from pq_30m_lz4 at a 3600s window.
 
 **Question answered:** Which Parquet codec gives the best balance between storage efficiency and read performance?
 
-Against a raw float32 baseline of 2,170.5 MiB, the smallest Parquet artifact is zstd_9 at 615.6 MiB. The fastest 1-minute read is snappy at 0.1384s.
-
-| Codec | 1-minute read | Artifact size | Ratio vs raw float32 |
-| --- | --- | --- | --- |
-| zstd_9 | 0.1739s | 615.6 MiB | 3.53× |
-| zstd_3 | 0.1634s | 618.0 MiB | 3.51× |
-| lz4 | 0.1887s | 714.4 MiB | 3.04× |
-| snappy | 0.1384s | 755.1 MiB | 2.87× |
-| none | 0.1639s | 787.2 MiB | 2.76× |
+*This category was not present in the input results file.*
 
 ## G. Precision Loss
 
@@ -195,27 +184,7 @@ Top channels by max absolute error:
 
 **Question answered:** Can int32 encodings reduce storage cost while preserving acceptable fidelity and performance?
 
-The most compact measured storage mode is int32_nanovolt (zstd) at 579.2 MiB.
-
-### H.1 Size / Precision
-
-| Mode | Codec | Artifact size | Ratio vs raw float32 | SNR vs float32 |
-| --- | --- | --- | --- | --- |
-| int32_nanovolt | zstd | 579.2 MiB | 3.75× | 144.36 |
-| float32 | zstd_3 | 618.0 MiB | 3.51× | inf |
-| int32_calibrated | zstd | 623.4 MiB | 3.48× | 159.83 |
-| int32_nanovolt | snappy | 643.1 MiB | 3.38× | 144.36 |
-| int32_nanovolt | none | 692.3 MiB | 3.14× | 144.36 |
-| int32_calibrated | snappy | 694.8 MiB | 3.12× | 159.83 |
-| int32_calibrated | none | 744.0 MiB | 2.92× | 159.83 |
-
-### H.2 Representative Read Performance
-
-| Mode | Read method | Codec | 1-minute read | Throughput |
-| --- | --- | --- | --- | --- |
-| float32 | — | zstd_3 | 0.1077s | 25.0 MiB/s |
-| int32_nanovolt | arrow | zstd | 0.1198s | 22.5 MiB/s |
-| int32_calibrated | arrow | zstd | 0.1663s | 16.2 MiB/s |
+*This category was not present in the input results file.*
 
 ## I. Remote Query
 
@@ -227,16 +196,18 @@ The most compact measured storage mode is int32_nanovolt (zstd) at 579.2 MiB.
 
 **Question answered:** For remote/cloud access, when is query-in-place better than full-file download first?
 
+Received settings: n_random_points=2; window_sec=600s; full_study_chunk_sec=3600s.
+
 All reported remote timings are direct measurements.
 
 | Method | Format | Channel subset | Total time | Avg/window | Throughput |
 | --- | --- | --- | --- | --- | --- |
-| duckdb_remote | parquet_single_file_lz4 | 10-20 (19ch) | 1.255s | 0.6280s | 17.7 MiB/s |
-| duckdb_remote | Parquet int32 nV snappy | 10-20 (19ch) | 3.548s | 1.774s | 6.3 MiB/s |
-| duckdb_remote | Parquet float32 snappy | 10-20 (19ch) | 4.209s | 2.104s | 5.3 MiB/s |
-| duckdb_remote | parquet_single_file_lz4 | all | 6.660s | 3.330s | 8.1 MiB/s |
-| duckdb_remote | Parquet float32 snappy | all | 7.053s | 3.527s | 7.6 MiB/s |
-| duckdb_remote | Parquet int32 nV snappy | all | 14.62s | 7.308s | 3.7 MiB/s |
+| duckdb_remote | parquet_single_file_lz4 | 10-20 (19ch) | 1.087s | 0.5430s | 20.5 MiB/s |
+| duckdb_remote | Parquet int32 nV snappy | 10-20 (19ch) | 1.112s | 0.5560s | 20.0 MiB/s |
+| duckdb_remote | Parquet float32 snappy | 10-20 (19ch) | 3.066s | 1.533s | 7.3 MiB/s |
+| duckdb_remote | parquet_single_file_lz4 | all | 4.665s | 2.332s | 11.6 MiB/s |
+| duckdb_remote | Parquet float32 snappy | all | 6.241s | 3.120s | 8.6 MiB/s |
+| duckdb_remote | Parquet int32 nV snappy | all | 10.86s | 5.428s | 5.0 MiB/s |
 
 ## J. Tuned Format Comparison
 
@@ -252,14 +223,7 @@ This group compares matched block-size variants generated specifically for Bench
 
 **Question answered:** Which tuned layout is best for small random-access reads?
 
-| Block size | Parquet snappy | Parquet LZ4 | HDF5 LZ4 |
-| --- | --- | --- | --- |
-| 5m | 0.2127s | 0.1281s | 0.0759s |
-| 10m | 0.0939s | 0.0722s | 0.0860s |
-| 20m | 0.0691s | 0.0934s | 0.1511s |
-| 30m | 0.0531s | 0.0530s | 0.2447s |
-| 60m | 0.1054s | 0.1106s | 0.4669s |
-| 120m | 0.2209s | 0.2298s | 0.9347s |
+*This category was not present in the input results file.*
 
 ### J.2 Channel Subset
 
@@ -271,14 +235,7 @@ This group compares matched block-size variants generated specifically for Bench
 
 **Question answered:** Which tuned layout best supports selective channel retrieval?
 
-| Block size | Parquet snappy | Parquet LZ4 | HDF5 LZ4 |
-| --- | --- | --- | --- |
-| 5m | 0.0544s | 0.0451s | 0.0056s |
-| 10m | 0.0310s | 0.0325s | 0.0096s |
-| 20m | 0.0347s | 0.0273s | 0.0189s |
-| 30m | 0.0302s | 0.0252s | 0.0443s |
-| 60m | 0.0470s | 0.0357s | 0.0468s |
-| 120m | 0.0552s | 0.0452s | 0.1068s |
+*This category was not present in the input results file.*
 
 ### J.3 Throughput vs Window Size
 
@@ -290,17 +247,7 @@ This group compares matched block-size variants generated specifically for Bench
 
 **Question answered:** Which tuned format scales best as the read window grows?
 
-Each cell shows the best throughput across all blocks tested for that window × format combination, with the winning block in parentheses.
-
-| Window | Parquet snappy | Parquet LZ4 | HDF5 LZ4 |
-| --- | --- | --- | --- |
-| 10s | 10.1 MiB/s (20m block) | 10.6 MiB/s (10m block) | 10.1 MiB/s (5m block) |
-| 30s | 29.3 MiB/s (10m block) | 29.2 MiB/s (10m block) | 37.4 MiB/s (5m block) |
-| 60s | 53.6 MiB/s (20m block) | 56.8 MiB/s (20m block) | 69.1 MiB/s (5m block) |
-| 300s | 201.2 MiB/s (20m block) | 189.9 MiB/s (20m block) | 156.8 MiB/s (5m block) |
-| 900s | 285.1 MiB/s (10m block) | 261.7 MiB/s (30m block) | 175.9 MiB/s (5m block) |
-| 1800s | 383.3 MiB/s (20m block) | 353.2 MiB/s (10m block) | 273.5 MiB/s (5m block) |
-| 3600s | 348.0 MiB/s (10m block) | 379.3 MiB/s (10m block) | 282.1 MiB/s (10m block) |
+*This category was not present in the input results file.*
 
 ### J.4 Full-Study Sequential Read
 
@@ -312,16 +259,7 @@ Each cell shows the best throughput across all blocks tested for that window × 
 
 **Question answered:** Which tuned layout is best for whole-study scans rather than isolated random reads?
 
-| Block size | Parquet snappy | Parquet LZ4 | HDF5 LZ4 |
-| --- | --- | --- | --- |
-| 5m | 9.239s | 11.80s | 7.964s |
-| 10m | 6.811s | 6.502s | 7.868s |
-| 20m | 6.323s | 7.791s | 9.141s |
-| 30m | 6.247s | 6.285s | 9.998s |
-| 60m | 6.317s | 6.330s | 9.541s |
-| 120m | 8.077s | 7.236s | 13.89s |
-
-Per-variant artifact sizes are not currently recorded in the result JSON, so this generated report limits Benchmark J to performance-derived comparisons.
+*This category was not present in the input results file.*
 
 ## K. Baseline Format Comparison
 
@@ -339,7 +277,9 @@ Reported throughput values use the theoretical decoded float32 payload size: row
 
 **Question answered:** How does the baseline input format perform on the same random-access workload used in Benchmark J?
 
-*This category was not present in the input results file.*
+| Artifact | Baseline input Parquet |
+| --- | --- |
+| Baseline input | 0.1501s / 18.0 MiB/s |
 
 ### K.2 Channel Subset
 
@@ -351,7 +291,9 @@ Reported throughput values use the theoretical decoded float32 payload size: row
 
 **Question answered:** How well does the baseline input format support selective channel retrieval on the J-style workload?
 
-*This category was not present in the input results file.*
+| Artifact | Baseline input Parquet |
+| --- | --- |
+| Baseline input | 0.1334s / 1.8 MiB/s |
 
 ### K.3 Throughput vs Window Size
 
@@ -363,7 +305,17 @@ Reported throughput values use the theoretical decoded float32 payload size: row
 
 **Question answered:** How does the baseline input format scale on the same workload family used for Benchmark J?
 
-*This category was not present in the input results file.*
+Each cell shows the measured throughput for the baseline input artifact(s) at that window size.
+
+| Window | Baseline input Parquet |
+| --- | --- |
+| 10s | 5.6 MiB/s |
+| 30s | 22.7 MiB/s |
+| 60s | 43.9 MiB/s |
+| 300s | 133.2 MiB/s |
+| 900s | 224.7 MiB/s |
+| 1800s | 250.1 MiB/s |
+| 3600s | 247.2 MiB/s |
 
 ### K.4 Full-Study Sequential Read
 
@@ -375,4 +327,8 @@ Reported throughput values use the theoretical decoded float32 payload size: row
 
 **Question answered:** How does the baseline input artifact perform on whole-study scans compared with the tuned variants in Benchmark J?
 
-*This category was not present in the input results file.*
+| Artifact | Baseline input Parquet |
+| --- | --- |
+| Baseline input | 9.429s / 220.6 MiB/s |
+
+Benchmark K runs the Benchmark J workload family on the resolved baseline input artifact(s) without generating tuned comparison variants.
