@@ -82,6 +82,75 @@ def _write_table(table: pa.Table, out_file: Path, compression: str,
     pq.write_table(table, str(out_file), **kwargs)
 
 
+def _hdf5_batch_rows(total_rows: int, row_group_size: int | None,
+                     chunk_rows: int | None = None) -> int:
+    for candidate in (row_group_size, chunk_rows, 65_536):
+        if candidate and int(candidate) > 0:
+            return max(1, min(total_rows, int(candidate)))
+    return max(1, total_rows)
+
+
+def _hdf5_stamp_source(hf):
+    for name in ("samplestamp", "timestamps", "time", "sample_index"):
+        if name in hf:
+            return hf[name]
+    return None
+
+
+def _hdf5_stamp_slice(stamp_source, start: int, end: int) -> np.ndarray:
+    if stamp_source is None:
+        return np.arange(start, end, dtype=np.int64)
+    return np.asarray(stamp_source[start:end], dtype=np.int64)
+
+
+def _iter_hdf5_tables(hf, row_group_size: int | None):
+    import h5py
+
+    stamp_source = _hdf5_stamp_source(hf)
+
+    if "channels" in hf and isinstance(hf["channels"], h5py.Group):
+        raw_labels = list(hf["channels"].keys())
+        channel_datasets = [hf["channels"][lbl] for lbl in raw_labels]
+        total_rows = channel_datasets[0].shape[0]
+        column_names = [f"ch_{_decode_hdf5_label(lbl)}" for lbl in raw_labels]
+        chunk_rows = min((ds.chunks[0] for ds in channel_datasets if ds.chunks), default=None)
+
+        def _column_arrays(start: int, end: int) -> dict[str, pa.Array]:
+            columns = {"samplestamp": pa.array(_hdf5_stamp_slice(stamp_source, start, end))}
+            for name, ds in zip(column_names, channel_datasets):
+                columns[name] = pa.array(np.asarray(ds[start:end], dtype=np.float32))
+            return columns
+
+    elif "data" in hf and len(hf["data"].shape) == 2:
+        data_ds = hf["data"]
+        total_rows = data_ds.shape[0]
+        if "channel_labels" in hf.attrs:
+            labels = [_decode_hdf5_label(lbl) for lbl in hf.attrs["channel_labels"]]
+        else:
+            labels = [str(i) for i in range(data_ds.shape[1])]
+        column_names = [f"ch_{lbl}" for lbl in labels]
+        chunk_rows = data_ds.chunks[0] if data_ds.chunks else None
+
+        def _column_arrays(start: int, end: int) -> dict[str, pa.Array]:
+            matrix = np.asarray(data_ds[start:end], dtype=np.float32)
+            columns = {"samplestamp": pa.array(_hdf5_stamp_slice(stamp_source, start, end))}
+            for idx, name in enumerate(column_names):
+                columns[name] = pa.array(matrix[:, idx])
+            return columns
+
+    else:
+        raise ValueError(f"Cannot determine HDF5 layout for {hf.filename}")
+
+    schema = pa.schema([
+        pa.field("samplestamp", pa.int64()),
+        *[pa.field(name, pa.float32()) for name in column_names],
+    ])
+    batch_rows = _hdf5_batch_rows(total_rows, row_group_size, chunk_rows)
+    for start in range(0, total_rows, batch_rows):
+        end = min(start + batch_rows, total_rows)
+        yield pa.table(_column_arrays(start, end), schema=schema)
+
+
 def _rewrite_parquet_input(src_path: Path, out_file: Path, compression: str,
                            row_group_size: int | None) -> int:
     src_files = list_parquet_files(src_path)
@@ -184,38 +253,19 @@ def _ingest_hdf5(h5_path: Path, out_file: Path,
                 "pass sample_freq in config"
             )
 
-        # Detect layout and read data
-        if "channels" in hf and isinstance(hf["channels"], h5py.Group):
-            labels = list(hf["channels"].keys())
-            total_rows = hf["channels"][labels[0]].shape[0]
-            ch_data = {f"ch_{lbl}": hf["channels"][lbl][:].astype(np.float32)
-                       for lbl in labels}
-        elif "data" in hf and len(hf["data"].shape) == 2:
-            total_rows = hf["data"].shape[0]
-            if "channel_labels" in hf.attrs:
-                labels = [_decode_hdf5_label(lbl) for lbl in hf.attrs["channel_labels"]]
-            else:
-                labels = [str(i) for i in range(hf["data"].shape[1])]
-            data_matrix = hf["data"][:].astype(np.float32)
-            ch_data = {f"ch_{lbl}": data_matrix[:, i]
-                       for i, lbl in enumerate(labels)}
-        else:
-            raise ValueError(f"Cannot determine HDF5 layout for {h5_path}")
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        writer = None
+        total_rows = 0
+        try:
+            for table in _iter_hdf5_tables(hf, row_group_size):
+                if writer is None:
+                    writer = pq.ParquetWriter(str(out_file), table.schema, compression=compression)
+                total_rows += table.num_rows
+                writer.write_table(table, row_group_size=row_group_size)
+        finally:
+            if writer is not None:
+                writer.close()
 
-        # Samplestamp
-        stamp_names = ["samplestamp", "timestamps", "time", "sample_index"]
-        stamps = None
-        for name in stamp_names:
-            if name in hf:
-                stamps = hf[name][:].astype(np.int64)
-                break
-        if stamps is None:
-            stamps = np.arange(total_rows, dtype=np.int64)
-
-    columns = {"samplestamp": pa.array(stamps)}
-    columns.update({col: pa.array(arr) for col, arr in ch_data.items()})
-    table = pa.table(columns)
-    _write_table(table, out_file, compression, row_group_size)
     print(f"  [ingest] wrote {out_file} ({total_rows:,} rows)")
     return freq
 

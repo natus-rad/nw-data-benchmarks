@@ -24,7 +24,7 @@ from benchmark.core.config_helpers import (
     normalize_config,
     validate_config,
 )
-from benchmark.core.ingest import _canonical_file, ingest
+from benchmark.core.ingest import _canonical_file, _iter_hdf5_tables, ingest
 from benchmark.core.study_info import StudyInfo
 from benchmark.core.variants import generate_variants
 from benchmark.core.remote import bench_remote_query
@@ -309,6 +309,45 @@ class BenchmarkRefactorTests(unittest.TestCase):
             self.assertEqual(detected_fmt, "hdf5")
             self.assertEqual(sample_freq, 256.0)
             self.assertEqual(pq.read_schema(canonical_file).names, ["samplestamp", "ch_Fp1", "ch_C3"])
+
+    def test_iter_hdf5_tables_chunks_matrix_layout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            h5_file = Path(tmp) / "input.h5"
+            with h5py.File(str(h5_file), "w") as hf:
+                hf.attrs["channel_labels"] = np.array([b"Fp1", b"C3"], dtype="S3")
+                hf.create_dataset("samplestamp", data=np.array([10, 11, 12, 13, 14], dtype=np.int64))
+                hf.create_dataset(
+                    "data",
+                    data=np.array(
+                        [[0.1, 1.1], [0.2, 1.2], [0.3, 1.3], [0.4, 1.4], [0.5, 1.5]],
+                        dtype=np.float32,
+                    ),
+                )
+
+            with h5py.File(str(h5_file), "r") as hf:
+                tables = list(_iter_hdf5_tables(hf, row_group_size=2))
+
+            self.assertEqual([table.num_rows for table in tables], [2, 2, 1])
+            self.assertEqual(tables[0].column_names, ["samplestamp", "ch_Fp1", "ch_C3"])
+            self.assertEqual(tables[0]["samplestamp"].to_pylist(), [10, 11])
+            self.assertEqual(tables[-1]["samplestamp"].to_pylist(), [14])
+
+    def test_iter_hdf5_tables_chunks_channel_group_layout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            h5_file = Path(tmp) / "input.h5"
+            with h5py.File(str(h5_file), "w") as hf:
+                channels = hf.create_group("channels")
+                channels.create_dataset("Fp1", data=np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float32))
+                channels.create_dataset("C3", data=np.array([1.1, 1.2, 1.3, 1.4, 1.5], dtype=np.float32))
+                hf.create_dataset("samplestamp", data=np.array([20, 21, 22, 23, 24], dtype=np.int64))
+
+            with h5py.File(str(h5_file), "r") as hf:
+                tables = list(_iter_hdf5_tables(hf, row_group_size=2))
+
+            self.assertEqual([table.num_rows for table in tables], [2, 2, 1])
+            self.assertEqual(tables[0].column_names, ["samplestamp", "ch_C3", "ch_Fp1"])
+            self.assertEqual(tables[1]["samplestamp"].to_pylist(), [22, 23])
+            self.assertEqual(tables[-1]["ch_Fp1"].to_pylist(), [0.5])
 
     def test_runner_rejects_no_variant_direct_source_erd_core_runs(self):
         cfg = {
