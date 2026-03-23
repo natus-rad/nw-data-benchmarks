@@ -101,7 +101,7 @@ tuned_comparison:
   block_sizes_minutes: [5, 10, 20, 30, 60, 120]  # Block sizes in minutes for tuned variant generation
   parquet_codecs: [snappy, lz4]                  # Parquet codecs to compare in benchmark J
   hdf5_compression: lz4                          # Only lz4 is currently supported for tuned HDF5 variants
-  chunk_sec: 300                                 # Sequential chunk size in seconds for J.4 full-study reads
+  chunk_sec: 3600                                # Sequential chunk size in seconds for J.4 full-study reads
 
 # Channel subsets for category B.
 channel_subsets: [4, 10]

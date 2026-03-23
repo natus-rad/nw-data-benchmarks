@@ -282,47 +282,6 @@ class BenchmarkRefactorTests(unittest.TestCase):
             self.assertIn("[cached] parquet_30m_flo_lz4", stdout.getvalue())
             self.assertEqual(paths["parquet"], out_file)
 
-    def test_generate_variants_promotes_legacy_wrapped_single_file_cache(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            canonical = tmp_path / "demo_canonical"
-            canonical.mkdir()
-            pq.write_table(
-                pa.table({
-                    "samplestamp": pa.array([0, 1], type=pa.int64()),
-                    "ch_Fp1": pa.array([0.1, 0.2], type=pa.float32()),
-                }),
-                canonical / "part_00000.parquet",
-                compression="snappy",
-            )
-            info = StudyInfo.from_parquet(canonical, sample_freq=256)
-            output_base = tmp_path / "demo_study_variants"
-            legacy_part = output_base / "parquet_30m_flo_lz4" / "part_00000.parquet"
-            legacy_part.parent.mkdir(parents=True, exist_ok=True)
-            pq.write_table(
-                pa.table({
-                    "samplestamp": pa.array([0, 1], type=pa.int64()),
-                    "ch_Fp1": pa.array([0.1, 0.2], type=pa.float32()),
-                }),
-                legacy_part,
-                compression="lz4",
-            )
-
-            stdout = io.StringIO()
-            with redirect_stdout(stdout):
-                paths = generate_variants(
-                    canonical,
-                    info,
-                    [{"format": "parquet", "row_group_minutes": 30, "compression": "lz4"}],
-                    output_base,
-                )
-
-            out_file = output_base / "parquet_30m_flo_lz4.parquet"
-            self.assertTrue(out_file.exists())
-            self.assertFalse(legacy_part.exists())
-            self.assertIn("legacy single-file dataset", stdout.getvalue())
-            self.assertEqual(paths["parquet"], out_file)
-
     def test_study_info_from_parquet_accepts_single_file_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

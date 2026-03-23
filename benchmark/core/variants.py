@@ -95,15 +95,9 @@ def _generate_parquet_variant(canonical_pq: Path, output_base: Path,
 
     key = f"parquet_{label}"
     out_file = output_base / f"{key}.parquet"
-    legacy_part_file = output_base / key / "part_00000.parquet"
 
     if out_file.exists():
         print(f"  [cached] {key}")
-    elif legacy_part_file.exists():
-        print(f"  [cached] {key} (legacy single-file dataset)")
-        output_base.mkdir(parents=True, exist_ok=True)
-        import shutil
-        shutil.move(str(legacy_part_file), str(out_file))
     else:
         print(f"  [variant] Parquet ({label}) ...")
         output_base.mkdir(parents=True, exist_ok=True)
