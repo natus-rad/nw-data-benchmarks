@@ -240,6 +240,141 @@ class BenchmarkRefactorTests(unittest.TestCase):
                     "compression": "gzip",
                 }], output_base)
 
+    def test_generate_variants_reuses_single_file_parquet_variant_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            canonical = tmp_path / "demo_canonical"
+            canonical.mkdir()
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2], type=pa.float32()),
+                }),
+                canonical / "part_00000.parquet",
+                compression="snappy",
+            )
+            info = StudyInfo.from_parquet(canonical, sample_freq=256)
+            output_base = tmp_path / "demo_study_variants"
+            spec = [{"format": "parquet", "row_group_minutes": 30, "compression": "lz4"}]
+
+            generate_variants(canonical, info, spec, output_base)
+            out_file = output_base / "parquet_30m_flo_lz4.parquet"
+            self.assertTrue(out_file.exists())
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                paths = generate_variants(canonical, info, spec, output_base)
+
+            self.assertIn("[cached] parquet_30m_flo_lz4", stdout.getvalue())
+            self.assertEqual(paths["parquet"], out_file)
+
+    def test_generate_variants_promotes_legacy_wrapped_single_file_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            canonical = tmp_path / "demo_canonical"
+            canonical.mkdir()
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2], type=pa.float32()),
+                }),
+                canonical / "part_00000.parquet",
+                compression="snappy",
+            )
+            info = StudyInfo.from_parquet(canonical, sample_freq=256)
+            output_base = tmp_path / "demo_study_variants"
+            legacy_part = output_base / "parquet_30m_flo_lz4" / "part_00000.parquet"
+            legacy_part.parent.mkdir(parents=True, exist_ok=True)
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2], type=pa.float32()),
+                }),
+                legacy_part,
+                compression="lz4",
+            )
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                paths = generate_variants(
+                    canonical,
+                    info,
+                    [{"format": "parquet", "row_group_minutes": 30, "compression": "lz4"}],
+                    output_base,
+                )
+
+            out_file = output_base / "parquet_30m_flo_lz4.parquet"
+            self.assertTrue(out_file.exists())
+            self.assertFalse(legacy_part.exists())
+            self.assertIn("legacy single-file dataset", stdout.getvalue())
+            self.assertEqual(paths["parquet"], out_file)
+
+    def test_study_info_from_parquet_accepts_single_file_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pq_file = tmp_path / "single.parquet"
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([10, 11], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2], type=pa.float32()),
+                }),
+                pq_file,
+                compression="snappy",
+            )
+
+            info = StudyInfo.from_parquet(pq_file, sample_freq=256)
+
+            self.assertEqual(info.channel_labels, ["Fp1"])
+            self.assertEqual(info.total_rows, 2)
+            self.assertEqual(info.stamp_at_row(1), 11)
+
+    def test_setup_parquet_compression_variants_accepts_single_file_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            src_file = tmp_path / "single.parquet"
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2], type=pa.float32()),
+                }),
+                src_file,
+                compression="snappy",
+            )
+            paths = {"parquet": src_file}
+            cfg = {
+                "parquet_investigations": {
+                    "compression": {
+                        "enabled": True,
+                        "variants": [{"codec": "none"}],
+                    }
+                }
+            }
+
+            setup._setup_parquet_compression_variants(paths, src_file, tmp_path / "variants", "demo", cfg)
+
+            out_file = tmp_path / "variants" / "parquet_none.parquet"
+            self.assertTrue(out_file.exists())
+            self.assertEqual(paths["parquet_none"], out_file)
+
+    def test_setup_int32_variants_accepts_single_file_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            src_file = tmp_path / "single.parquet"
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2], type=pa.float32()),
+                }),
+                src_file,
+                compression="snappy",
+            )
+            paths = {"parquet": src_file}
+
+            setup._setup_int32_variants(paths, tmp_path / "variants", "demo")
+
+            self.assertTrue((tmp_path / "variants" / "parquet_int32_calibrated_zstd.parquet").exists())
+            self.assertTrue((tmp_path / "variants" / "parquet_int32_nanovolt_snappy.parquet").exists())
+
     def test_bench_compression_uses_nested_variants_and_enabled_flag(self):
         with tempfile.TemporaryDirectory() as tmp:
             pq_dir = Path(tmp) / "parquet_none"

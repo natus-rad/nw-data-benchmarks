@@ -16,6 +16,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from .parquet_paths import list_parquet_files
 from .setup import _build_chunk_index, _parquet_to_edf
 from .study_info import StudyInfo
 
@@ -94,13 +95,19 @@ def _generate_parquet_variant(canonical_pq: Path, output_base: Path,
 
     key = f"parquet_{label}"
     out_file = output_base / f"{key}.parquet"
+    legacy_part_file = output_base / key / "part_00000.parquet"
 
     if out_file.exists():
         print(f"  [cached] {key}")
+    elif legacy_part_file.exists():
+        print(f"  [cached] {key} (legacy single-file dataset)")
+        output_base.mkdir(parents=True, exist_ok=True)
+        import shutil
+        shutil.move(str(legacy_part_file), str(out_file))
     else:
         print(f"  [variant] Parquet ({label}) ...")
         output_base.mkdir(parents=True, exist_ok=True)
-        src_files = sorted(canonical_pq.glob("*.parquet"))
+        src_files = list_parquet_files(canonical_pq)
         schema = pq.read_schema(str(src_files[0]))
 
         writer = pq.ParquetWriter(
@@ -132,22 +139,10 @@ def _generate_parquet_variant(canonical_pq: Path, output_base: Path,
         n_rg = pq.ParquetFile(str(out_file)).metadata.num_row_groups
         print(f"  [variant] {key}: {size_mib:.1f} MiB, {n_rg} row groups")
 
-    # The output is a single file, but benchmarks expect a directory.
-    # Wrap it in a directory.
-    out_dir = output_base / key
-    if not out_dir.exists():
-        out_dir.mkdir(parents=True, exist_ok=True)
-        import shutil
-        shutil.move(str(out_file), str(out_dir / "part_00000.parquet"))
-    elif out_file.exists():
-        # Directory already exists but file is outside — move it in
-        import shutil
-        shutil.move(str(out_file), str(out_dir / "part_00000.parquet"))
-
-    paths[key] = out_dir
+    paths[key] = out_file
     # First Parquet variant also gets the "parquet" key for backward compat.
     if "parquet" not in paths:
-        paths["parquet"] = out_dir
+        paths["parquet"] = out_file
 
 
 def _generate_hdf5_variant(canonical_pq: Path, output_base: Path,
@@ -173,7 +168,7 @@ def _generate_hdf5_variant(canonical_pq: Path, output_base: Path,
     else:
         print(f"  [variant] HDF5 {layout} ({label}) ...")
         output_base.mkdir(parents=True, exist_ok=True)
-        src_files = sorted(canonical_pq.glob("*.parquet"))
+        src_files = list_parquet_files(canonical_pq)
         schema = pq.read_schema(str(src_files[0]))
         ch_cols = [c for c in schema.names if c.startswith("ch_")]
         ch_labels = [c[3:] for c in ch_cols]

@@ -9,6 +9,8 @@ import psutil
 import pyarrow.parquet as pq
 import yaml
 
+from .parquet_paths import list_parquet_files
+
 
 def load_config(path: str) -> dict:
     with open(path, "r") as f:
@@ -61,7 +63,7 @@ class StudyInfo:
 
     @classmethod
     def from_parquet(cls, pq_dir: Path, sample_freq: float) -> "StudyInfo":
-        files = sorted(pq_dir.glob("*.parquet"))
+        files = list_parquet_files(pq_dir)
         if not files:
             raise FileNotFoundError(f"No .parquet files in {pq_dir}")
 

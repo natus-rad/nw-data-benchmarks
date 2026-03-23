@@ -9,6 +9,7 @@ import numpy as np
 import pyarrow.parquet as pq
 
 from .config_helpers import get_parquet_compression_variants, get_tuned_block_sizes_minutes
+from .parquet_paths import list_parquet_files
 from .study_info import StudyInfo
 
 
@@ -17,7 +18,7 @@ def _parquet_to_edf(pq_dir: Path, edf_path: Path,
     """Convert float32 Parquet files to a single EDF file."""
     import pyedflib
 
-    pq_files = sorted(pq_dir.glob("*.parquet"))
+    pq_files = list_parquet_files(pq_dir)
     if not pq_files:
         raise FileNotFoundError(f"No Parquet files in {pq_dir}")
 
@@ -67,7 +68,7 @@ def _setup_parquet_compression_variants(paths: dict, src_dir: Path,
                                         output_base: Path, name: str,
                                         cfg: dict) -> None:
     """Re-compress source Parquet with different codecs for benchmark F."""
-    src_files = sorted(src_dir.glob("*.parquet"))
+    src_files = list_parquet_files(src_dir)
     if not src_files:
         return
 
@@ -75,11 +76,12 @@ def _setup_parquet_compression_variants(paths: dict, src_dir: Path,
         codec = comp_cfg["codec"]
         level = comp_cfg.get("level")
         label = f"{codec}_{level}" if level else codec
-        out_dir = output_base / f"parquet_{label}"
+        single_file = len(src_files) == 1
+        out_path = output_base / (f"parquet_{label}.parquet" if single_file else f"parquet_{label}")
 
-        if out_dir.exists() and any(out_dir.glob("*.parquet")):
-            print(f"  [cached] parquet_{label} -> {out_dir}")
-            paths[f"parquet_{label}"] = out_dir
+        if out_path.is_file() or (out_path.is_dir() and any(out_path.glob("*.parquet"))):
+            print(f"  [cached] parquet_{label} -> {out_path}")
+            paths[f"parquet_{label}"] = out_path
             continue
         if codec == "snappy" and not level:
             print(f"  [cached] parquet_{label} -> {src_dir}")
@@ -87,20 +89,23 @@ def _setup_parquet_compression_variants(paths: dict, src_dir: Path,
             continue
 
         print(f"  [convert] {name} -> Parquet ({label}) ...")
-        out_dir.mkdir(parents=True, exist_ok=True)
+        if single_file:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            out_path.mkdir(parents=True, exist_ok=True)
         compression = None if codec == "none" else codec
 
         output_files = []
         for src_file in src_files:
             table = pq.read_table(str(src_file))
-            out_file = out_dir / src_file.name
+            out_file = out_path if single_file else out_path / src_file.name
             pq.write_table(table, str(out_file), compression=compression,
                            compression_level=level)
             output_files.append(src_file.name)
-        if len(output_files) > 1:
-            _write_parquet_dataset_metadata(out_dir, output_files)
+        if not single_file and len(output_files) > 1:
+            _write_parquet_dataset_metadata(out_path, output_files)
 
-        paths[f"parquet_{label}"] = out_dir
+        paths[f"parquet_{label}"] = out_path
 
 
 NANOVOLT_SCALE = 0.001
@@ -133,19 +138,25 @@ def _setup_int32_variants(paths: dict, output_base: Path, name: str) -> None:
     import pyarrow as pa
 
     src_path = paths["parquet"]
+    src_files = list_parquet_files(src_path)
+    if not src_files:
+        return
 
     for mode in ("int32_calibrated", "int32_nanovolt"):
         for codec in ("zstd", "snappy", "none"):
             label = f"{mode}_{codec}"
-            out_path = output_base / f"parquet_{label}"
-            if out_path.exists() and any(out_path.glob("*.parquet")):
+            single_file = len(src_files) == 1
+            out_path = output_base / (f"parquet_{label}.parquet" if single_file else f"parquet_{label}")
+            if out_path.is_file() or (out_path.is_dir() and any(out_path.glob("*.parquet"))):
                 print(f"  [cached] parquet_{label} -> {out_path}")
                 paths[f"parquet_{label}"] = out_path
                 continue
 
             print(f"  [convert] {name} -> Parquet ({label}) ...")
-            out_path.mkdir(parents=True, exist_ok=True)
-            src_files = sorted(src_path.glob("*.parquet"))
+            if single_file:
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+            else:
+                out_path.mkdir(parents=True, exist_ok=True)
 
             global_calibration = {}
             if mode == "int32_calibrated":
@@ -210,9 +221,10 @@ def _setup_int32_variants(paths: dict, output_base: Path, name: str) -> None:
                     schema=new_schema,
                 )
                 compression = None if codec == "none" else codec
-                pq.write_table(new_table, str(out_path / src_file.name), compression=compression)
+                out_file = out_path if single_file else out_path / src_file.name
+                pq.write_table(new_table, str(out_file), compression=compression)
                 output_files.append(src_file.name)
-            if len(output_files) > 1:
+            if not single_file and len(output_files) > 1:
                 _write_parquet_dataset_metadata(out_path, output_files)
 
             paths[f"parquet_{label}"] = out_path
@@ -266,7 +278,7 @@ def _parquet_rowgroup_chunk_samples(src_files: list, total_rows: int) -> int:
 def _setup_h5_variants(paths: dict, output_base: Path, name: str, info) -> None:
     """Create two HDF5 layouts from the cached Parquet float32 snappy data."""
     src_path = paths["parquet"]
-    src_files = sorted(src_path.glob("*.parquet"))
+    src_files = list_parquet_files(src_path)
     if not src_files:
         return
 
@@ -411,7 +423,7 @@ def _setup_tuned_variants(paths: dict, output_base: Path, info: StudyInfo,
     if not src_path:
         return
 
-    src_files = sorted(Path(src_path).glob("*.parquet"))
+    src_files = list_parquet_files(Path(src_path))
     if not src_files:
         return
 
