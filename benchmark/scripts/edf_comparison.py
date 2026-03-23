@@ -4,12 +4,14 @@ Standalone EDF comparison script.
 Tests random access, whole study read, subset channel read, and re-montage performance.
 Requires: pyedflib, numpy
 """
-
-import argparse
 import time
 import sys
 from pathlib import Path
 import numpy as np
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from benchmark.core.azure_storage import _get_blob_service_client
 
@@ -199,8 +201,15 @@ def maybe_download_edf_files(cfgs: dict, output_dir: Path = Path("./data/")):
     for azure_edf_path in azure_paths:
         output_path = output_dir / azure_edf_path
         if not output_path.exists():
+            print(f"  [download] {azure_edf_path} ... ", end="", flush=True)
+            t_start = time.perf_counter()
             with open(output_path, "wb") as f:
                 container_client.download_blob(azure_edf_path).readinto(f)
+            elapsed = time.perf_counter() - t_start
+            size_mib = output_path.stat().st_size / (1024 * 1024)
+            print(f"{elapsed:.1f}s ({size_mib:.1f} MiB)")
+        else:
+            print(f"  [cached] {azure_edf_path}")
     return [output_dir / edf_file for edf_file in azure_paths]
 
 

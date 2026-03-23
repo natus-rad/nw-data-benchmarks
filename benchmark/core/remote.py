@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from .azure_storage import _download_edf_from_azure
-from .bench_utils import _throughput
+from .bench_utils import _chunk_ranges, _throughput
 from .readers import EdfFileReader, _edf_file
 from .signal import CHANNELS_10_20
 
@@ -28,9 +28,16 @@ def _make_duckdb_connection(account: str, container: str):
 
 def _duckdb_remote_read(con, az_path: str, columns: list[str],
                         start_stamp: int, end_stamp: int) -> tuple[float, int]:
-    """Query a remote Parquet file via DuckDB Azure extension. Returns (seconds, n_rows)."""
+    """Query a remote Parquet file via DuckDB Azure extension. Returns (seconds, n_rows).
+
+    Handles both directory paths (with glob) and single-file paths.
+    """
     col_list = ", ".join(f'"{c}"' for c in columns)
-    pq_source = f"az://{az_path}*.parquet"
+    # If path ends with .parquet, it's a single file; otherwise it's a directory pattern
+    if az_path.endswith(".parquet"):
+        pq_source = f"az://{az_path}"
+    else:
+        pq_source = f"az://{az_path}*.parquet"
     query = (
         f"SELECT {col_list} FROM read_parquet('{pq_source}', hive_partitioning=false) "
         f"WHERE samplestamp >= {start_stamp} AND samplestamp <= {end_stamp}"
@@ -86,6 +93,7 @@ def bench_remote_query(info, paths: dict, cfg: dict,
     for name_label, blob_path_key in [
         ("float32_snappy", "remote_float32_path"),
         ("int32_nV_snappy", "remote_int32_nanovolt_path"),
+        ("single_file_lz4", "remote_single_file_path"),
     ]:
         blob_path = remote_cfg.get(blob_path_key)
         if blob_path:
@@ -124,6 +132,42 @@ def bench_remote_query(info, paths: dict, cfg: dict,
                 "total_rows": total_rows,
                 **_throughput(total_rows, n_ch, total_time),
             })
+
+    # Full-study sequential read via DuckDB (chunked)
+    chunk_sec = remote_cfg.get("full_study_chunk_sec")
+    if chunk_sec:
+        chunk_stamps = int(chunk_sec * sample_freq)
+        bench_start = info.stamp_at_row(0)
+        bench_end = info.stamp_at_row(info.total_rows - 1)
+        total_study_sec = info.total_rows / sample_freq
+        n_chunks = -(-info.total_rows // chunk_stamps)  # ceiling div
+        print(f"\n    Full-study sequential read ({total_study_sec:.0f}s in {n_chunks} × {chunk_sec}s chunks)")
+
+        for pq_label, pq_az_path in parquet_variants:
+            for ch_label, cols in [("all", all_cols), ("10-20 (19ch)", subset_cols)]:
+                query_cols = list(cols)
+                total_rows = 0
+                print(f"    DuckDB full-study {pq_label} [{ch_label}] ... ", end="", flush=True)
+                t_wall_start = time.perf_counter()
+                for cs, ce in _chunk_ranges(bench_start, bench_end, chunk_stamps):
+                    _, n_rows = _duckdb_remote_read(con, pq_az_path, query_cols, cs, ce)
+                    total_rows += n_rows
+                t_wall = time.perf_counter() - t_wall_start
+                print(f"done ({t_wall:.1f}s)")
+
+                n_ch = len(cols)
+                results.append({
+                    "category": "remote_query_full_study",
+                    "format": f"parquet_{pq_label}",
+                    "method": "duckdb_full_study",
+                    "channel_subset": ch_label,
+                    "n_channels": n_ch,
+                    "chunk_seconds": chunk_sec,
+                    "n_chunks": n_chunks,
+                    "total_rows": total_rows,
+                    "total_wall_seconds": round(t_wall, 3),
+                    **_throughput(total_rows, n_ch, t_wall),
+                })
 
     con.close()
 

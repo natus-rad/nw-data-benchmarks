@@ -85,6 +85,11 @@ tuned_block_sizes_minutes: [5, 10, 20, 30, 60, 120]
 # Channel subsets for category B.
 channel_subsets: [4, 10]
 
+# Generic benchmark variants generated from the canonical Parquet input.
+# The first Parquet variant becomes the default `parquet` path used by the
+# core benchmark categories, so keep the recommended baseline first.
+variants:
+
 # Read positions for category A (fraction of total duration).
 read_positions: [0.0, 0.5, 0.75, 0.95]
 
@@ -96,8 +101,9 @@ repetitions: 3
 
 # Remote query benchmark (category I).
 remote_benchmark:
-  n_random_points: 10
+  n_random_points: 2
   window_sec: 600
+  full_study_chunk_sec: 3600   # chunk size for full-study sequential read; omit to skip
   remote_float32_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"
   remote_int32_nanovolt_path: "parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.int32_nanovolt.snappy.parquet/"
-
+  remote_single_file_path: "parquet/tuned_pq_lz4_10m.parquet"
