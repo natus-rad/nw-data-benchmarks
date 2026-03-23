@@ -4,6 +4,7 @@ from pathlib import Path
 
 from benchmark.scripts.generate_benchmark_report import (
     ReportGenerationError,
+    block_sort_key,
     generate_report,
     latest_results_file,
     render_report,
@@ -120,6 +121,9 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         rendered = render_report(payload, template, Path("benchmark/results/demo.json"))
         self.assertIn("| 5m | 0.0669s | 0.0553s |", rendered)
         self.assertIn("| 5m | 14.59s | 12.22s |", rendered)
+
+    def test_block_sort_key_orders_seconds_and_fractional_minutes(self) -> None:
+        self.assertEqual(sorted(["5m", "30s", "1.5m"], key=block_sort_key), ["30s", "1.5m", "5m"])
 
     def test_render_report_includes_separate_k_section(self) -> None:
         payload = {

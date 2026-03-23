@@ -875,11 +875,17 @@ def subset_sort_key(value: str) -> tuple[int, str]:
     return (9999, value) if value == "all" else (int(value), value)
 
 
-def block_sort_key(value: str) -> int:
-    value = str(value).strip().lower()
-    if value.endswith("m"):
-        return int(value[:-1])
-    return 10_000
+def block_sort_key(value: str) -> float:
+    value_str = str(value).strip().lower()
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([sm])", value_str)
+    if match:
+        amount = float(match.group(1))
+        unit = match.group(2)
+        return amount if unit == "s" else amount * 60.0
+    try:
+        return float(value_str) * 60.0
+    except ValueError:
+        return 10_000.0
 
 
 _HTML_CSS = """

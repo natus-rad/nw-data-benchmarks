@@ -13,7 +13,7 @@ from .readers import EdfFileReader, _edf_file
 from .signal import CHANNELS_10_20
 
 
-def _make_duckdb_connection(account: str, container: str):
+def _make_duckdb_connection(account: str):
     """Create a DuckDB connection configured for Azure Blob anonymous access."""
     import duckdb
 
@@ -113,7 +113,7 @@ def bench_remote_query(info, paths: dict, cfg: dict,
         if blob_path:
             parquet_variants.append((name_label, f"{container}/{blob_path}"))
 
-    con = _make_duckdb_connection(account, container)
+    con = _make_duckdb_connection(account)
     for pq_label, pq_az_path in parquet_variants:
         for ch_label, cols in channel_variants:
             query_cols = list(cols)
