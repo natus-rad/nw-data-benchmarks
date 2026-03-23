@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import urlparse, unquote
 
 
-def _get_blob_service_client(cfg: dict, args: argparse.Namespace):
+def _get_blob_service_client(cfg: dict, args: argparse.Namespace | None = None):
     """Build a BlobServiceClient from config + auth.
 
     Priority:
@@ -22,7 +22,9 @@ def _get_blob_service_client(cfg: dict, args: argparse.Namespace):
     if cfg.get("azure", {}).get("anonymous", False):
         return BlobServiceClient(account_url=account_url)
 
-    sas = getattr(args, "sas_token", None) or os.environ.get("AZURE_STORAGE_SAS_TOKEN")
+    sas = os.environ.get("AZURE_STORAGE_SAS_TOKEN")
+    if args:
+        sas = getattr(args, "sas_token", None) or sas
     if sas:
         return BlobServiceClient(account_url=account_url, credential=sas)
 
