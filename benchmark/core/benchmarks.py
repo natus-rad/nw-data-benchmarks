@@ -44,6 +44,28 @@ def _target_context(target: dict):
     return nullcontext(None)
 
 
+def _timed_call(fn, reps: int, precision: int = 6):
+    timing = _timed(fn, reps)
+    median_seconds, result = timing
+    first_seconds = float(getattr(timing, "first_seconds", median_seconds))
+    fields = {
+        "wall_clock_seconds": round(float(median_seconds), precision),
+        "first_wall_clock_seconds": round(first_seconds, precision),
+    }
+    all_seconds = getattr(timing, "all_seconds", None)
+    if all_seconds:
+        fields["timing_samples_seconds"] = [round(float(value), precision) for value in all_seconds]
+    return float(median_seconds), result, fields
+
+
+def _single_timing_fields(seconds: float, precision: int = 6) -> dict[str, float]:
+    rounded = round(float(seconds), precision)
+    return {
+        "wall_clock_seconds": rounded,
+        "first_wall_clock_seconds": rounded,
+    }
+
+
 def _read_target_window(target: dict, info, columns: list[str],
                         start_stamp: int, end_stamp: int,
                         reader_state=None) -> np.ndarray:
@@ -186,7 +208,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
     for variant in variants:
         with _target_context(variant) as reader_state:
             start_bound, end_bound = _read_bounds_for_target(variant, window_row_bounds, window_stamp_bounds)
-            t, data = _timed(
+            t, data, timing_fields = _timed_call(
                 lambda v=variant, rs=reader_state, s=start_bound, e=end_bound: _read_target_window(v, info, ch_cols, s, e, rs),
                 reps,
             )
@@ -197,7 +219,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
             "format": variant["format"],
             **variant["result_fields"],
             "window_seconds": window_sec,
-            "wall_clock_seconds": round(t, 6),
+            **timing_fields,
             **_throughput(n_samples, n_channels, t),
         })
 
@@ -206,7 +228,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
     for variant in variants:
         with _target_context(variant) as reader_state:
             start_bound, end_bound = _read_bounds_for_target(variant, window_row_bounds, window_stamp_bounds)
-            t, data = _timed(
+            t, data, timing_fields = _timed_call(
                 lambda v=variant, rs=reader_state, s=start_bound, e=end_bound: _read_target_window(v, info, subset_cols, s, e, rs),
                 reps,
             )
@@ -218,7 +240,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
             **variant["result_fields"],
             "channels": 4,
             "window_seconds": window_sec,
-            "wall_clock_seconds": round(t, 6),
+            **timing_fields,
             **_throughput(n_samples, 4, t),
         })
 
@@ -234,7 +256,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
         for variant in variants:
             with _target_context(variant) as reader_state:
                 start_bound, end_bound = _read_bounds_for_target(variant, row_bounds, stamp_bounds)
-                t, data = _timed(
+                t, data, timing_fields = _timed_call(
                     lambda v=variant, ss=start_bound, ee=end_bound, rs=reader_state: _read_target_window(v, info, ch_cols, ss, ee, rs),
                     reps,
                 )
@@ -245,7 +267,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
                 "format": variant["format"],
                 **variant["result_fields"],
                 "window_seconds": ws,
-                "wall_clock_seconds": round(t, 6),
+                **timing_fields,
                 **_throughput(n_samples, n_channels, t),
             })
 
@@ -269,7 +291,7 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
             "format": variant["format"],
             **variant["result_fields"],
             "total_samples": samples_read,
-            "wall_clock_seconds": round(t_wall, 3),
+            **_single_timing_fields(t_wall, precision=3),
             **_throughput(samples_read, n_channels, t_wall),
         })
 
@@ -349,7 +371,7 @@ def bench_random_access(info, paths: dict, cfg: dict) -> list[dict]:
         with _target_context(target) as reader_state:
             for label, row_bounds, stamp_bounds in position_bounds:
                 start_bound, end_bound = _read_bounds_for_target(target, row_bounds, stamp_bounds)
-                t, data = _timed(
+                t, data, timing_fields = _timed_call(
                     lambda s=start_bound, e=end_bound, rs=reader_state, tgt=target: _read_target_window(
                         tgt, info, info.channel_columns, s, e, rs
                     ),
@@ -361,7 +383,7 @@ def bench_random_access(info, paths: dict, cfg: dict) -> list[dict]:
                     **_core_result_fields(target),
                     "position": label,
                     "window_seconds": window_sec,
-                    "wall_clock_seconds": round(t, 6),
+                    **timing_fields,
                     **_throughput(n_samples, n_channels, t),
                 })
 
@@ -387,7 +409,7 @@ def bench_channel_subset(info, paths: dict, cfg: dict) -> list[dict]:
             for n_ch in counts:
                 ch_label = f"{n_ch}" if n_ch < n_all else "all"
                 cols = all_cols[:n_ch]
-                t, data = _timed(
+                t, data, timing_fields = _timed_call(
                     lambda c=cols, rs=reader_state, tgt=target: _read_target_window(
                         tgt, info, c, start_bound, end_bound, rs
                     ),
@@ -399,7 +421,7 @@ def bench_channel_subset(info, paths: dict, cfg: dict) -> list[dict]:
                     **_core_result_fields(target),
                     "channels": ch_label,
                     "window_seconds": window_sec,
-                    "wall_clock_seconds": round(t, 6),
+                    **timing_fields,
                     **_throughput(n_samples, n_ch, t),
                 })
 
@@ -447,6 +469,8 @@ def bench_remontage(info, paths: dict, cfg: dict) -> list[dict]:
                 **_core_result_fields(target),
                 "window_seconds": window_sec,
                 "wall_clock_seconds": round(total, 6),
+                "first_wall_clock_seconds": round(times_read[0] + times_mont[0], 6),
+                "timing_samples_seconds": [round(r + m, 6) for r, m in zip(times_read, times_mont)],
                 "read_seconds": round(read_sec, 6),
                 "montage_seconds": round(mont_sec, 6),
                 "derived_channels": derived.shape[0] if derived is not None and derived.ndim == 2 else 0,
@@ -509,7 +533,7 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
                 "sample_freq": sample_freq,
                 "channels": n_channels,
                 "total_samples": total_samples_read,
-                "wall_clock_seconds": round(t_wall, 3),
+                **_single_timing_fields(t_wall, precision=3),
                 "read_seconds": round(t_read_total, 3),
                 "montage_seconds": round(t_mont_total, 3),
                 "filter_seconds": round(t_filt_total, 3),
@@ -582,7 +606,7 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
                 "fft_stride_sec": fft_stride_sec,
                 "fft_windows_expected": n_fft_windows,
                 "fft_windows_computed": fft_count,
-                "wall_clock_seconds": round(t_wall, 3),
+                **_single_timing_fields(t_wall, precision=3),
                 "read_seconds": round(t_read_total, 3),
                 "montage_seconds": round(t_mont_total, 3),
                 "filter_seconds": round(t_filt_total, 3),
@@ -611,7 +635,7 @@ def bench_window_scaling(info, paths: dict, cfg: dict) -> list[dict]:
         with _target_context(target) as reader_state:
             for window_sec, row_bounds, stamp_bounds in scaling_bounds:
                 start_bound, end_bound = _read_bounds_for_target(target, row_bounds, stamp_bounds)
-                t, data = _timed(
+                t, data, timing_fields = _timed_call(
                     lambda s=start_bound, e=end_bound, rs=reader_state, tgt=target: _read_target_window(
                         tgt, info, info.channel_columns, s, e, rs
                     ),
@@ -622,7 +646,7 @@ def bench_window_scaling(info, paths: dict, cfg: dict) -> list[dict]:
                     "category": "window_scaling",
                     **_core_result_fields(target),
                     "window_seconds": window_sec,
-                    "wall_clock_seconds": round(t, 6),
+                    **timing_fields,
                     **_throughput(n_samples, n_channels, t),
                 })
 
@@ -653,7 +677,7 @@ def bench_compression(info, paths: dict, cfg: dict) -> list[dict]:
 
         pq_path = paths[key]
         total_size = parquet_total_size_bytes(pq_path)
-        t, data = _timed(lambda: _read_parquet_window(pq_path, info.channel_columns, start_stamp, end_stamp), reps)
+        t, data, timing_fields = _timed_call(lambda: _read_parquet_window(pq_path, info.channel_columns, start_stamp, end_stamp), reps)
         n_samples = data.shape[1] if data.ndim == 2 else 0
 
         none_key = "parquet_none"
@@ -670,7 +694,7 @@ def bench_compression(info, paths: dict, cfg: dict) -> list[dict]:
             "file_size_mib": round(total_size / (1024 * 1024), 3),
             "compression_ratio": ratio,
             "window_seconds": window_sec,
-            "wall_clock_seconds": round(t, 6),
+            **timing_fields,
             **_throughput(n_samples, n_channels, t),
         })
 
@@ -783,7 +807,7 @@ def bench_int32_storage(info, paths: dict, cfg: dict) -> list[dict]:
             pq_path = paths[key]
             total_size = parquet_total_size_bytes(pq_path)
             ratio = float32_size / total_size if total_size > 0 else 0
-            t, data = _timed(lambda: read_fn(pq_path, columns, start_stamp, end_stamp), reps)
+            t, data, timing_fields = _timed_call(lambda: read_fn(pq_path, columns, start_stamp, end_stamp), reps)
             n_samples = data.shape[1] if data.ndim == 2 else 0
 
             if ground_truth.shape == data.shape and ground_truth.size > 0:
@@ -807,7 +831,7 @@ def bench_int32_storage(info, paths: dict, cfg: dict) -> list[dict]:
                 "float32_size_mib": round(float32_size / (1024 * 1024), 3),
                 "compression_ratio_vs_float32": round(ratio, 2),
                 "window_seconds": window_sec,
-                "wall_clock_seconds": round(t, 6),
+                **timing_fields,
                 "max_abs_error_uv": round(max_err, 10),
                 "rms_error_uv": round(rms_err, 10),
                 "snr_vs_float32_db": round(snr_db, 2) if snr_db != float("inf") else "inf",
@@ -816,7 +840,7 @@ def bench_int32_storage(info, paths: dict, cfg: dict) -> list[dict]:
 
     zstd_key = "parquet_zstd_3"
     if zstd_key in paths:
-        t, data = _timed(lambda: _read_parquet_window(paths[zstd_key], columns, start_stamp, end_stamp), reps)
+        t, data, timing_fields = _timed_call(lambda: _read_parquet_window(paths[zstd_key], columns, start_stamp, end_stamp), reps)
         zstd_size = parquet_total_size_bytes(paths[zstd_key])
         n_samples = data.shape[1] if data.ndim == 2 else 0
         results.append({
@@ -828,7 +852,7 @@ def bench_int32_storage(info, paths: dict, cfg: dict) -> list[dict]:
             "float32_size_mib": round(float32_size / (1024 * 1024), 3),
             "compression_ratio_vs_float32": round(float32_size / zstd_size, 2) if zstd_size > 0 else 0,
             "window_seconds": window_sec,
-            "wall_clock_seconds": round(t, 6),
+            **timing_fields,
             "max_abs_error_uv": 0.0,
             "rms_error_uv": 0.0,
             "snr_vs_float32_db": "inf",

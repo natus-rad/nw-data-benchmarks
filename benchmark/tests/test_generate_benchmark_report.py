@@ -52,7 +52,7 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         }
         template = "# Report\n\n${overview}\n\n${summary}\n\n${key_observations}\n\n${sections}\n"
         rendered = render_report(payload, template, Path("benchmark/results/demo.json"))
-        self.assertIn("Random access (median 1-minute read)", rendered)
+        self.assertIn("Random access (warm median 1-minute read)", rendered)
         self.assertIn("Ratio vs raw float32", rendered)
         self.assertIn("rows × channels × 4 bytes", rendered)
         self.assertIn("intentionally gives HDF5 a best-case seek/read path", rendered)
@@ -216,7 +216,7 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         }
         template = "# Report\n\n## A\n\n${a_results}\n\n## E\n\n${e_results}\n"
         rendered = render_report(payload, template, Path("benchmark/results/demo.json"))
-        self.assertIn("Parquet has the lowest median 1-minute read time", rendered)
+        self.assertIn("Parquet has the lowest warm-median 1-minute read time", rendered)
         self.assertIn("*This category was not present in the input results file.*", rendered)
 
     def test_render_report_remote_query_section_shows_received_settings(self) -> None:

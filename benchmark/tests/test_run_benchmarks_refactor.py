@@ -29,6 +29,7 @@ from benchmark.core.study_info import StudyInfo
 from benchmark.core.variants import generate_variants
 from benchmark.core.remote import bench_remote_query
 import benchmark.scripts.run_benchmarks as run_benchmarks
+import benchmark.scripts.generate_benchmark_report as benchmark_report
 
 
 class BenchmarkRefactorTests(unittest.TestCase):
@@ -1161,6 +1162,32 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertIn("win=  300s", line)
         self.assertIn("time=0.0663s", line)
 
+    def test_print_result_includes_first_run_time_when_present(self):
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            bench_utils._print_result({
+                "format": "parquet",
+                "wall_clock_seconds": 0.05,
+                "first_wall_clock_seconds": 0.12,
+                "mib_per_sec": 10.0,
+            })
+
+        line = stdout.getvalue().strip()
+        self.assertIn("time=0.0500s", line)
+        self.assertIn("first=0.1200s", line)
+
+    def test_timed_records_first_and_all_samples(self):
+        values = iter([1.0, 2.0, 3.0])
+        with patch("benchmark.core.bench_utils.time.perf_counter", side_effect=[0.0, 0.1, 1.0, 1.3, 2.0, 2.2]):
+            timed = bench_utils._timed(lambda: next(values), reps=3)
+
+        median_seconds, result = timed
+        self.assertEqual(result, 3.0)
+        self.assertAlmostEqual(median_seconds, 0.2)
+        self.assertAlmostEqual(timed.first_seconds, 0.1)
+        self.assertEqual(len(timed.all_seconds), 3)
+        np.testing.assert_allclose(timed.all_seconds, np.array([0.1, 0.3, 0.2], dtype=np.float64))
+
     def test_gap_safe_row_helpers_use_row_counts_not_stamp_spans(self):
         stamps = [0, 1, 2, 3, 100, 101, 102, 103]
         info = SimpleNamespace(stamp_at_row=lambda row: stamps[row])
@@ -1232,9 +1259,10 @@ class BenchmarkRefactorTests(unittest.TestCase):
         with patch.object(benchmarks, "_core_targets", return_value=[target]), \
              patch.object(benchmarks, "_read_target_window", side_effect=fake_read), \
              patch.object(benchmarks, "_timed", side_effect=fake_timed):
-            benchmarks.bench_random_access(info, {}, cfg)
+            results = benchmarks.bench_random_access(info, {}, cfg)
 
         self.assertEqual(captured, [(3, 103, None)])
+        self.assertTrue(all(row["first_wall_clock_seconds"] == row["wall_clock_seconds"] for row in results))
 
     def test_comparison_workload_full_study_uses_gap_safe_row_chunks(self):
         stamps = [0, 1, 2, 3, 100, 101, 102, 103]
@@ -1351,10 +1379,11 @@ class BenchmarkRefactorTests(unittest.TestCase):
         with patch.object(benchmarks, "_core_targets", return_value=[target]), \
              patch.object(benchmarks, "_read_target_window", side_effect=fake_read), \
              patch.object(benchmarks, "_timed", side_effect=fake_timed):
-            benchmarks.bench_random_access(info, {}, cfg)
+            results = benchmarks.bench_random_access(info, {}, cfg)
 
         self.assertEqual(len(seen_reader_states), 6)
         self.assertTrue(all(state is None for state in seen_reader_states))
+        self.assertTrue(all(row["first_wall_clock_seconds"] == row["wall_clock_seconds"] for row in results))
 
     def test_bench_filter_pipeline_edf_reopens_for_each_chunk_read(self):
         info = SimpleNamespace(
@@ -1749,6 +1778,34 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
             self.assertTrue(results_path.exists())
             mock_generate_report.assert_not_called()
+
+    def test_report_timing_cell_shows_first_run_proxy(self):
+        cell = benchmark_report.metric_cell(
+            {
+                "wall_clock_seconds": 0.05,
+                "first_wall_clock_seconds": 0.12,
+                "mib_per_sec": 10.0,
+            },
+            "wall_clock_seconds",
+            "mib_per_sec",
+        )
+
+        self.assertIn("0.0500s", cell)
+        self.assertIn("first 0.1200s", cell)
+
+    def test_report_overview_explains_warm_vs_first_timing(self):
+        study = {
+            "name": "demo",
+            "sample_freq": 256.0,
+            "channels": ["Fp1"],
+            "duration_seconds": 4.0,
+            "total_stamps": 1024,
+        }
+        system = {"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16}
+
+        overview = benchmark_report.build_overview(study, system, set())
+        self.assertIn("warm-cache-leaning median", overview)
+        self.assertIn("first_wall_clock_seconds", overview)
 
 
 if __name__ == "__main__":

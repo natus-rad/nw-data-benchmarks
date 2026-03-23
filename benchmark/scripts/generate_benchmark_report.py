@@ -158,6 +158,7 @@ def build_overview(study: dict[str, Any], system: dict[str, Any], categories: se
         "The report is generated directly from benchmark result JSON. "
         "Sections for categories not present in the input file are called out explicitly, so partial benchmark runs still produce a readable report. "
         "All reported throughput values use the theoretical decoded float32 payload size: rows × channels × 4 bytes. "
+        "For repeated-read benchmarks, `wall_clock_seconds` is the warm-cache-leaning median across repetitions and `first_wall_clock_seconds` records the first repetition as the closest available cold-start proxy without explicit OS cache eviction. "
         "HDF5 timings in this benchmark use a custom benchmark-specific `chunk_index` lookup structure built at conversion time, which intentionally gives HDF5 a best-case seek/read path rather than representing plain generic HDF5 without that helper."
     )
     return note + "\n\n" + markdown_table(["Property", "Value"], rows)
@@ -171,7 +172,7 @@ def build_summary(payload: dict[str, Any]) -> str:
     if random_rows:
         medians = median_by_format(random_rows, "wall_clock_seconds")
         best_format, best_value = min(medians.items(), key=lambda item: item[1])
-        rows.append(["Random access (median 1-minute read)", label(best_format), format_seconds(best_value)])
+        rows.append(["Random access (warm median 1-minute read)", label(best_format), format_seconds(best_value)])
 
     subset_rows = [row for row in rows_for(payload, "channel_subset") if str(row.get("channels")) == "4"]
     if subset_rows:
@@ -215,7 +216,7 @@ def build_key_observations(payload: dict[str, Any]) -> str:
         ranking = sorted(medians.items(), key=lambda item: item[1])
         (best_fmt, best_val), (second_fmt, second_val) = ranking[:2]
         bullets.append(
-            f"**Random access:** {label(best_fmt)} has the lowest median 1-minute read time at {format_seconds(best_val)}, about {second_val / best_val:.2f}× faster than {label(second_fmt)}."
+            f"**Random access:** {label(best_fmt)} has the lowest warm-median 1-minute read time at {format_seconds(best_val)}, about {second_val / best_val:.2f}× faster than {label(second_fmt)}."
         )
 
     compression_rows = rows_for(payload, "compression")
@@ -223,7 +224,7 @@ def build_key_observations(payload: dict[str, Any]) -> str:
         smallest = min(compression_rows, key=lambda row: row["file_size_bytes"])
         fastest = min(compression_rows, key=lambda row: row["wall_clock_seconds"])
         bullets.append(
-            f"**Compression trade-off:** smallest Parquet artifact is {smallest['codec']} at {format_mib(smallest['file_size_mib'])}, while the fastest 1-minute read is {fastest['codec']} at {format_seconds(fastest['wall_clock_seconds'])}."
+            f"**Compression trade-off:** smallest Parquet artifact is {smallest['codec']} at {format_mib(smallest['file_size_mib'])}, while the fastest warm-cache 1-minute read is {fastest['codec']} at {format_seconds(fastest['wall_clock_seconds'])}."
         )
 
     int32_rows = rows_for(payload, "int32_storage")
@@ -412,7 +413,7 @@ def render_random_access(rows: list[dict[str, Any]], _: dict[str, Any]) -> str:
         table_rows.append(cells)
     medians = median_by_format(rows, "wall_clock_seconds")
     best_fmt, best_val = min(medians.items(), key=lambda item: item[1])
-    note = f"{label(best_fmt)} has the lowest median 1-minute read time across read positions at {format_seconds(best_val)}."
+    note = f"{label(best_fmt)} has the lowest warm-median 1-minute read time across read positions at {format_seconds(best_val)}."
     return note + "\n\n" + markdown_table(["Position", *[label(fmt) for fmt in formats]], table_rows)
 
 
@@ -530,7 +531,7 @@ def render_compression(rows: list[dict[str, Any]], payload: dict[str, Any]) -> s
     fastest = min(rows, key=lambda row: row["wall_clock_seconds"])
     note = (
         f"Against a raw float32 baseline of {format_mib(raw_mib)}, the smallest Parquet artifact is {smallest['codec']} at {format_mib(smallest['file_size_mib'])}. "
-        f"The fastest 1-minute read is {fastest['codec']} at {format_seconds(fastest['wall_clock_seconds'])}."
+        f"The fastest warm-cache 1-minute read is {fastest['codec']} at {format_seconds(fastest['wall_clock_seconds'])}."
     )
     return note + "\n\n" + table
 
@@ -720,7 +721,7 @@ def pivot_table(rows: list[dict[str, Any]], row_key: str, col_key: str, value_ke
             if not row:
                 cells.append("—")
             elif value_kind == "time":
-                cells.append(format_seconds(row[value_key]))
+                cells.append(timing_cell(row, value_key))
             elif value_kind == "time_rate":
                 cells.append(metric_cell(row, value_key, "mib_per_sec"))
             else:
@@ -820,7 +821,16 @@ def markdown_table(headers: list[str], rows: list[list[Any]]) -> str:
 def metric_cell(row: dict[str, Any] | None, time_key: str, rate_key: str) -> str:
     if row is None:
         return "—"
-    return f"{format_seconds(row[time_key])} / {format_rate(row[rate_key])}"
+    return f"{timing_cell(row, time_key)} / {format_rate(row[rate_key])}"
+
+
+def timing_cell(row: dict[str, Any], time_key: str) -> str:
+    text = format_seconds(row[time_key])
+    if time_key == "wall_clock_seconds" and "first_wall_clock_seconds" in row:
+        first = float(row["first_wall_clock_seconds"])
+        if abs(first - float(row[time_key])) > 5e-7:
+            text += f" (first {format_seconds(first)})"
+    return text
 
 
 def label(value: str) -> str:
@@ -951,10 +961,10 @@ def _html_table(lines: list[str]) -> str:
             m = re.search(r'^([\d.]+)\s*MiB/s', cell)
             if m:
                 tput_nums.append((float(m.group(1)), i))
-        # Lowest bare seconds (e.g. "0.045s") = winner
+        # Lowest leading seconds (e.g. "0.045s" or "0.045s (first 0.090s)") = winner
         time_nums = []
         for i, cell in enumerate(row[1:], 1):
-            m = re.search(r'^([\d.]+)s$', cell.strip())
+            m = re.search(r'^([\d.]+)s(?:\s|$)', cell.strip())
             if m:
                 time_nums.append((float(m.group(1)), i))
         win_idx = (

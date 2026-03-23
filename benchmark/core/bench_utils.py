@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import time
 from typing import Any
 
@@ -15,15 +16,32 @@ from .config_helpers import (
 BYTES_PER_FLOAT32 = 4
 
 
-def _timed(fn, reps: int = 3) -> tuple[float, Any]:
-    """Run fn() reps times, return (median_seconds, last_result)."""
+@dataclass(frozen=True)
+class TimedMeasurement:
+    median_seconds: float
+    result: Any
+    first_seconds: float
+    all_seconds: tuple[float, ...]
+
+    def __iter__(self):
+        yield self.median_seconds
+        yield self.result
+
+
+def _timed(fn, reps: int = 3) -> TimedMeasurement:
+    """Run fn() reps times and return median + first-run timing details."""
     times = []
     result = None
     for _ in range(reps):
         t0 = time.perf_counter()
         result = fn()
         times.append(time.perf_counter() - t0)
-    return float(np.median(times)), result
+    return TimedMeasurement(
+        median_seconds=float(np.median(times)),
+        result=result,
+        first_seconds=float(times[0]),
+        all_seconds=tuple(float(t) for t in times),
+    )
 
 
 def _throughput(n_samples: int, n_channels: int, seconds: float) -> dict:
@@ -87,6 +105,7 @@ def _print_result(r: dict) -> None:
     """Pretty-print a single benchmark result."""
     fmt = r.get("format", "")
     t = r.get("wall_clock_seconds") or r.get("total_wall_seconds", 0)
+    first_t = r.get("first_wall_clock_seconds")
 
     mode = r.get("mode", fmt)
     benchmark = str(r.get("benchmark", ""))
@@ -105,6 +124,8 @@ def _print_result(r: dict) -> None:
     if "window_seconds" in r:
         parts.append(f"win={r['window_seconds']:>5}s")
     parts.append(f"time={t:.4f}s")
+    if first_t is not None and abs(float(first_t) - float(t)) > 5e-7:
+        parts.append(f"first={float(first_t):.4f}s")
     if "avg_wall_per_window" in r:
         parts.append(f"avg/win={r['avg_wall_per_window']:.3f}s")
     if "download_seconds" in r:
