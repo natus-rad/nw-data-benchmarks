@@ -32,15 +32,19 @@ def _parquet_to_edf(pq_dir: Path, edf_path: Path,
     ch_cols = [c for c in schema.names if c.startswith("ch_")]
     labels = [c[3:] for c in ch_cols]
     n_channels = len(labels)
+    batch_rows = max(int(np.ceil(float(sample_freq))) * 30, 1)
 
     ch_min = np.full(n_channels, np.inf)
     ch_max = np.full(n_channels, -np.inf)
     for f in pq_files:
-        t = pq.read_table(str(f), columns=ch_cols)
-        for i, col in enumerate(ch_cols):
-            arr = t.column(col).to_numpy(zero_copy_only=False).astype(np.float64)
-            ch_min[i] = min(ch_min[i], float(arr.min()))
-            ch_max[i] = max(ch_max[i], float(arr.max()))
+        parquet_file = pq.ParquetFile(str(f))
+        for batch in parquet_file.iter_batches(columns=ch_cols, batch_size=batch_rows):
+            for i in range(n_channels):
+                arr = batch.column(i).to_numpy(zero_copy_only=False).astype(np.float64, copy=False)
+                if arr.size == 0:
+                    continue
+                ch_min[i] = min(ch_min[i], float(arr.min()))
+                ch_max[i] = max(ch_max[i], float(arr.max()))
     flat = ch_min == ch_max
     ch_max[flat] = ch_min[flat] + 1.0
 
@@ -60,12 +64,13 @@ def _parquet_to_edf(pq_dir: Path, edf_path: Path,
                 "prefilter": "",
             })
         for f in pq_files:
-            t = pq.read_table(str(f), columns=ch_cols)
-            block = [
-                t.column(col).to_numpy(zero_copy_only=False).astype(np.float64)
-                for col in ch_cols
-            ]
-            writer.writeSamples(block)
+            parquet_file = pq.ParquetFile(str(f))
+            for batch in parquet_file.iter_batches(columns=ch_cols, batch_size=batch_rows):
+                block = [
+                    batch.column(i).to_numpy(zero_copy_only=False).astype(np.float64, copy=False)
+                    for i in range(n_channels)
+                ]
+                writer.writeSamples(block)
     finally:
         writer.close()
 

@@ -768,6 +768,107 @@ class BenchmarkRefactorTests(unittest.TestCase):
             self.assertEqual(paths["parquet"], canonical)
             self.assertEqual(paths["variant__pq_30m_lz4"], out_file)
 
+    def test_generate_variants_streams_parquet_variant_without_read_table(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            canonical = tmp_path / "demo_canonical"
+            canonical.mkdir()
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1, 2, 3, 4], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2, 0.3, 0.4, 0.5], type=pa.float32()),
+                }),
+                canonical / "part_00000.parquet",
+                compression="snappy",
+            )
+            info = StudyInfo.from_parquet(canonical, sample_freq=1)
+
+            with patch("benchmark.core.variants.pq.read_table", side_effect=AssertionError("read_table should not be used")):
+                paths = generate_variants(
+                    canonical,
+                    info,
+                    [{"id": "pq_stream", "format": "parquet", "row_group_minutes": 1, "compression": "lz4"}],
+                    tmp_path / "variants",
+                )
+
+            self.assertEqual(pq.read_table(paths["variant__pq_stream"]).num_rows, 5)
+
+    def test_generate_variants_streams_hdf5_variants_without_read_table(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            canonical = tmp_path / "demo_canonical"
+            canonical.mkdir()
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1, 2, 3, 4], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2, 0.3, 0.4, 0.5], type=pa.float32()),
+                    "ch_C3": pa.array([1.1, 1.2, 1.3, 1.4, 1.5], type=pa.float32()),
+                }),
+                canonical / "part_00000.parquet",
+                compression="snappy",
+            )
+            info = StudyInfo.from_parquet(canonical, sample_freq=1)
+
+            with patch("benchmark.core.variants.pq.read_table", side_effect=AssertionError("read_table should not be used")):
+                paths = generate_variants(
+                    canonical,
+                    info,
+                    [
+                        {"id": "h5_col_stream", "format": "hdf5", "layout": "columnar", "chunk_minutes": 1, "compression": "lz4"},
+                        {"id": "h5_rg_stream", "format": "hdf5", "layout": "rowgroup", "chunk_minutes": 1, "compression": "lz4"},
+                    ],
+                    tmp_path / "variants",
+                )
+
+            with h5py.File(paths["variant__h5_col_stream"], "r") as hf:
+                self.assertEqual(hf["samplestamp"][:].tolist(), [0, 1, 2, 3, 4])
+                np.testing.assert_allclose(hf["channels"]["Fp1"][:], np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float32))
+            with h5py.File(paths["variant__h5_rg_stream"], "r") as hf:
+                self.assertEqual(hf["samplestamp"][:].tolist(), [0, 1, 2, 3, 4])
+                np.testing.assert_allclose(hf["data"][:, 0], np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float32))
+
+    def test_parquet_to_edf_streams_without_read_table(self):
+        created_writers = []
+
+        class FakeWriter:
+            def __init__(self, *_args, **_kwargs):
+                self.headers = []
+                self.blocks = []
+                created_writers.append(self)
+
+            def setSignalHeader(self, index, header):
+                self.headers.append((index, header))
+
+            def writeSamples(self, block):
+                self.blocks.append([np.asarray(arr).tolist() for arr in block])
+
+            def close(self):
+                return None
+
+        fake_pyedflib = SimpleNamespace(EdfWriter=FakeWriter)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            canonical = tmp_path / "demo_canonical"
+            canonical.mkdir()
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1, 2, 3, 4], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2, 0.3, 0.4, 0.5], type=pa.float32()),
+                    "ch_C3": pa.array([1.1, 1.2, 1.3, 1.4, 1.5], type=pa.float32()),
+                }),
+                canonical / "part_00000.parquet",
+                compression="snappy",
+            )
+
+            with patch.dict("sys.modules", {"pyedflib": fake_pyedflib}), \
+                 patch("benchmark.core.setup.pq.read_table", side_effect=AssertionError("read_table should not be used")):
+                setup._parquet_to_edf(canonical, tmp_path / "demo.edf", sample_freq=1.0)
+
+            self.assertEqual(len(created_writers), 1)
+            self.assertEqual(len(created_writers[0].headers), 2)
+            self.assertTrue(created_writers[0].blocks)
+
     def test_study_info_from_parquet_accepts_single_file_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

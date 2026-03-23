@@ -46,6 +46,37 @@ def _register_root_variant(paths: dict, variant_id: str, fmt: str, reader_kind: 
     })
 
 
+def _iter_parquet_tables(src_files: list[Path], *, columns: list[str] | None = None,
+                         batch_rows: int | None = None):
+    for src_file in src_files:
+        parquet_file = pq.ParquetFile(str(src_file))
+        for batch in parquet_file.iter_batches(columns=columns, batch_size=batch_rows):
+            yield pa.Table.from_batches([batch])
+
+
+def _write_streamed_parquet(writer: pq.ParquetWriter, tables, row_group_size: int) -> None:
+    row_group_size = max(1, int(row_group_size))
+    pending: list[pa.Table] = []
+    pending_rows = 0
+    for table in tables:
+        start = 0
+        while start < table.num_rows:
+            remaining = row_group_size - pending_rows
+            length = min(remaining, table.num_rows - start)
+            pending.append(table.slice(start, length))
+            pending_rows += length
+            start += length
+            if pending_rows >= row_group_size:
+                merged = pending[0] if len(pending) == 1 else pa.concat_tables(pending)
+                writer.write_table(merged, row_group_size=merged.num_rows)
+                pending = []
+                pending_rows = 0
+
+    if pending_rows > 0:
+        merged = pending[0] if len(pending) == 1 else pa.concat_tables(pending)
+        writer.write_table(merged, row_group_size=merged.num_rows)
+
+
 def generate_variants(canonical_pq: Path, info: StudyInfo,
                       variant_specs: list[dict],
                       output_base: Path) -> dict[str, Path]:
@@ -112,22 +143,11 @@ def _generate_parquet_variant(canonical_pq: Path, output_base: Path,
             write_statistics=True,
         )
         try:
-            buf: list[pa.Table] = []
-            buf_rows = 0
-            for f in src_files:
-                table = pq.read_table(str(f))
-                buf.append(table)
-                buf_rows += table.num_rows
-                while buf_rows >= row_group_size:
-                    combined = pa.concat_tables(buf)
-                    writer.write_table(combined.slice(0, row_group_size),
-                                       row_group_size=row_group_size)
-                    remainder = combined.slice(row_group_size)
-                    buf = [remainder] if remainder.num_rows > 0 else []
-                    buf_rows = remainder.num_rows
-            if buf_rows > 0:
-                writer.write_table(pa.concat_tables(buf),
-                                   row_group_size=row_group_size)
+            _write_streamed_parquet(
+                writer,
+                _iter_parquet_tables(src_files, batch_rows=row_group_size),
+                row_group_size,
+            )
         finally:
             writer.close()
 
@@ -198,8 +218,7 @@ def _generate_hdf5_variant(canonical_pq: Path, output_base: Path,
                     chunks=(cs,), **hdf5plugin.LZ4(),
                 )
                 offset = 0
-                for src_file in src_files:
-                    table = pq.read_table(str(src_file), columns=["samplestamp"] + ch_cols)
+                for table in _iter_parquet_tables(src_files, columns=["samplestamp"] + ch_cols, batch_rows=cs):
                     n = table.num_rows
                     stamp_ds[offset:offset + n] = table.column("samplestamp").to_numpy()
                     for col in ch_cols:
@@ -219,8 +238,7 @@ def _generate_hdf5_variant(canonical_pq: Path, output_base: Path,
                 )
                 hf.attrs["column_order"] = ch_cols
                 offset = 0
-                for src_file in src_files:
-                    table = pq.read_table(str(src_file), columns=["samplestamp"] + ch_cols)
+                for table in _iter_parquet_tables(src_files, columns=["samplestamp"] + ch_cols, batch_rows=cs):
                     n = table.num_rows
                     stamp_ds[offset:offset + n] = table.column("samplestamp").to_numpy()
                     block = np.column_stack([
