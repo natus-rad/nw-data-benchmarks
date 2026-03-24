@@ -69,6 +69,13 @@ variants:
     row_group_minutes: 30
     compression: lz4
 
+  - id: h5_row_30m
+    format: hdf5
+    layout: rowgroup
+    chunk_minutes: 30
+    dtype: float32        # Only float32 is supported for HDF5 for now
+    compression: lz4      # Only lz4 is supported for HDF5 for now
+
 # Benchmark families are grouped by purpose:
 #   common                  -> shared knobs used by multiple categories
 #   core                    -> A-E, the main read/processing benchmarks
