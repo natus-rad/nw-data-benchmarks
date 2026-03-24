@@ -35,6 +35,13 @@ RESULTS_DIR = REPO_ROOT / "benchmark" / "results"
 TEMPLATE_PATH = REPO_ROOT / "benchmark" / "docs" / "benchmark_report.template.md"
 DEFAULT_OUTPUT = REPO_ROOT / "benchmark" / "docs" / "benchmark_report.md"
 
+PIPELINE_MERMAID = """flowchart LR
+    A[\"Input: EDF / HDF5 / Parquet / ERD\"] --> B[\"Canonical single-file Parquet\"]
+    B --> C[\"StudyInfo metadata + stamp cache\"]
+    C --> D[\"Configured variants: Parquet / HDF5 / EDF\"]
+    D --> E[\"Benchmarks: A-E core, F-I investigations, J/K comparisons\"]
+"""
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -43,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", type=Path, help="Path to a benchmark result JSON file. Defaults to the latest file in benchmark/results/.")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output Markdown path. Defaults to benchmark/docs/benchmark_report.md.")
     parser.add_argument("--template", type=Path, default=TEMPLATE_PATH, help="Markdown template path. Defaults to benchmark/docs/benchmark_report.template.md.")
-    parser.add_argument("--html", action="store_true", help="Also emit a self-contained HTML report next to the Markdown output.")
+    parser.add_argument("--html", action="store_true", help="Also emit a styled HTML report next to the Markdown output.")
     return parser.parse_args()
 
 
@@ -117,17 +124,23 @@ def build_overview(study: dict[str, Any], system: dict[str, Any], categories: se
         ["Sample rate", f"{study['sample_freq']:.1f} Hz"],
         ["Duration", f"{duration_hours:.2f} h ({study['total_stamps']:,} samples)"],
         ["System", f"{system.get('os', 'unknown')} / Python {system.get('python', 'unknown')} / {system.get('cpu_count', '?')} CPU threads / {system.get('ram_gb', '?')} GiB RAM"],
-        ["Categories present", ", ".join(sorted(categories))],
+        ["Categories present", ", ".join(f"`{name}`" for name in sorted(categories))],
     ]
-    note = (
-        "The report is generated directly from benchmark result JSON. "
-        "Sections for categories not present in the input file are called out explicitly, so partial benchmark runs still produce a readable report. "
-        "All reported throughput values use the theoretical decoded float32 payload size: rows × channels × 4 bytes. "
-        "For repeated-read benchmarks, `wall_clock_seconds` is the warm-cache-leaning median across repetitions and `first_wall_clock_seconds` records the first repetition as the closest available cold-start proxy without explicit OS cache eviction. "
-        "When available, `peak_rss_mib` reports sampled peak process resident memory during the benchmark invocation. "
-        "HDF5 timings in this benchmark use a custom benchmark-specific `chunk_index` lookup structure built at conversion time, which intentionally gives HDF5 a best-case seek/read path rather than representing plain generic HDF5 without that helper."
+    bullets = [
+        "Missing sections are called out explicitly, so partial benchmark runs still produce a readable report.",
+        "Throughput uses the theoretical decoded float32 payload size: `rows × channels × 4 bytes`.",
+        "`wall_clock_seconds` is the warm-cache-leaning median across repetitions.",
+        "`first_wall_clock_seconds` records the first repetition as the closest available cold-start proxy without explicit OS cache eviction.",
+        "`peak_rss_mib` reports sampled peak process resident memory when available.",
+        "HDF5 timings include a benchmark-specific `chunk_index` helper, so they represent a best-case HDF5 seek/read path rather than plain generic HDF5 without that helper.",
+    ]
+    return (
+        "```mermaid\n" + PIPELINE_MERMAID + "```\n\n"
+        "### Technical Remarks\n\n"
+        + "\n".join(f"- {bullet}" for bullet in bullets)
+        + "\n\n"
+        + markdown_table(["Property", "Value"], rows)
     )
-    return note + "\n\n" + markdown_table(["Property", "Value"], rows)
 
 
 def build_summary(payload: dict[str, Any]) -> str:

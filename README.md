@@ -1,32 +1,16 @@
 # EEG/PSG Format Benchmarks
 
-Comprehensive benchmarks comparing **EDF**, **HDF5**, and **Apache Parquet**
-for reading, processing, and storing clinical EEG and PSG waveform data.
+Benchmark read, processing, and storage trade-offs across **EDF**, **HDF5**, and **Apache Parquet** for clinical EEG/PSG waveform data.
 
-**Goal:** Investigate how multiple storage formats can be used together in a
-**hybrid architecture** — Parquet for immutable signal data (optimized for
-compression and cloud access), and HDF5 for metadata, annotations, and study
-information (optimized for hierarchical organization and local access).
+This repo benchmarks a study from a local path or Azure blob input, normalizes it to a cached **canonical single-file Parquet**, generates the **variants** you ask for, then writes **JSON + Markdown/HTML reports**.
 
-### Implementation notes
+## Format caveats
 
-**Parquet:** Uses built-in per-row-group min/max column statistics (part of
-the format spec) for predicate pushdown during filtered reads. No custom
-indexing required.
+- **Parquet** uses built-in row-group statistics for predicate pushdown during filtered reads.
+- **HDF5** benchmark results include a benchmark-specific `chunk_index` helper dataset for fast seeks, so they represent **optimized HDF5-with-helper** behavior, not plain generic HDF5 without that helper.
+- **EDF** uses raw byte-offset seeks with no indexing and is limited to 16-bit quantized storage.
 
-**HDF5:** Standard HDF5 has no built-in index for skipping chunks based on
-data values. These benchmarks intentionally give HDF5 a best-case lookup aid by
-building a custom `chunk_index` dataset at conversion time — a small benchmark-
-specific lookup table of timestamp ranges per chunk. This represents optimized
-HDF5-with-helper performance, not plain generic HDF5 without that extra index.
-Standard HDF5 files without this helper would require scanning the full
-timestamp dataset on every filtered read, which is significantly slower.
-
-**EDF:** Uses raw byte-offset seeks with no indexing. Fast for sequential
-reads on single files, but requires full file scan for filtered access.
-
-See the [benchmark report](benchmark/docs/benchmark_report.md) for detailed
-analysis and recommendations for hybrid architectures.
+See the generated [benchmark report](benchmark/docs/benchmark_report.md) for the latest results and recommendations.
 
 ## Quickstart
 
@@ -35,263 +19,188 @@ analysis and recommendations for hybrid architectures.
 git clone <repo-url> && cd nw-data-benchmarks
 pip install -r requirements.txt
 
-# 2. Run benchmarks (downloads ~1 GB sample data from Azure on first run)
+# 2. Run the default benchmark suite
 python -m benchmark.scripts.run_benchmarks
 
-#    This also generates benchmark/docs/benchmark_report.md and .html by default.
-#    Use --no-report if you only want the JSON results file.
+#    This writes benchmark/results/*.json and generates
+#    benchmark/docs/benchmark_report.md + .html by default.
+#    Use --no-report to skip report generation.
 
-# 3. Run specific categories only
+# 3. Run only selected categories
 python -m benchmark.scripts.run_benchmarks --categories random_access channel_subset window_scaling
 
-# 4. Regenerate the Markdown benchmark report from the latest JSON results
+# 4. Regenerate the report from the latest results JSON
 python -m benchmark.scripts.generate_benchmark_report
 
-# Or generate from a specific results file / custom output path
-python -m benchmark.scripts.generate_benchmark_report --input benchmark/results/<file>.json --output benchmark/docs/benchmark_report.md
-
-# Or generate Markdown + HTML explicitly
-python -m benchmark.scripts.generate_benchmark_report --html
+# 5. Regenerate Markdown + HTML from a specific results file
+python -m benchmark.scripts.generate_benchmark_report --input benchmark/results/<file>.json --html
 ```
 
-The default configuration downloads a 46-channel, 256 Hz, ~12.9-hour EEG study
-as float32 Parquet from a public Azure Blob container. No credentials needed.
+The default configuration uses a public Azure Parquet study (~12.9 hours, 46 channels, 256 Hz) and caches data in `.benchmark_cache/` on first use.
 
 ## Default data source
 
-| Property         | Value |
-|------------------|-------|
-| Storage account  | `nwcsandboxstorage` |
-| Container        | `waveforms` |
-| Parquet path     | `parquet/Suppression~ B_54c97daa-...float32.snappy.parquet/` |
-| Channels         | 46 (10-20 + auxiliaries) |
-| Sample rate      | 256 Hz |
-| Duration         | ~12.9 hours (~11.85M samples) |
-| Size (Parquet)   | ~759 MiB (float32, snappy) |
-| Size (HDF5)      | ~1,343 MiB (float32, LZ4 columnar) |
-| Size (EDF)       | ~1,040 MiB (int16, uncompressed) |
-| Raw float32 baseline | 2,170 MiB (46 ch × 11.85M samples × 4 bytes + timestamps) |
+| Property | Value |
+|---|---|
+| Storage account | `nwcsandboxstorage` |
+| Container | `waveforms` |
+| Parquet path | `parquet/Suppression~ B_54c97daa-...float32.snappy.parquet/` |
+| Channels | 46 (10-20 + auxiliaries) |
+| Sample rate | 256 Hz |
+| Duration | ~12.9 hours (~11.85M samples) |
+| Size (Parquet) | ~759 MiB (float32, snappy) |
+| Size (HDF5) | ~1,343 MiB (float32, LZ4 columnar) |
+| Size (EDF) | ~1,040 MiB (int16, uncompressed) |
+| Raw float32 baseline | 2,170 MiB |
 
-Data is cached locally in `.benchmark_cache/` after the first download.
+## Pipeline at a glance
+
+`studies[].input` can point to a local file/directory or to an Azure blob path/URL. Once resolved, the pipeline is:
+
+```text
+┌──────────────────────────────────────────────────────────────────────────┐
+│                    INPUT (local path or Azure blob)                      │
+│   .edf  │  .h5/.hdf5   │  .parquet (file/dir)  │  ERD (study dir)        │
+└────┬────┴──────┬───────┴──────────┬────────────┴──────┬──────────────────┘
+     │           │                  │                   │
+     ▼           ▼                  ▼                   ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│            INGEST / REWRITE TO CANONICAL SINGLE-FILE PARQUET             │
+│  _ingest_edf()  _ingest_hdf5()  _rewrite_parquet_input()  _ingest_erd()  │
+│                                                                          │
+│  Output: cached single-file Parquet with samplestamp + ch_<label> cols   │
+│  + StudyInfo metadata and a disk-backed samplestamp cache                │
+└───────────────────────────────┬──────────────────────────────────────────┘
+                                │
+                                ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│              VARIANT GENERATION (from canonical Parquet)                 │
+│                                                                          │
+│  For each entry in config `variants:`:                                   │
+│    → Parquet variant: row-group layout + codec                           │
+│    → HDF5 variant: columnar/rowgroup layout + chunking + compression     │
+│    → EDF variant: EDF rewrite (16-bit quantized)                         │
+│                                                                          │
+│  Generated root variants are optional. Benchmark K can also reuse the    │
+│  resolved baseline/input source artifact directly.                       │
+└───────────────────────────────┬──────────────────────────────────────────┘
+                                │
+                                ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                        BENCHMARK EXECUTION                               │
+│                                                                          │
+│  Core benchmarks (A–E): selected root variants (+ canonical optional)    │
+│  Parquet investigations (F–I): separate config section, Parquet-focused  │
+│  Comparison workloads (J, K): tuned variants or baseline input data      │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+Notes:
+
+- Canonical Parquet is always materialized into `.benchmark_cache/`, even when the input is already Parquet.
+- `StudyInfo` uses a reusable disk-backed stamp cache built from canonical Parquet rather than an eagerly loaded in-memory stamp array.
+- `baseline_comparison` (K) measures the original/resolved source artifact directly; it does not generate extra root variants.
+- `include_canonical: true` appends the cached canonical Parquet file to a core benchmark category's targets.
 
 ## What gets benchmarked
 
 | ID | Category | What it measures |
-|----|----------|-----------------|
-| A  | Random access | Read 1-min window from different positions (0%, 50%, 75%, 95%) |
-| B  | Channel subset | Read 4, 10, or all 46 channels (1-min window) |
-| C  | Re-montage | Read + bipolar montage computation (1-min window) |
-| D.1 | Filter pipeline | Full study: read + montage + notch + bandpass filters |
-| D.2 | Sliding FFT | Full study: pipeline + 10s FFT windows with 2s stride |
-| E  | Window scaling | Throughput vs. window size (10s to 60min) |
-| F  | Compression | Parquet codec comparison (none/snappy/zstd/lz4) |
-| G  | Precision | EDF 16-bit quantization error vs. float32 |
-| H  | Int32 storage | Int32 nanovolt and calibrated Parquet variants |
-| I  | Remote query | DuckDB remote Parquet vs. full-file download |
-| J  | Tuned comparison | Parquet (snappy/LZ4) vs HDF5 at matched block sizes (5m–120m) |
+|---|---|---|
+| A | Random access | Read a 1-minute window from multiple positions |
+| B | Channel subset | Read a subset of channels from the same window |
+| C | Re-montage | Read + bipolar montage computation |
+| D.1 | Filter pipeline | Full-study read + montage + filters |
+| D.2 | Sliding FFT | Full-study pipeline + overlapping FFT windows |
+| E | Window scaling | Throughput vs. window size |
+| F | Compression | Parquet codec size/speed trade-offs |
+| G | Precision loss | EDF 16-bit quantization error vs. float32 |
+| H | Int32 storage | Int32 Parquet storage modes |
+| I | Remote query | Remote DuckDB-over-Parquet vs. streamed download paths |
+| J | Tuned comparison | Tuned Parquet vs. tuned HDF5 at matched block sizes |
+| K | Baseline comparison | J-style workloads on the resolved source artifact |
 
 ## Formats compared
 
-- **EDF** — European Data Format. Row-oriented, 16-bit signed integer, no compression.
-  In this benchmark, EDF files are derived from the source Parquet data. Fast
-  for sequential reads on single files, but limited to 16-bit precision and no
-  columnar access.
-
-- **HDF5 columnar** — One 1D dataset per channel, LZ4 compressed, chunked along time.
-  Hierarchical, self-describing, efficient for selective column reads at small
-  block sizes. Includes a benchmark-specific custom `chunk_index` helper for
-  fast seeks, so treat these numbers as optimized HDF5 rather than plain HDF5.
-
-- **HDF5 row-group** — Single 2D dataset (samples × channels), LZ4 compressed,
-  chunk-aligned to Parquet row groups. Tested for comparison but less efficient
-  than columnar layout for selective reads.
-
-- **Parquet** — Columnar, per-column encoding (dictionary, delta, RLE), multiple
-  compression codecs (snappy/zstd/lz4). Includes built-in row-group statistics
-  for predicate pushdown. Better compression ratio than HDF5, cloud-native,
-  supports SQL engines and byte-range queries.
+- **Parquet** — columnar, compressed, cloud-friendly, and the canonical intermediate used by this benchmark suite.
+- **HDF5 columnar** — one 1D dataset per channel, efficient for selective reads at smaller chunk sizes.
+- **HDF5 row-group** — one 2D dataset chunked along time, included for comparison.
+- **EDF** — single-file sequential baseline and compatibility format.
 
 ## Configuration
 
-Edit `benchmark/config/default.yaml` to:
+Use `benchmark/config/default.yaml` as the reference config. The key top-level blocks are:
 
-- Point `studies[].input` at different study data (local path or remote Azure blob path/URL)
-- Select which benchmarks to run
-- Adjust window sizes, channel subsets, repetitions
+- `studies` — one or more studies with `name`, `input`, and `sample_freq` when needed
+- `canonical_parquet` — how the cached canonical Parquet is written
+- `variants` — the root benchmark targets to generate, each with a stable `id`
+- `benchmarks.core` — A–E, with per-category `variants: all | [id, ...] | []` and optional `include_canonical: true`
+- `benchmarks.parquet_investigations` — F–I
+- `benchmarks.other` — J (`tuned_comparison`) and K (`baseline_comparison`)
 
-`benchmark/config/default.yaml` is the built-in example that uses the same
-public remote Azure Parquet dataset we have been benchmarking against.
-
-### Using your own data
-
-Set `input:` to either:
-
-- a local file or directory, or
-- a remote Azure blob path/URL in the configured container
-
-If you use a remote input, your config also needs an `azure:` block with the
-storage account, container, and auth mode. `benchmark/config/default.yaml`
-already shows a working public-anonymous example.
-
-For the public remote Parquet dataset shape we've been using:
-
-```yaml
-azure:
-  storage_account: "nwcsandboxstorage"
-  container: "waveforms"
-  anonymous: true
-
-studies:
-  - name: "my_study"
-    input: "parquet/my_study_folder/"
-    sample_freq: 256
-```
-
-For a local Parquet directory:
+Minimal shape:
 
 ```yaml
 studies:
   - name: "my_study"
     input: "/path/to/my_study.parquet"
     sample_freq: 256
+
+canonical_parquet:
+  id: canonical
+  compression: snappy
+  row_group_minutes: 30
+
+variants:
+  - id: pq_30m_lz4
+    format: parquet
+    row_group_minutes: 30
+    compression: lz4
+  - id: hdf5_col_30m
+    format: hdf5
+    layout: columnar
+    chunk_minutes: 30
+    compression: lz4
+
+benchmarks:
+  core:
+    random_access:
+      enabled: true
+      variants: all
+  parquet_investigations:
+    compression:
+      enabled: true
+  other:
+    baseline_comparison:
+      enabled: true
 ```
 
-Parquet files must have `samplestamp` (int64) and `ch_<label>` (float32) columns.
+## Input expectations
 
-### Starting from your own HDF5 data
-
-If you have EEG data in HDF5 already, you can convert it to the formats
-used by these benchmarks with a short script. The benchmark suite expects:
-
-- **Parquet:** one `samplestamp` column (int64) and one `ch_<label>` column
-  (float32, microvolts) per channel. Samplestamp values must be monotonically
-  non-decreasing but can have gaps and variable stride.
-- **HDF5 columnar:** one 1D dataset per channel under `/channels/<label>`,
-  plus a `/samplestamp` dataset and a `/chunk_index` dataset for fast seeks.
-
-Here's an example conversion script:
-
-```python
-import h5py, numpy as np, pyarrow as pa, pyarrow.parquet as pq
-import hdf5plugin
-
-# -- Load your HDF5 data --
-with h5py.File("my_study.h5", "r") as hf:
-    # Adapt these lines to match your file's layout
-    channels = {name: hf["eeg"][name][:] for name in hf["eeg"]}
-    timestamps = hf["timestamps"][:]  # sample-level timestamps
-
-# -- Write Parquet (snappy, 5-minute row groups) --
-sample_rate = 256  # adjust to your data
-row_group_size = 5 * 60 * sample_rate  # 5 minutes
-
-cols = {"samplestamp": pa.array(timestamps, type=pa.int64())}
-for name, data in channels.items():
-    cols[f"ch_{name}"] = pa.array(data.astype(np.float32), type=pa.float32())
-
-table = pa.table(cols)
-pq.write_table(table, "my_study.parquet",
-               compression="snappy", row_group_size=row_group_size,
-               write_statistics=True)
-
-# -- Write HDF5 columnar (LZ4, matched chunk size) --
-n_samples = len(timestamps)
-chunk_size = min(row_group_size, n_samples)
-
-with h5py.File("my_study_columnar.h5", "w") as hf:
-    grp = hf.create_group("channels")
-    for name, data in channels.items():
-        grp.create_dataset(name, data=data.astype(np.float32),
-                           chunks=(chunk_size,), **hdf5plugin.LZ4())
-
-    stamp_ds = hf.create_dataset("samplestamp", data=timestamps,
-                                 chunks=(chunk_size,), **hdf5plugin.LZ4())
-
-    # Build chunk index for fast seeks (required by the benchmark reader)
-    n_chunks = (n_samples + chunk_size - 1) // chunk_size
-    index = np.empty((n_chunks, 3), dtype=np.int64)
-    for i in range(n_chunks):
-        s, e = i * chunk_size, min((i + 1) * chunk_size, n_samples)
-        index[i] = [s, timestamps[s], timestamps[e - 1]]
-    hf.create_dataset("chunk_index", data=index)
-    hf.attrs["total_samples"] = n_samples
-```
-
-Then point the config at your local files:
-
-```yaml
-studies:
-  - name: "my_study"
-    input: "/path/to/directory/containing/my_study.parquet"
-    sample_freq: 256
-```
-
-The benchmark suite will derive EDF and additional HDF5/Parquet variants
-(different block sizes, compression codecs) automatically from the input
-data after it is ingested into canonical Parquet.
-
-### Using native NeuroWorks data (optional)
-
-If the `nwreader` SDK is installed, you can start from an ERD study directory:
-
-```yaml
-studies:
-  - name: "my_study"
-    input: "/path/to/erd/study"
-```
-
-Remote ERD/HDF5/EDF inputs can also be given via Azure blob paths/URLs as long
-the referenced blob or prefix exists in the configured storage container and
-the config includes the matching `azure:` settings.
+- **Parquet input**: file or directory with `samplestamp` (`int64`) and `ch_<label>` (`float32`) columns. `sample_freq` must be specified in config for Parquet input.
+- **HDF5 input**: either `/channels/<label>` datasets or a 2D `/data` dataset. Timestamps can come from `samplestamp`, `timestamps`, `time`, or `sample_index`. `sample_freq` can come from an HDF5 attribute or from config.
+- **EDF input**: sample frequency is usually read from the file; you can still supply it explicitly.
+- **ERD input**: pass the study directory. This path requires the optional `nwreader` dependency.
+- **Remote input**: provide an Azure blob path/URL plus an `azure:` block. `benchmark/config/default.yaml` is the working public example.
 
 ## Output
 
-- **JSON results** → `benchmark/results/` (gitignored, regenerated each run)
+- **JSON results** → `benchmark/results/`
 - **Markdown report template** → `benchmark/docs/benchmark_report.template.md`
 - **Generated Markdown report** → `benchmark/docs/benchmark_report.md`
+- **Generated HTML report** → `benchmark/docs/benchmark_report.html`
 
-`run_benchmarks.py` now generates the Markdown + HTML report automatically at
-the end of a successful run. Use `--no-report` to skip that post-processing.
+`run_benchmarks.py` generates the Markdown + HTML report automatically after a successful run. Use `--no-report` to skip that step.
 
-You can also regenerate the report directly from results JSON with:
+If `--input` is omitted, `generate_benchmark_report.py` automatically picks the newest `*_benchmark_results.json` file in `benchmark/results/`.
 
-```bash
-python -m benchmark.scripts.generate_benchmark_report
-```
+## Practical takeaway
 
-If `--input` is omitted, the script automatically selects the newest
-`*_benchmark_results.json` file in `benchmark/results/`.
-
-## Recommended hybrid architecture
-
-Based on benchmark results, a production system should use:
-
-1. **Parquet for immutable signal data:**
-   - Better compression (2.86× vs 2,170 MiB raw; 1.8× smaller than HDF5 LZ4)
-   - Cloud-native (byte-range queries, SQL engines like DuckDB/Spark)
-   - Scales efficiently to large block sizes (30m+)
-   - Supports remote access and distributed processing
-
-2. **HDF5 for metadata, annotations, and study information:**
-   - Hierarchical organization (patient info, study metadata, annotations)
-   - Self-describing format with flexible schema
-   - Efficient for structured data and selective reads
-   - Can include video sync metadata and chunk indices
-
-3. **Video storage (optional):**
-   - Store separately from HDF5 (video is large and has different access patterns)
-   - Include sync metadata in HDF5 for coordinated playback
-   - Use standard video codecs (H.264, VP9) for compatibility
-
-4. **EDF for legacy compatibility:**
-   - Use only when required for compatibility with existing systems
-   - Limited to 16-bit precision and no compression
-   - Suitable for simple sequential reads on single files
+- Use **Parquet** for the main immutable waveform payload and remote/cloud workflows.
+- Use **HDF5** only with the understanding that the benchmarked seek/read path includes the extra `chunk_index` helper.
+- Use **EDF** mainly for compatibility and baseline comparisons.
 
 ## Requirements
 
 - Python 3.10+
-- pyarrow (tested with 23.0.1; see `requirements.txt` for supported versions)
-- See `requirements.txt` for full dependency list
-- ~5 GB disk for cache (source data + derived format variants)
-
+- See `requirements.txt` for dependencies
+- ~5 GB free disk space for cached inputs and derived variants

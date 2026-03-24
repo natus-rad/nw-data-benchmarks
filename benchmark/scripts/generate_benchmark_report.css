@@ -25,6 +25,9 @@ strong{color:#f1f5f9}
 em{color:var(--muted);font-style:italic}
 code{background:var(--code-bg);color:#7dd3fc;padding:1px 5px;border-radius:4px;
   font:12px/1.5 'Cascadia Code','Fira Code',monospace}
+pre{background:var(--code-bg);border:1px solid var(--border);border-radius:10px;
+  padding:14px 16px;overflow:auto;margin:16px 0}
+pre code{background:transparent;padding:0;border-radius:0;color:#cbd5e1;font-size:12px}
 ul,ol{margin:10px 0 10px 28px}
 li{margin:4px 0}
 table{width:100%;border-collapse:collapse;margin:18px 0;font-size:.88rem}
@@ -35,4 +38,8 @@ td{padding:8px 14px;border:1px solid var(--border);vertical-align:top;
 tr:hover td{background:var(--surface2)}
 td.win{color:var(--green);font-weight:600}
 td.na{color:var(--muted);font-style:italic}
+.diagram-card{margin:16px 0 20px;padding:12px;border:1px solid var(--border);
+  border-radius:12px;background:linear-gradient(180deg,var(--surface),var(--surface2))}
+.diagram-card .mermaid{display:flex;justify-content:center;overflow:auto}
+.diagram-card .mermaid svg{max-width:100%;height:auto}
 

@@ -58,7 +58,9 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         self.assertIn("Random access (warm-cache-leaning median 1-minute read)", rendered)
         self.assertIn("Ratio vs raw float32", rendered)
         self.assertIn("rows × channels × 4 bytes", rendered)
-        self.assertIn("intentionally gives HDF5 a best-case seek/read path", rendered)
+        self.assertIn("```mermaid", rendered)
+        self.assertIn("### Technical Remarks", rendered)
+        self.assertIn("best-case HDF5 seek/read path", rendered)
         self.assertIn("This category was not present in the input results file.", rendered)
 
     def test_latest_results_file_errors_when_directory_has_no_results(self) -> None:
@@ -154,6 +156,35 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         self.assertIn('<td>A</td>', html)
         self.assertIn('<td class="win">12.0 MiB/s</td>', html)
         self.assertIn('<td class="na">—</td>', html)
+
+    def test_render_html_does_not_emphasize_underscores_inside_identifiers(self) -> None:
+        html = render_html(
+            "# Report\n\n"
+            "## Overview\n\n"
+            "`wall_clock_seconds` `first_wall_clock_seconds` `peak_rss_mib` `chunk_index`\n\n"
+            "baseline_channel_subset baseline_full_study baseline_random_access baseline_window_scaling\n\n"
+            "channel_subset sliding_fft_full pq_30m_lz4 hdf5_col_30m\n"
+        )
+
+        self.assertIn('<code>wall_clock_seconds</code>', html)
+        self.assertIn('<code>chunk_index</code>', html)
+        self.assertIn('baseline_channel_subset baseline_full_study', html)
+        self.assertIn('pq_30m_lz4 hdf5_col_30m', html)
+        self.assertNotIn('<em>channel</em>', html)
+        self.assertNotIn('<em>30m</em>', html)
+
+    def test_render_html_renders_mermaid_fence_and_loader(self) -> None:
+        html = render_html(
+            "# Report\n\n"
+            "## Run Overview\n\n"
+            "```mermaid\n"
+            "flowchart LR\n"
+            "A[Input] --> B[Canonical]\n"
+            "```\n"
+        )
+
+        self.assertIn('<div class="diagram-card"><div class="mermaid">flowchart LR\nA[Input] --> B[Canonical]</div></div>', html)
+        self.assertIn('cdn.jsdelivr.net/npm/mermaid', html)
 
     def test_render_report_includes_separate_k_section(self) -> None:
         payload = {
