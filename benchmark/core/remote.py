@@ -13,15 +13,6 @@ from .signal import CHANNELS_10_20
 from .study_info import StudyInfo
 
 
-_PeakRssTracker = PeakRssTracker
-_chunk_ranges = chunk_ranges
-_download_edf_from_azure = download_edf_from_azure
-_edf_file = edf_file
-_peak_rss_fields = peak_rss_fields
-_print_result = print_result
-_throughput = throughput
-
-
 def _make_duckdb_connection(account: str):
     """Create a DuckDB connection configured for Azure Blob anonymous access."""
     import duckdb
@@ -65,7 +56,7 @@ def bench_remote_query(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> li
     results = []
     args = _kwargs.get("args")
 
-    def _append_logged_result(row: dict) -> None:
+    def _append_remote_result(row: dict) -> None:
         row = dict(row)
         row["_printed_inline"] = True
         results.append(row)
@@ -135,7 +126,7 @@ def bench_remote_query(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> li
             total_rows = 0
 
             print(f"    DuckDB {pq_label} [{ch_label}] ... ", end="", flush=True)
-            with _PeakRssTracker() as memory_tracker:
+            with PeakRssTracker() as memory_tracker:
                 for s, e in windows:
                     t, n_rows = _duckdb_remote_read(con, pq_az_path, query_cols, s, e)
                     times.append(t)
@@ -146,7 +137,7 @@ def bench_remote_query(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> li
             print(f"done ({total_time:.1f}s)")
 
             n_ch = len(cols)
-            _append_logged_result({
+            _append_remote_result({
                 "category": "remote_query",
                 "benchmark": "I.1",
                 "format": f"parquet_{pq_label}",
@@ -160,8 +151,8 @@ def bench_remote_query(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> li
                 "min_wall_per_window": round(min(times), 3),
                 "max_wall_per_window": round(max(times), 3),
                 "total_rows": total_rows,
-                **_peak_rss_fields(memory_tracker.peak_rss_mib),
-                **_throughput(total_rows, n_ch, total_time),
+                **peak_rss_fields(memory_tracker.peak_rss_mib),
+                **throughput(total_rows, n_ch, total_time),
             })
 
     # Full-study sequential read via DuckDB (chunked)
@@ -179,16 +170,16 @@ def bench_remote_query(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> li
                 query_cols = list(cols)
                 total_rows = 0
                 print(f"    DuckDB full-study {pq_label} [{ch_label}] ... ", end="", flush=True)
-                with _PeakRssTracker() as memory_tracker:
+                with PeakRssTracker() as memory_tracker:
                     t_wall_start = time.perf_counter()
-                    for cs, ce in _chunk_ranges(bench_start, bench_end, chunk_stamps):
+                    for cs, ce in chunk_ranges(bench_start, bench_end, chunk_stamps):
                         _, n_rows = _duckdb_remote_read(con, pq_az_path, query_cols, cs, ce)
                         total_rows += n_rows
                     t_wall = time.perf_counter() - t_wall_start
                 print(f"done ({t_wall:.1f}s)")
 
                 n_ch = len(cols)
-                _append_logged_result({
+                _append_remote_result({
                     "category": "remote_query_full_study",
                     "benchmark": "I.2",
                     "format": f"parquet_{pq_label}",
@@ -199,8 +190,8 @@ def bench_remote_query(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> li
                     "n_chunks": n_chunks,
                     "total_rows": total_rows,
                     "total_wall_seconds": round(t_wall, 3),
-                    **_peak_rss_fields(memory_tracker.peak_rss_mib),
-                    **_throughput(total_rows, n_ch, t_wall),
+                    **peak_rss_fields(memory_tracker.peak_rss_mib),
+                    **throughput(total_rows, n_ch, t_wall),
                 })
 
     con.close()
@@ -210,13 +201,13 @@ def bench_remote_query(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> li
         return results
 
     edf_blob_path = remote_cfg.get("remote_edf_path")
-    edf_path = _edf_file(Path(edf_local))
+    edf_path = edf_file(Path(edf_local))
     edf_size = edf_path.stat().st_size
 
     _THEORETICAL_MBPS = 800
     if edf_blob_path:
         print(f"    EDF download ({edf_size / 1024 / 1024:.0f} MiB) ... ", end="", flush=True)
-        dl_time, dl_path = _download_edf_from_azure(cfg, edf_blob_path, args)
+        dl_time, dl_path = download_edf_from_azure(cfg, edf_blob_path, args)
         print(f"{dl_time:.1f}s")
         edf_read_path = dl_path
         dl_estimated = False
@@ -242,7 +233,7 @@ def bench_remote_query(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> li
         for ch_label, ch_indices in edf_channel_variants:
             print(f"    EDF local read [{ch_label}] ... ", end="", flush=True)
             local_times = []
-            with _PeakRssTracker() as memory_tracker:
+            with PeakRssTracker() as memory_tracker:
                 for row_start in random_row_starts:
                     start_sample = int(row_start)
                     n_samp = min(int(window_sec * sample_freq), edf_total - start_sample)
@@ -258,7 +249,7 @@ def bench_remote_query(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> li
             n_ch = len(ch_indices) if ch_indices else n_channels
             print(f"done ({combined:.1f}s)")
 
-            _append_logged_result({
+            _append_remote_result({
                 "category": "remote_query",
                 "benchmark": "I.1",
                 "format": "edf",
@@ -273,7 +264,7 @@ def bench_remote_query(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> li
                 "read_seconds": round(local_total, 3),
                 "total_wall_seconds": round(combined, 3),
                 "avg_wall_per_window": round(local_total / len(local_times), 3) if local_times else 0,
-                **_peak_rss_fields(memory_tracker.peak_rss_mib),
+                **peak_rss_fields(memory_tracker.peak_rss_mib),
             })
 
     return results

@@ -176,6 +176,7 @@ class StudyInfo:
         self._stamps: np.memmap | None = None
         self._stamp_cache_path: Path | None = None
         self._segment_row_offsets: tuple[int, ...] = ()
+        self._stamp_cache_closed = False
 
     def __enter__(self) -> "StudyInfo":
         return self
@@ -186,6 +187,7 @@ class StudyInfo:
     def close(self) -> None:
         stamps = self._stamps
         self._stamps = None
+        self._stamp_cache_closed = True
         if stamps is not None:
             del stamps
 
@@ -203,16 +205,18 @@ class StudyInfo:
         """
         if self._stamps is not None:
             return int(self._stamps[idx])
+        if self._stamp_cache_closed:
+            raise RuntimeError(
+                "StudyInfo.stamp_at_row() cannot be used after StudyInfo.close(). "
+                "Construct a new StudyInfo via StudyInfo.from_parquet()."
+            )
         if self._stamp_cache_path is None or self.total_rows is None:
             raise RuntimeError(
                 "StudyInfo.stamp_at_row() requires Parquet-backed samplestamps. "
                 "Construct StudyInfo via StudyInfo.from_parquet()."
             )
-        stamps = _open_stamp_cache(self._stamp_cache_path, int(self.total_rows))
-        try:
-            return int(stamps[idx])
-        finally:
-            del stamps
+        self._stamps = _open_stamp_cache(self._stamp_cache_path, int(self.total_rows))
+        return int(self._stamps[idx])
 
     @classmethod
     def from_parquet(cls, pq_dir: Path, sample_freq: float) -> "StudyInfo":
@@ -244,20 +248,22 @@ class StudyInfo:
                 type("Seg", (), {"last_stamp": int(stamps[row_offsets[i + 1] - 1])})()
                 for i in range(len(row_counts))
             ]
-        finally:
-            del stamps
+            obj = cls(
+                sample_freq=float(sample_freq),
+                channel_labels=labels,
+                start_stamp=start_stamp,
+                end_stamp=end_stamp,
+                n_segments=len(files),
+                total_rows=total_rows,
+                segment_plans=segment_plans,
+            )
+        except Exception:
+            raise
 
-        obj = cls(
-            sample_freq=float(sample_freq),
-            channel_labels=labels,
-            start_stamp=start_stamp,
-            end_stamp=end_stamp,
-            n_segments=len(files),
-            total_rows=total_rows,
-            segment_plans=segment_plans,
-        )
+        obj._stamps = stamps
         obj._stamp_cache_path = cache_path
         obj._segment_row_offsets = tuple(row_offsets[:-1])
+        obj._stamp_cache_closed = False
         return obj
 
 

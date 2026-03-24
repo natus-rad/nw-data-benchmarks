@@ -55,18 +55,6 @@ except ModuleNotFoundError as exc:
 _RESULT_SAVE_RETRIES = 10
 _RESULT_SAVE_RETRY_DELAY_SECONDS = 0.2
 
-_canonical_file = canonical_file
-_detect_format = detect_format
-_estimate_runs = estimate_runs
-_print_result = print_result
-_recover_sample_freq = recover_sample_freq
-_safe_id = safe_id
-_setup_int32_variants = setup_int32_variants
-_setup_parquet_compression_variants = setup_parquet_compression_variants
-_setup_tuned_variants = setup_tuned_variants
-_system_info = system_info
-_variant_spec_hash = variant_spec_hash
-
 
 def _results_backup_path(out_path: Path) -> Path:
     return out_path.with_name(f"{out_path.name}.bak")
@@ -215,7 +203,7 @@ def _best_effort_local_input(input_value: str, cache_dir: Path) -> Path | None:
 def _best_effort_format(input_value: str, local_input: Path | None) -> str | None:
     if local_input is not None:
         try:
-            return _detect_format(local_input)
+            return detect_format(local_input)
         except Exception:
             pass
 
@@ -234,7 +222,7 @@ def _best_effort_sample_freq(study_cfg: dict, fmt: str | None, local_input: Path
         return float(study_cfg["sample_freq"])
     if fmt in {InputFormat.HDF5, InputFormat.EDF} and local_input is not None:
         try:
-            return float(_recover_sample_freq(local_input, fmt))
+            return float(recover_sample_freq(local_input, fmt))
         except Exception:
             return None
     return None
@@ -244,15 +232,15 @@ def _root_variant_output_path(output_base: Path, spec: dict) -> Path:
     variant_id = spec["id"]
     fmt = spec["format"]
     if fmt == "parquet":
-        token = _variant_spec_hash({
+        token = variant_spec_hash({
             "id": variant_id,
             "format": "parquet",
             "row_group_minutes": spec.get("row_group_minutes", 5),
             "compression": spec.get("compression", "lz4"),
         })
-        return output_base / f"{_safe_id(variant_id)}_{token}.parquet"
+        return output_base / f"{safe_id(variant_id)}_{token}.parquet"
     if fmt == "hdf5":
-        token = _variant_spec_hash({
+        token = variant_spec_hash({
             "id": variant_id,
             "format": "hdf5",
             "layout": spec.get("layout", "columnar"),
@@ -260,10 +248,10 @@ def _root_variant_output_path(output_base: Path, spec: dict) -> Path:
             "dtype": spec.get("dtype", "float32"),
             "compression": spec.get("compression", "lz4"),
         })
-        return output_base / f"{_safe_id(variant_id)}_{token}.h5"
+        return output_base / f"{safe_id(variant_id)}_{token}.h5"
     if fmt == "edf":
-        token = _variant_spec_hash({"id": variant_id, "format": "edf"})
-        return output_base / f"{_safe_id(variant_id)}_{token}.edf"
+        token = variant_spec_hash({"id": variant_id, "format": "edf"})
+        return output_base / f"{safe_id(variant_id)}_{token}.edf"
     raise ValueError(f"Unsupported variant format for dry-run planning: {fmt}")
 
 
@@ -284,7 +272,7 @@ def _planned_artifacts_for_study(cfg: dict, study_cfg: dict,
 
     canonical_path: Path | None = None
     if local_input is not None and fmt is not None and sample_freq is not None:
-        canonical_path = _canonical_file(
+        canonical_path = canonical_file(
             cache_dir,
             local_input,
             fmt,
@@ -492,7 +480,7 @@ def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str
             f"reuses-canonical={counts.get('reuses-canonical', 0)} "
             f"unknown={counts.get('unknown', 0)}"
         )
-    print(f"\nTotal benchmark runs: ~{_estimate_runs(cfg, selected)}")
+    print(f"\nTotal benchmark runs: ~{estimate_runs(cfg, selected)}")
 
 
 def _save_results(output: dict, out_path: Path) -> None:
@@ -540,7 +528,7 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
 
     output = {
         "run_id": run_id,
-        "system": _system_info(),
+        "system": system_info(),
         "config_file": str(args.config),
         "studies": [],
         "benchmarks": [],
@@ -586,12 +574,12 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
                     "Declare benchmark variants or disable core benchmarks for this run."
                 )
             if Category.COMPRESSION in selected_ids and paths.get(FormatKey.PARQUET) and is_investigation_enabled(cfg, "compression"):
-                _setup_parquet_compression_variants(
+                setup_parquet_compression_variants(
                     paths, paths[FormatKey.PARQUET], output_base, short_name, cfg)
             if Category.INT32_STORAGE in selected_ids and paths.get(FormatKey.PARQUET) and is_investigation_enabled(cfg, "int32_storage"):
-                _setup_int32_variants(paths, output_base, short_name, cfg)
+                setup_int32_variants(paths, output_base, short_name, cfg)
             if Category.TUNED_COMPARISON in selected_ids and paths.get(FormatKey.PARQUET):
-                _setup_tuned_variants(paths, output_base, info, cfg)
+                setup_tuned_variants(paths, output_base, info, cfg)
 
             study_meta = {
                 "name": study_cfg["name"],
@@ -617,7 +605,7 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
                     result["study"] = study_cfg["name"]
                     output["benchmarks"].append(result)
                     if not inline_printed:
-                        _print_result(result)
+                        print_result(result)
                 _save_results(output, out_path)
                 print(f"  [checkpoint -> {out_path}]")
 

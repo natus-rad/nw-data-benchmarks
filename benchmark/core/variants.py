@@ -9,6 +9,7 @@ same format.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Iterator
 
 import h5py
 import hdf5plugin
@@ -19,19 +20,12 @@ import pyarrow.parquet as pq
 from .constants import DEFAULT_STREAMING_BATCH_ROWS
 from .hash_utils import spec_hash as shared_spec_hash
 from .parquet_paths import list_parquet_files
-from .setup import build_chunk_index, iter_parquet_tables as iter_setup_parquet_tables, parquet_to_edf
+from .setup import build_chunk_index, iter_parquet_tables, parquet_to_edf
 from .study_info import StudyInfo
 
 
 def _spec_hash(spec: dict) -> str:
     return shared_spec_hash(spec, length=8)
-
-
-def _iter_parquet_tables(src_files: list[Path], *, columns: list[str] | None = None,
-                         batch_rows: int | None = None):
-    # Compatibility wrapper: preserve the local patch/import surface while the
-    # actual streaming implementation lives in benchmark.core.setup.
-    yield from iter_setup_parquet_tables(src_files, columns=columns, max_rows=batch_rows)
 
 
 def _safe_id(value: str) -> str:
@@ -52,7 +46,7 @@ def _register_root_variant(paths: dict, variant_id: str, fmt: str, reader_kind: 
     })
 
 
-def _write_streamed_parquet(writer: pq.ParquetWriter, tables, row_group_size: int) -> None:
+def _write_streamed_parquet(writer: pq.ParquetWriter, tables: Iterator[pa.Table], row_group_size: int) -> None:
     row_group_size = max(1, int(row_group_size))
     pending: list[pa.Table] = []
     pending_rows = 0
@@ -155,7 +149,7 @@ def _generate_parquet_variant(canonical_pq: Path, output_base: Path,
         try:
             _write_streamed_parquet(
                 writer,
-                _iter_parquet_tables(src_files, batch_rows=chunk_reader_max_rows),
+                iter_parquet_tables(src_files, max_rows=chunk_reader_max_rows),
                 row_group_size,
             )
         finally:
@@ -229,7 +223,7 @@ def _generate_hdf5_variant(canonical_pq: Path, output_base: Path,
                     chunks=(cs,), **hdf5plugin.LZ4(),
                 )
                 offset = 0
-                for table in _iter_parquet_tables(src_files, columns=["samplestamp"] + ch_cols, batch_rows=chunk_reader_max_rows):
+                for table in iter_parquet_tables(src_files, columns=["samplestamp"] + ch_cols, max_rows=chunk_reader_max_rows):
                     n = table.num_rows
                     stamp_ds[offset:offset + n] = table.column("samplestamp").to_numpy()
                     for col in ch_cols:
@@ -249,7 +243,7 @@ def _generate_hdf5_variant(canonical_pq: Path, output_base: Path,
                 )
                 hf.attrs["column_order"] = ch_cols
                 offset = 0
-                for table in _iter_parquet_tables(src_files, columns=["samplestamp"] + ch_cols, batch_rows=chunk_reader_max_rows):
+                for table in iter_parquet_tables(src_files, columns=["samplestamp"] + ch_cols, max_rows=chunk_reader_max_rows):
                     n = table.num_rows
                     stamp_ds[offset:offset + n] = table.column("samplestamp").to_numpy()
                     block = np.column_stack([
@@ -298,7 +292,6 @@ def _generate_edf_variant(canonical_pq: Path, output_base: Path,
 safe_id = _safe_id
 spec_hash = _spec_hash
 _build_chunk_index = build_chunk_index
-_iter_setup_parquet_tables = iter_setup_parquet_tables
 _parquet_to_edf = parquet_to_edf
 
 __all__ = [

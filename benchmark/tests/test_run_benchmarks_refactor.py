@@ -896,13 +896,13 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 canonical / "part_00000.parquet",
                 compression="snappy",
             )
-            info = StudyInfo.from_parquet(canonical, sample_freq=256)
-            output_base = tmp_path / "demo_study_variants"
+            with StudyInfo.from_parquet(canonical, sample_freq=256) as info:
+                output_base = tmp_path / "demo_study_variants"
 
-            paths = generate_variants(canonical, info, [], output_base)
+                paths = generate_variants(canonical, info, [], output_base)
 
-            self.assertEqual(paths["parquet"], canonical)
-            self.assertFalse(output_base.exists())
+                self.assertEqual(paths["parquet"], canonical)
+                self.assertFalse(output_base.exists())
 
     def test_generate_variants_rejects_unsupported_hdf5_dtype_and_compression(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -917,26 +917,26 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 canonical / "part_00000.parquet",
                 compression="snappy",
             )
-            info = StudyInfo.from_parquet(canonical, sample_freq=256)
-            output_base = tmp_path / "demo_study_variants"
+            with StudyInfo.from_parquet(canonical, sample_freq=256) as info:
+                output_base = tmp_path / "demo_study_variants"
 
-            with self.assertRaisesRegex(ValueError, "dtype=float32"):
-                generate_variants(canonical, info, [{
-                    "id": "h5_bad_dtype",
-                    "format": "hdf5",
-                    "layout": "columnar",
-                    "chunk_minutes": 5,
-                    "dtype": "float64",
-                }], output_base)
+                with self.assertRaisesRegex(ValueError, "dtype=float32"):
+                    generate_variants(canonical, info, [{
+                        "id": "h5_bad_dtype",
+                        "format": "hdf5",
+                        "layout": "columnar",
+                        "chunk_minutes": 5,
+                        "dtype": "float64",
+                    }], output_base)
 
-            with self.assertRaisesRegex(ValueError, "compression=lz4"):
-                generate_variants(canonical, info, [{
-                    "id": "h5_bad_codec",
-                    "format": "hdf5",
-                    "layout": "columnar",
-                    "chunk_minutes": 5,
-                    "compression": "gzip",
-                }], output_base)
+                with self.assertRaisesRegex(ValueError, "compression=lz4"):
+                    generate_variants(canonical, info, [{
+                        "id": "h5_bad_codec",
+                        "format": "hdf5",
+                        "layout": "columnar",
+                        "chunk_minutes": 5,
+                        "compression": "gzip",
+                    }], output_base)
 
     def test_generate_variants_reuses_single_file_parquet_variant_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -951,22 +951,22 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 canonical / "part_00000.parquet",
                 compression="snappy",
             )
-            info = StudyInfo.from_parquet(canonical, sample_freq=256)
-            output_base = tmp_path / "demo_study_variants"
-            spec = [{"id": "pq_30m_lz4", "format": "parquet", "row_group_minutes": 30, "compression": "lz4"}]
+            with StudyInfo.from_parquet(canonical, sample_freq=256) as info:
+                output_base = tmp_path / "demo_study_variants"
+                spec = [{"id": "pq_30m_lz4", "format": "parquet", "row_group_minutes": 30, "compression": "lz4"}]
 
-            first_paths = generate_variants(canonical, info, spec, output_base)
-            out_file = first_paths["variant__pq_30m_lz4"]
-            self.assertTrue(out_file.exists())
+                first_paths = generate_variants(canonical, info, spec, output_base)
+                out_file = first_paths["variant__pq_30m_lz4"]
+                self.assertTrue(out_file.exists())
 
-            stdout = io.StringIO()
-            with redirect_stdout(stdout):
-                paths = generate_variants(canonical, info, spec, output_base)
+                stdout = io.StringIO()
+                with redirect_stdout(stdout):
+                    paths = generate_variants(canonical, info, spec, output_base)
 
-            self.assertIn("Generating test variants (skip if cached)", stdout.getvalue())
-            self.assertIn("[cached] variant__pq_30m_lz4", stdout.getvalue())
-            self.assertEqual(paths["parquet"], canonical)
-            self.assertEqual(paths["variant__pq_30m_lz4"], out_file)
+                self.assertIn("Generating test variants (skip if cached)", stdout.getvalue())
+                self.assertIn("[cached] variant__pq_30m_lz4", stdout.getvalue())
+                self.assertEqual(paths["parquet"], canonical)
+                self.assertEqual(paths["variant__pq_30m_lz4"], out_file)
 
     def test_generate_variants_streams_parquet_variant_without_read_table(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -981,17 +981,16 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 canonical / "part_00000.parquet",
                 compression="snappy",
             )
-            info = StudyInfo.from_parquet(canonical, sample_freq=1)
+            with StudyInfo.from_parquet(canonical, sample_freq=1) as info:
+                with patch("benchmark.core.variants.pq.read_table", side_effect=AssertionError("read_table should not be used")):
+                    paths = generate_variants(
+                        canonical,
+                        info,
+                        [{"id": "pq_stream", "format": "parquet", "row_group_minutes": 1, "compression": "lz4"}],
+                        tmp_path / "variants",
+                    )
 
-            with patch("benchmark.core.variants.pq.read_table", side_effect=AssertionError("read_table should not be used")):
-                paths = generate_variants(
-                    canonical,
-                    info,
-                    [{"id": "pq_stream", "format": "parquet", "row_group_minutes": 1, "compression": "lz4"}],
-                    tmp_path / "variants",
-                )
-
-            self.assertEqual(pq.read_table(paths["variant__pq_stream"]).num_rows, 5)
+                self.assertEqual(pq.read_table(paths["variant__pq_stream"]).num_rows, 5)
 
     def test_generate_variants_uses_configured_chunk_reader_max_rows(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1006,30 +1005,30 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 canonical / "part_00000.parquet",
                 compression="snappy",
             )
-            info = StudyInfo.from_parquet(canonical, sample_freq=1)
-            captured = []
+            with StudyInfo.from_parquet(canonical, sample_freq=1) as info:
+                captured = []
 
-            def fake_iter(src_files, *, columns=None, batch_rows=None):
-                captured.append(batch_rows)
-                table = pa.table({
-                    "samplestamp": pa.array([0, 1, 2], type=pa.int64()),
-                    "ch_Fp1": pa.array([0.1, 0.2, 0.3], type=pa.float32()),
-                })
-                if columns is not None:
-                    yield pa.table({name: table.column(name) for name in columns})
-                else:
-                    yield table
+                def fake_iter(src_files, *, columns=None, max_rows=None):
+                    captured.append(max_rows)
+                    table = pa.table({
+                        "samplestamp": pa.array([0, 1, 2], type=pa.int64()),
+                        "ch_Fp1": pa.array([0.1, 0.2, 0.3], type=pa.float32()),
+                    })
+                    if columns is not None:
+                        yield pa.table({name: table.column(name) for name in columns})
+                    else:
+                        yield table
 
-            with patch("benchmark.core.variants._iter_parquet_tables", side_effect=fake_iter):
-                generate_variants(
-                    canonical,
-                    info,
-                    [{"id": "pq_stream", "format": "parquet", "row_group_minutes": 1, "compression": "lz4"}],
-                    tmp_path / "variants",
-                    canonical_cfg={"chunk_reader_max_rows": 2},
-                )
+                with patch("benchmark.core.variants.iter_parquet_tables", side_effect=fake_iter):
+                    generate_variants(
+                        canonical,
+                        info,
+                        [{"id": "pq_stream", "format": "parquet", "row_group_minutes": 1, "compression": "lz4"}],
+                        tmp_path / "variants",
+                        canonical_cfg={"chunk_reader_max_rows": 2},
+                    )
 
-            self.assertEqual(captured, [2])
+                self.assertEqual(captured, [2])
 
     def test_generate_variants_streams_hdf5_variants_without_read_table(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1045,25 +1044,24 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 canonical / "part_00000.parquet",
                 compression="snappy",
             )
-            info = StudyInfo.from_parquet(canonical, sample_freq=1)
+            with StudyInfo.from_parquet(canonical, sample_freq=1) as info:
+                with patch("benchmark.core.variants.pq.read_table", side_effect=AssertionError("read_table should not be used")):
+                    paths = generate_variants(
+                        canonical,
+                        info,
+                        [
+                            {"id": "h5_col_stream", "format": "hdf5", "layout": "columnar", "chunk_minutes": 1, "compression": "lz4"},
+                            {"id": "h5_rg_stream", "format": "hdf5", "layout": "rowgroup", "chunk_minutes": 1, "compression": "lz4"},
+                        ],
+                        tmp_path / "variants",
+                    )
 
-            with patch("benchmark.core.variants.pq.read_table", side_effect=AssertionError("read_table should not be used")):
-                paths = generate_variants(
-                    canonical,
-                    info,
-                    [
-                        {"id": "h5_col_stream", "format": "hdf5", "layout": "columnar", "chunk_minutes": 1, "compression": "lz4"},
-                        {"id": "h5_rg_stream", "format": "hdf5", "layout": "rowgroup", "chunk_minutes": 1, "compression": "lz4"},
-                    ],
-                    tmp_path / "variants",
-                )
-
-            with h5py.File(paths["variant__h5_col_stream"], "r") as hf:
-                self.assertEqual(hf["samplestamp"][:].tolist(), [0, 1, 2, 3, 4])
-                np.testing.assert_allclose(hf["channels"]["Fp1"][:], np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float32))
-            with h5py.File(paths["variant__h5_rg_stream"], "r") as hf:
-                self.assertEqual(hf["samplestamp"][:].tolist(), [0, 1, 2, 3, 4])
-                np.testing.assert_allclose(hf["data"][:, 0], np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float32))
+                with h5py.File(paths["variant__h5_col_stream"], "r") as hf:
+                    self.assertEqual(hf["samplestamp"][:].tolist(), [0, 1, 2, 3, 4])
+                    np.testing.assert_allclose(hf["channels"]["Fp1"][:], np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float32))
+                with h5py.File(paths["variant__h5_rg_stream"], "r") as hf:
+                    self.assertEqual(hf["samplestamp"][:].tolist(), [0, 1, 2, 3, 4])
+                    np.testing.assert_allclose(hf["data"][:, 0], np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float32))
 
     def test_parquet_to_edf_streams_without_read_table(self):
         created_writers = []
@@ -1120,21 +1118,20 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 canonical / "part_00000.parquet",
                 compression="snappy",
             )
-            info = StudyInfo.from_parquet(canonical, sample_freq=1)
+            with StudyInfo.from_parquet(canonical, sample_freq=1) as info:
+                def fake_parquet_to_edf(_src, out_file, sample_freq, batch_rows=None):
+                    out_file.write_bytes(b"edf")
 
-            def fake_parquet_to_edf(_src, out_file, sample_freq, batch_rows=None):
-                out_file.write_bytes(b"edf")
+                with patch("benchmark.core.variants.parquet_to_edf", side_effect=fake_parquet_to_edf) as mock_convert:
+                    generate_variants(
+                        canonical,
+                        info,
+                        [{"id": "edf_stream", "format": "edf"}],
+                        tmp_path / "variants",
+                        canonical_cfg={"chunk_reader_max_rows": 7},
+                    )
 
-            with patch("benchmark.core.variants.parquet_to_edf", side_effect=fake_parquet_to_edf) as mock_convert:
-                generate_variants(
-                    canonical,
-                    info,
-                    [{"id": "edf_stream", "format": "edf"}],
-                    tmp_path / "variants",
-                    canonical_cfg={"chunk_reader_max_rows": 7},
-                )
-
-            self.assertEqual(mock_convert.call_args.kwargs["batch_rows"], 7)
+                self.assertEqual(mock_convert.call_args.kwargs["batch_rows"], 7)
 
     def test_study_info_from_parquet_accepts_single_file_path(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1188,11 +1185,56 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 self.assertEqual(info.end_stamp, 21)
                 self.assertEqual(info.total_rows, 5)
                 self.assertEqual(info.n_segments, 2)
+                self.assertIsInstance(info._stamps, np.memmap)
                 self.assertEqual([info.stamp_at_row(i) for i in (0, 2, 3, 4)], [10, 12, 20, 21])
                 self.assertEqual([seg.last_stamp for seg in info.segment_plans], [12, 21])
                 self.assertTrue(info._stamp_cache_path is not None and info._stamp_cache_path.exists())
             finally:
                 info.close()
+
+    def test_study_info_stamp_at_row_reuses_open_memmap_without_reopening(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pq_file = tmp_path / "single.parquet"
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([10, 11, 12], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2, 0.3], type=pa.float32()),
+                }),
+                pq_file,
+                compression="snappy",
+            )
+
+            info = StudyInfo.from_parquet(pq_file, sample_freq=256)
+            try:
+                initial_stamps_id = id(info._stamps)
+                self.assertIsInstance(info._stamps, np.memmap)
+                with patch("benchmark.core.study_info._open_stamp_cache", side_effect=AssertionError("stamp cache should stay open")):
+                    self.assertEqual(info.stamp_at_row(0), 10)
+                    self.assertEqual(info.stamp_at_row(2), 12)
+                self.assertEqual(id(info._stamps), initial_stamps_id)
+            finally:
+                info.close()
+
+    def test_study_info_stamp_at_row_raises_after_close_instead_of_reopening(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pq_file = tmp_path / "single.parquet"
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([10, 11], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2], type=pa.float32()),
+                }),
+                pq_file,
+                compression="snappy",
+            )
+
+            info = StudyInfo.from_parquet(pq_file, sample_freq=256)
+            info.close()
+
+            with patch("benchmark.core.study_info._open_stamp_cache", side_effect=AssertionError("closed StudyInfo should not reopen stamp cache")):
+                with self.assertRaisesRegex(RuntimeError, "cannot be used after StudyInfo.close"):
+                    info.stamp_at_row(0)
 
     def test_study_info_from_parquet_reuses_existing_stamp_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1296,32 +1338,32 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 src_file,
                 compression="snappy",
             )
-            info = StudyInfo.from_parquet(src_file, sample_freq=256)
-            paths = {"parquet": src_file}
-            cfg = normalize_config({
-                "canonical_parquet": {"chunk_reader_max_rows": 1},
-                "benchmarks": {
-                    "other": {
-                        "tuned_comparison": {
-                            "block_sizes_minutes": [5],
-                            "parquet_codecs": ["lz4"],
-                            "hdf5_compression": "lz4",
+            with StudyInfo.from_parquet(src_file, sample_freq=256) as info:
+                paths = {"parquet": src_file}
+                cfg = normalize_config({
+                    "canonical_parquet": {"chunk_reader_max_rows": 1},
+                    "benchmarks": {
+                        "other": {
+                            "tuned_comparison": {
+                                "block_sizes_minutes": [5],
+                                "parquet_codecs": ["lz4"],
+                                "hdf5_compression": "lz4",
+                            }
                         }
-                    }
-                },
-            })
+                    },
+                })
 
-            with patch("benchmark.core.setup._iter_parquet_tables", wraps=setup._iter_parquet_tables) as mock_iter, \
-                 patch("benchmark.core.setup.pq.read_table", side_effect=AssertionError("read_table should not be used")):
-                setup._setup_tuned_variants(paths, tmp_path / "variants", info, cfg)
+                with patch("benchmark.core.setup._iter_parquet_tables", wraps=setup._iter_parquet_tables) as mock_iter, \
+                     patch("benchmark.core.setup.pq.read_table", side_effect=AssertionError("read_table should not be used")):
+                    setup._setup_tuned_variants(paths, tmp_path / "variants", info, cfg)
 
-            self.assertTrue((tmp_path / "variants" / "tuned_pq_lz4_5m.parquet").exists())
-            self.assertFalse((tmp_path / "variants" / "tuned_pq_5m.parquet").exists())
-            self.assertTrue((tmp_path / "variants" / "tuned_h5_5m.h5").exists())
-            self.assertIn("tuned_pq_lz4_5m", paths)
-            self.assertNotIn("tuned_pq_5m", paths)
-            self.assertTrue(mock_iter.called)
-            self.assertTrue(all(call.kwargs["max_rows"] == 1 for call in mock_iter.call_args_list))
+                self.assertTrue((tmp_path / "variants" / "tuned_pq_lz4_5m.parquet").exists())
+                self.assertFalse((tmp_path / "variants" / "tuned_pq_5m.parquet").exists())
+                self.assertTrue((tmp_path / "variants" / "tuned_h5_5m.h5").exists())
+                self.assertIn("tuned_pq_lz4_5m", paths)
+                self.assertNotIn("tuned_pq_5m", paths)
+                self.assertTrue(mock_iter.called)
+                self.assertTrue(all(call.kwargs["max_rows"] == 1 for call in mock_iter.call_args_list))
 
     def test_bench_tuned_comparison_uses_configured_chunk_sec(self):
         info = SimpleNamespace(
@@ -1352,10 +1394,10 @@ class BenchmarkRefactorTests(unittest.TestCase):
             "tuned_h5_5m": Path("dummy.h5"),
         }
 
-        with patch.object(benchmarks, "_timed", return_value=(0.1, np.zeros((1, 2), dtype=np.float32))), \
-             patch.object(benchmarks, "_read_tuned_pq", return_value=np.zeros((1, 2), dtype=np.float32)), \
-             patch.object(benchmarks, "_read_h5_columnar_window", return_value=np.zeros((1, 2), dtype=np.float32)), \
-             patch.object(benchmarks, "_chunk_ranges", return_value=[(0, 13)]) as mock_chunk_ranges:
+        with patch.object(benchmarks, "timed", return_value=(0.1, np.zeros((1, 2), dtype=np.float32))), \
+             patch.object(benchmarks, "read_tuned_parquet", return_value=np.zeros((1, 2), dtype=np.float32)), \
+             patch.object(benchmarks, "read_h5_columnar_window", return_value=np.zeros((1, 2), dtype=np.float32)), \
+             patch.object(benchmarks, "chunk_ranges", return_value=[(0, 13)]) as mock_chunk_ranges:
             benchmarks.bench_tuned_comparison(info, paths, cfg)
 
         self.assertEqual(mock_chunk_ranges.call_count, 1)
@@ -1380,10 +1422,10 @@ class BenchmarkRefactorTests(unittest.TestCase):
         })
         paths = {"baseline_parquet": Path("baseline-input.parquet")}
 
-        with patch.object(benchmarks, "_timed", return_value=(0.1, np.zeros((5, 2), dtype=np.float32))), \
-             patch.object(benchmarks, "_read_parquet_window", return_value=np.zeros((5, 2), dtype=np.float32)) as mock_read, \
-             patch.object(benchmarks, "_chunk_ranges", return_value=[(0, 13)]) as mock_chunk_ranges, \
-             patch.object(benchmarks, "_print_result") as mock_print_result:
+        with patch.object(benchmarks, "timed", return_value=(0.1, np.zeros((5, 2), dtype=np.float32))), \
+             patch.object(benchmarks, "read_parquet_window", return_value=np.zeros((5, 2), dtype=np.float32)) as mock_read, \
+             patch.object(benchmarks, "chunk_ranges", return_value=[(0, 13)]) as mock_chunk_ranges, \
+             patch.object(benchmarks, "print_result") as mock_print_result:
             results = benchmarks.bench_baseline_comparison(info, paths, cfg)
 
         self.assertEqual(
@@ -1480,7 +1522,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
         target = {"reader_kind": "h5_columnar", "path": Path("demo.h5")}
         expected = np.zeros((1, 2), dtype=np.float32)
 
-        with patch.object(benchmarks, "_read_h5_columnar_window", return_value=expected) as mock_read:
+        with patch.object(benchmarks, "read_h5_columnar_window", return_value=expected) as mock_read:
             result = benchmarks._read_target_window(target, SimpleNamespace(), ["ch_Fp1"], 10, 11)
 
         self.assertIs(result, expected)
@@ -1490,7 +1532,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
         target = {"reader_kind": "h5_rowgroup", "path": Path("demo.h5")}
         expected = np.zeros((1, 2), dtype=np.float32)
 
-        with patch.object(benchmarks, "_read_h5_rowgroup_window", return_value=expected) as mock_read:
+        with patch.object(benchmarks, "read_h5_rowgroup_window", return_value=expected) as mock_read:
             result = benchmarks._read_target_window(target, SimpleNamespace(), ["ch_Fp1"], 10, 11)
 
         self.assertIs(result, expected)
@@ -1500,7 +1542,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
         target = {"reader_kind": "hdf5_columnar", "path": Path("demo.h5")}
         expected = np.zeros((1, 2), dtype=np.float32)
 
-        with patch.object(benchmarks, "_read_h5_columnar_window", return_value=expected) as mock_read:
+        with patch.object(benchmarks, "read_h5_columnar_window", return_value=expected) as mock_read:
             result = benchmarks._read_target_window(target, SimpleNamespace(), ["ch_Fp1"], 10, 11)
 
         self.assertIs(result, expected)
@@ -1510,7 +1552,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
         target = {"reader_kind": "hdf5_rowgroup", "path": Path("demo.h5")}
         expected = np.zeros((1, 2), dtype=np.float32)
 
-        with patch.object(benchmarks, "_read_h5_rowgroup_window", return_value=expected) as mock_read:
+        with patch.object(benchmarks, "read_h5_rowgroup_window", return_value=expected) as mock_read:
             result = benchmarks._read_target_window(target, SimpleNamespace(), ["ch_Fp1"], 10, 11)
 
         self.assertIs(result, expected)
@@ -1562,7 +1604,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
         with patch.object(benchmarks, "_core_targets", return_value=[target]), \
              patch.object(benchmarks, "_read_target_window", side_effect=fake_read), \
-             patch.object(benchmarks, "_timed", side_effect=fake_timed):
+             patch.object(benchmarks, "timed", side_effect=fake_timed):
             results = benchmarks.bench_random_access(info, {}, cfg)
 
         self.assertEqual(captured, [(3, 103, None)])
@@ -1633,7 +1675,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
             }
         })
 
-        with patch.object(benchmarks, "_timed", return_value=(0.1, np.zeros((1, 5), dtype=np.float32))), \
+        with patch.object(benchmarks, "timed", return_value=(0.1, np.zeros((1, 5), dtype=np.float32))), \
              patch.object(benchmarks, "_read_target_window", side_effect=fake_read):
             results = benchmarks._run_comparison_workload_suite(
                 info,
@@ -1676,9 +1718,9 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
         with patch.object(benchmarks, "_core_targets", return_value=[target]), \
              patch.object(benchmarks, "_read_target_window", side_effect=fake_read), \
-             patch.object(benchmarks, "_apply_bipolar_montage", side_effect=lambda matrix, _labels: matrix), \
-             patch.object(benchmarks, "_apply_filters", side_effect=lambda matrix, _sos: matrix), \
-             patch.object(benchmarks, "_build_sos", return_value="sos"), \
+             patch.object(benchmarks, "apply_bipolar_montage", side_effect=lambda matrix, _labels: matrix), \
+             patch.object(benchmarks, "apply_filters", side_effect=lambda matrix, _sos: matrix), \
+             patch.object(benchmarks, "build_sos", return_value="sos"), \
              patch.object(np.fft, "rfft", return_value=np.zeros((2, 1), dtype=np.complex64)):
             results = benchmarks.bench_filter_pipeline(info, {}, {})
 
@@ -1724,7 +1766,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
         with patch.object(benchmarks, "_core_targets", return_value=[target]), \
              patch.object(benchmarks, "_read_target_window", side_effect=fake_read), \
-             patch.object(benchmarks, "_timed", side_effect=fake_timed):
+             patch.object(benchmarks, "timed", side_effect=fake_timed):
             results = benchmarks.bench_random_access(info, {}, cfg)
 
         self.assertEqual(len(seen_reader_states), 6)
@@ -1760,10 +1802,10 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
         with patch.object(benchmarks, "_core_targets", return_value=[target]) as mock_core_targets, \
              patch.object(benchmarks, "_read_target_window", side_effect=fake_read), \
-             patch.object(benchmarks, "_apply_bipolar_montage", side_effect=lambda matrix, _labels: matrix), \
-             patch.object(benchmarks, "_apply_filters", side_effect=lambda matrix, _sos: matrix), \
-             patch.object(benchmarks, "_build_sos", return_value="sos"), \
-             patch.object(benchmarks, "_full_study_duration_hours", return_value=1), \
+             patch.object(benchmarks, "apply_bipolar_montage", side_effect=lambda matrix, _labels: matrix), \
+             patch.object(benchmarks, "apply_filters", side_effect=lambda matrix, _sos: matrix), \
+             patch.object(benchmarks, "build_sos", return_value="sos"), \
+             patch.object(benchmarks, "full_study_duration_hours", return_value=1), \
              patch.object(np.fft, "rfft", return_value=np.zeros((2, 1), dtype=np.complex64)):
             results = benchmarks.bench_filter_pipeline(info, {}, {})
 
@@ -1827,7 +1869,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 },
             })
 
-            with patch.object(benchmarks, "_timed", return_value=(0.1, np.zeros((1, 2), dtype=np.float32))):
+            with patch.object(benchmarks, "timed", return_value=(0.1, np.zeros((1, 2), dtype=np.float32))):
                 results = benchmarks.bench_compression(info, paths, cfg)
 
             self.assertEqual(len(results), 1)
@@ -1868,7 +1910,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 },
             })
 
-            with patch.object(benchmarks, "_timed", return_value=(0.1, np.zeros((1, 2), dtype=np.float32))):
+            with patch.object(benchmarks, "timed", return_value=(0.1, np.zeros((1, 2), dtype=np.float32))):
                 results = benchmarks.bench_compression(info, paths, cfg)
 
             self.assertGreater(results[0]["file_size_bytes"], 0)
@@ -1988,7 +2030,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
             },
         })
 
-        with patch.object(remote, "_PeakRssTracker", FakeTracker), \
+        with patch.object(remote, "PeakRssTracker", FakeTracker), \
              patch.object(remote, "_make_duckdb_connection", return_value=FakeCon()), \
              patch.object(remote, "_duckdb_remote_read", return_value=(0.1, 10)):
             results = remote.bench_remote_query(info, {"edf": Path("missing.edf")}, cfg)
@@ -2133,8 +2175,8 @@ class BenchmarkRefactorTests(unittest.TestCase):
                  patch.object(run_benchmarks, "ingest", return_value=(Path("demo_canonical"), "parquet", 256.0)), \
                  patch.object(run_benchmarks.StudyInfo, "from_parquet", return_value=info), \
                  patch.object(run_benchmarks, "generate_variants", return_value={"parquet": Path("demo_canonical")}), \
-                 patch.object(run_benchmarks, "_system_info", return_value={"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16}), \
-                 patch.object(run_benchmarks, "_print_result") as mock_print_result:
+                 patch.object(run_benchmarks, "system_info", return_value={"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16}), \
+                 patch.object(run_benchmarks, "print_result") as mock_print_result:
                 run_benchmarks.run_benchmarks(cfg, args)
 
         mock_print_result.assert_not_called()
@@ -2216,7 +2258,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
                  patch.object(run_benchmarks, "ingest", return_value=(Path("demo_canonical"), "edf", 256.0)), \
                  patch.object(run_benchmarks.StudyInfo, "from_parquet", return_value=info), \
                  patch.object(run_benchmarks, "generate_variants", return_value={"parquet": Path("demo_canonical")}), \
-                 patch.object(run_benchmarks, "_system_info", return_value={"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16}), \
+                 patch.object(run_benchmarks, "system_info", return_value={"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16}), \
                  patch.object(run_benchmarks, "generate_report", return_value=(tmp_path / "report.md", tmp_path / "report.html")) as mock_generate_report:
                 run_benchmarks.run_benchmarks(cfg, args)
 
@@ -2268,7 +2310,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
                  patch.object(run_benchmarks, "ingest", return_value=(Path("demo_canonical"), "edf", 256.0)), \
                  patch.object(run_benchmarks.StudyInfo, "from_parquet", return_value=info), \
                  patch.object(run_benchmarks, "generate_variants", return_value={"parquet": Path("demo_canonical")}), \
-                 patch.object(run_benchmarks, "_system_info", return_value={"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16}), \
+                 patch.object(run_benchmarks, "system_info", return_value={"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16}), \
                  patch.object(run_benchmarks, "generate_report") as mock_generate_report:
                 run_benchmarks.run_benchmarks(cfg, args)
 

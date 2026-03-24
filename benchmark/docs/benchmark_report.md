@@ -38,14 +38,14 @@ Benchmark rows: **79** across **15** categories.
 
 | Area | Winner | Result |
 | --- | --- | --- |
-| Random access (warm-cache-leaning median 1-minute read) | pq_30m_lz4 | 0.0701s |
-| 4-channel subset | hdf5_col_30m | 0.0460s |
-| Full-study filter pipeline | pq_30m_lz4 | 30.88s |
-| Peak window-scaling throughput | pq_30m_lz4 @ 3600s | 329.9 MiB/s |
+| Random access (warm-cache-leaning median 1-minute read) | Parquet 30m LZ4 | 0.0701s |
+| 4-channel subset | HDF5 columnar 30m | 0.0460s |
+| Full-study filter pipeline | Parquet 30m LZ4 | 30.88s |
+| Peak window-scaling throughput | Parquet 30m LZ4 @ 3600s | 329.9 MiB/s |
 
 ## Key Observations
 
-- **Random access:** pq_30m_lz4 has the lowest warm-cache-leaning median 1-minute read time at 0.0701s, about 1.81× faster than canonical.
+- **Random access:** Parquet 30m LZ4 has the lowest warm-cache-leaning median 1-minute read time at 0.0701s, about 1.81× faster than canonical.
 - **Compression trade-off:** smallest Parquet artifact is zstd_9 at 624.4 MiB, while the fastest warm-cache 1-minute read is snappy at 0.0795s.
 - **Int32 variants:** the most compact measured variant is int32_nanovolt (zstd) at 594.3 MiB; its reported SNR vs float32 is 144.36 dB.
 - **Remote access:** the fastest remote query path in this run is duckdb_remote for 10-20 (19ch) at 0.7630s total over 2 windows.
@@ -60,9 +60,9 @@ Benchmark rows: **79** across **15** categories.
 
 **Question answered:** How sensitive is each format to where in the study a random read occurs?
 
-pq_30m_lz4 has the lowest warm-cache-leaning median 1-minute read time across read positions at 0.0701s.
+Parquet 30m LZ4 has the lowest warm-cache-leaning median 1-minute read time across read positions at 0.0701s.
 
-| Position | pq_30m_lz4 | hdf5_col_30m | canonical |
+| Position | Parquet 30m LZ4 | HDF5 columnar 30m | canonical |
 | --- | --- | --- | --- |
 | 0% | 0.0624s (first 0.2306s; peak 508.7 MiB) / 43.2 MiB/s | 0.3796s (first 0.3853s; peak 368.4 MiB) / 7.1 MiB/s | 0.1430s (first 0.1526s; peak 399.8 MiB) / 18.9 MiB/s |
 | 50% | 0.0557s (first 0.0632s; peak 534.0 MiB) / 48.4 MiB/s | 0.3756s (peak 369.1 MiB) / 7.2 MiB/s | 0.1114s (first 0.1362s; peak 484.5 MiB) / 24.2 MiB/s |
@@ -79,9 +79,9 @@ pq_30m_lz4 has the lowest warm-cache-leaning median 1-minute read time across re
 
 **Question answered:** Which formats benefit most when the workload only needs a subset of channels?
 
-4 channels → hdf5_col_30m is fastest at 0.0460s. 10 channels → pq_30m_lz4 is fastest at 0.0909s. all channels → pq_30m_lz4 is fastest at 0.0880s.
+4 channels → HDF5 columnar 30m is fastest at 0.0460s. 10 channels → Parquet 30m LZ4 is fastest at 0.0909s. all channels → Parquet 30m LZ4 is fastest at 0.0880s.
 
-| Channels | pq_30m_lz4 | hdf5_col_30m |
+| Channels | Parquet 30m LZ4 | HDF5 columnar 30m |
 | --- | --- | --- |
 | 4 | 0.0873s (first 0.0789s; peak 386.6 MiB) / 2.7 MiB/s | 0.0460s (peak 377.4 MiB) / 5.1 MiB/s |
 | 10 | 0.0909s (first 0.0917s; peak 389.5 MiB) / 6.4 MiB/s | 0.1497s (peak 378.2 MiB) / 3.9 MiB/s |
@@ -101,8 +101,8 @@ Montage is a relatively small fraction of end-to-end time in this benchmark (ave
 
 | Format | Read | Montage | Total | Montage share |
 | --- | --- | --- | --- | --- |
-| pq_30m_lz4 | 0.2435s | 0.0018s | 0.2453s (first 0.3220s; peak 374.5 MiB) | 0.7% |
-| hdf5_col_30m | 0.4342s | 0.0014s | 0.4355s (first 0.4354s; peak 376.3 MiB) | 0.3% |
+| Parquet 30m LZ4 | 0.2435s | 0.0018s | 0.2453s (first 0.3220s; peak 374.5 MiB) | 0.7% |
+| HDF5 columnar 30m | 0.4342s | 0.0014s | 0.4355s (first 0.4354s; peak 376.3 MiB) | 0.3% |
 
 ## D.1 Full-Study Filter Pipeline
 
@@ -114,12 +114,12 @@ Montage is a relatively small fraction of end-to-end time in this benchmark (ave
 
 **Question answered:** Which format is best for whole-study offline processing workloads that must read and transform all signal data?
 
-For the full-study read → montage → filter pipeline, pq_30m_lz4 is fastest at 30.88s.
+For the full-study read → montage → filter pipeline, Parquet 30m LZ4 is fastest at 30.88s.
 
 | Format | Read | Montage | Filter | Total | Throughput |
 | --- | --- | --- | --- | --- | --- |
-| pq_30m_lz4 | 23.57s | 2.047s | 5.253s | 30.88s (peak 929.2 MiB) | 62.9 MiB/s |
-| hdf5_col_30m | 65.53s | 1.558s | 5.105s | 72.20s (peak 946.3 MiB) | 26.9 MiB/s |
+| Parquet 30m LZ4 | 23.57s | 2.047s | 5.253s | 30.88s (peak 929.2 MiB) | 62.9 MiB/s |
+| HDF5 columnar 30m | 65.53s | 1.558s | 5.105s | 72.20s (peak 946.3 MiB) | 26.9 MiB/s |
 
 ## D.2 Sliding FFT
 
@@ -135,8 +135,8 @@ This stage computed 21,596 overlapping FFT windows across the full study.
 
 | Format | Read | Montage | Filter | FFT | Total |
 | --- | --- | --- | --- | --- | --- |
-| pq_30m_lz4 | 19.03s | 1.115s | 4.429s | 15.22s | 40.43s (peak 1,019.6 MiB) |
-| hdf5_col_30m | 41.07s | 0.9430s | 3.379s | 11.04s | 56.92s (peak 1,029.6 MiB) |
+| Parquet 30m LZ4 | 19.03s | 1.115s | 4.429s | 15.22s | 40.43s (peak 1,019.6 MiB) |
+| HDF5 columnar 30m | 41.07s | 0.9430s | 3.379s | 11.04s | 56.92s (peak 1,029.6 MiB) |
 
 ## E. Window Scaling
 
@@ -148,9 +148,9 @@ This stage computed 21,596 overlapping FFT windows across the full study.
 
 **Question answered:** How does each format transition from small random reads to large sustained reads?
 
-Best measured throughput is 329.9 MiB/s from pq_30m_lz4 at a 3600s window.
+Best measured throughput is 329.9 MiB/s from Parquet 30m LZ4 at a 3600s window.
 
-| Window | pq_30m_lz4 | hdf5_col_30m |
+| Window | Parquet 30m LZ4 | HDF5 columnar 30m |
 | --- | --- | --- |
 | 10s | 6.1 MiB/s | 2.2 MiB/s |
 | 30s | 14.8 MiB/s | 5.1 MiB/s |

@@ -48,30 +48,6 @@ from .signal import apply_bipolar_montage, apply_filters, build_sos
 from .study_info import StudyInfo
 
 
-_PeakRssTracker = PeakRssTracker
-_chunk_ranges = chunk_ranges
-_edf_file = edf_file
-_full_study_duration_hours = full_study_duration_hours
-_get_tuned_block_sizes = get_tuned_block_sizes
-_max_peak_rss = max_peak_rss
-_peak_rss_fields = peak_rss_fields
-_print_result = print_result
-_apply_bipolar_montage = apply_bipolar_montage
-_apply_filters = apply_filters
-_build_sos = build_sos
-_read_h5_columnar_window = read_h5_columnar_window
-_read_h5_input_window = read_h5_input_window
-_read_h5_rowgroup_window = read_h5_rowgroup_window
-_read_int32_calibrated = read_int32_calibrated
-_read_int32_calibrated_arrow = read_int32_calibrated_arrow
-_read_int32_nanovolt = read_int32_nanovolt
-_read_int32_nanovolt_arrow = read_int32_nanovolt_arrow
-_read_parquet_window = read_parquet_window
-_read_tuned_pq = read_tuned_parquet
-_throughput = throughput
-_timed = timed
-
-
 def _target_context(target: dict):
     # Benchmark timing intentionally avoids keeping EDF readers open across
     # repeated timed iterations so EDF is measured with reopen cost included.
@@ -86,13 +62,13 @@ def _normalize_reader_kind(kind: str) -> str:
 
 
 def _timed_call(fn, reps: int, precision: int = 6):
-    timing = _timed(fn, reps)
+    timing = timed(fn, reps)
     median_seconds, result = timing
     first_seconds = float(getattr(timing, "first_seconds", median_seconds))
     fields = {
         "wall_clock_seconds": round(float(median_seconds), precision),
         "first_wall_clock_seconds": round(first_seconds, precision),
-        **_peak_rss_fields(getattr(timing, "peak_rss_mib", None)),
+        **peak_rss_fields(getattr(timing, "peak_rss_mib", None)),
     }
     all_seconds = getattr(timing, "all_seconds", None)
     if all_seconds:
@@ -106,31 +82,31 @@ def _single_timing_fields(seconds: float, precision: int = 6,
     return {
         "wall_clock_seconds": rounded,
         "first_wall_clock_seconds": rounded,
-        **_peak_rss_fields(peak_rss_mib),
+        **peak_rss_fields(peak_rss_mib),
     }
 
 
-def _read_target_window(target: dict, info, columns: list[str],
+def _read_target_window(target: dict, info: StudyInfo, columns: list[str],
                         start_stamp: int, end_stamp: int,
                         reader_state=None) -> np.ndarray:
     kind = _normalize_reader_kind(target["reader_kind"])
     path = target["path"]
     if kind == "parquet":
-        return _read_parquet_window(path, columns, start_stamp, end_stamp)
+        return read_parquet_window(path, columns, start_stamp, end_stamp)
     if kind == "tuned_parquet":
-        return _read_tuned_pq(path, columns, start_stamp, end_stamp)
+        return read_tuned_parquet(path, columns, start_stamp, end_stamp)
     if kind == "h5_columnar":
-        return _read_h5_columnar_window(path, columns, start_stamp, end_stamp)
+        return read_h5_columnar_window(path, columns, start_stamp, end_stamp)
     if kind == "h5_rowgroup":
-        return _read_h5_rowgroup_window(path, columns, start_stamp, end_stamp)
+        return read_h5_rowgroup_window(path, columns, start_stamp, end_stamp)
     if kind == "hdf5_input":
-        return _read_h5_input_window(path, columns, start_stamp, end_stamp)
+        return read_h5_input_window(path, columns, start_stamp, end_stamp)
     if kind == "edf":
         start_sample = int(start_stamp)
         n_samples = max(0, int(end_stamp) - int(start_stamp) + 1)
         channel_indices = [info.channel_columns.index(col) for col in columns]
         if reader_state is None:
-            with EdfFileReader(_edf_file(path)) as reader:
+            with EdfFileReader(edf_file(path)) as reader:
                 return reader.read_window(start_sample, n_samples, channel_indices)
         return reader_state.read_window(start_sample, n_samples, channel_indices)
     raise ValueError(f"Unknown target reader kind: {kind}")
@@ -196,7 +172,7 @@ def _position_row_window(total_rows: int, position: float, row_count: int) -> tu
     return _clamp_row_window(total_rows, int(position * total_rows), row_count)
 
 
-def _stamp_bounds(info, row_bounds: tuple[int, int]) -> tuple[int, int]:
+def _stamp_bounds(info: StudyInfo, row_bounds: tuple[int, int]) -> tuple[int, int]:
     start_row, end_row = row_bounds
     return info.stamp_at_row(start_row), info.stamp_at_row(end_row)
 
@@ -216,14 +192,14 @@ def _row_chunk_windows(total_rows: int, chunk_rows: int,
         return []
     chunk_rows = max(1, int(chunk_rows))
     end_row = bench_rows - 1
-    return list(_chunk_ranges(0, end_row, chunk_rows))
+    return list(chunk_ranges(0, end_row, chunk_rows))
 
 
 def _append_logged_result(results: list[dict], row: dict) -> None:
     row = dict(row)
     row["_printed_inline"] = True
     results.append(row)
-    _print_result(row)
+    print_result(row)
 
 
 def _timed_variant_window_read(info: StudyInfo, variant: dict,
@@ -261,7 +237,7 @@ def _run_comparison_random_access(results: list[dict], info: StudyInfo,
             **variant["result_fields"],
             "window_seconds": window_sec,
             **timing_fields,
-            **_throughput(n_samples, n_channels, t),
+            **throughput(n_samples, n_channels, t),
         })
 
 
@@ -285,7 +261,7 @@ def _run_comparison_channel_subset(results: list[dict], info: StudyInfo,
             **variant["result_fields"],
             "window_seconds": window_sec,
             **timing_fields,
-            **_throughput(n_samples, len(subset_cols), t),
+            **throughput(n_samples, len(subset_cols), t),
         })
 
 
@@ -315,7 +291,7 @@ def _run_comparison_window_scaling(results: list[dict], info: StudyInfo,
                 **variant["result_fields"],
                 "window_seconds": ws,
                 **timing_fields,
-                **_throughput(n_samples, n_channels, t),
+                **throughput(n_samples, n_channels, t),
             })
 
 
@@ -334,7 +310,7 @@ def _run_comparison_full_study(results: list[dict], info: StudyInfo,
     for variant in variants:
         samples_read = 0
         chunk_bounds = row_chunks if variant["reader_kind"] == "edf" else stamp_chunks
-        with _PeakRssTracker() as memory_tracker, _target_context(variant) as reader_state:
+        with PeakRssTracker() as memory_tracker, _target_context(variant) as reader_state:
             t_wall_start = time.perf_counter()
             for cs, ce in chunk_bounds:
                 matrix = _read_target_window(variant, info, channel_columns, cs, ce, reader_state)
@@ -347,7 +323,7 @@ def _run_comparison_full_study(results: list[dict], info: StudyInfo,
             **variant["result_fields"],
             "total_samples": samples_read,
             **_single_timing_fields(t_wall, precision=3, peak_rss_mib=memory_tracker.peak_rss_mib),
-            **_throughput(samples_read, n_channels, t_wall),
+            **throughput(samples_read, n_channels, t_wall),
         })
 
 
@@ -393,7 +369,7 @@ def _run_comparison_workload_suite(info: StudyInfo, variants: list[dict], cfg: d
 
 
 def _filter_pipeline_bench_rows(info: StudyInfo) -> tuple[int, int, float]:
-    hours = max(1, _full_study_duration_hours(info))
+    hours = max(1, full_study_duration_hours(info))
     bench_rows = min(max(1, int(hours * 3600 * info.sample_freq)), info.total_rows)
     bench_sec = bench_rows / info.sample_freq
     return hours, bench_rows, bench_sec
@@ -412,7 +388,7 @@ def _bench_filter_pipeline_full_target(info: StudyInfo, target: dict,
     stamp_chunks = [_stamp_bounds(info, row_bounds) for row_bounds in row_chunks]
     chunk_bounds = row_chunks if target["reader_kind"] == "edf" else stamp_chunks
 
-    with _PeakRssTracker() as memory_tracker, _target_context(target) as reader_state:
+    with PeakRssTracker() as memory_tracker, _target_context(target) as reader_state:
         t_read_total = t_mont_total = t_filt_total = 0.0
         total_samples_read = 0
         t_wall_start = time.perf_counter()
@@ -422,11 +398,11 @@ def _bench_filter_pipeline_full_target(info: StudyInfo, target: dict,
             t_read_total += time.perf_counter() - t0
 
             t1 = time.perf_counter()
-            derived = _apply_bipolar_montage(matrix, labels)
+            derived = apply_bipolar_montage(matrix, labels)
             t_mont_total += time.perf_counter() - t1
 
             t2 = time.perf_counter()
-            _apply_filters(derived, sos)
+            apply_filters(derived, sos)
             t_filt_total += time.perf_counter() - t2
 
             total_samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
@@ -444,7 +420,7 @@ def _bench_filter_pipeline_full_target(info: StudyInfo, target: dict,
         "read_seconds": round(t_read_total, 3),
         "montage_seconds": round(t_mont_total, 3),
         "filter_seconds": round(t_filt_total, 3),
-        **_throughput(total_samples_read, n_channels, t_wall),
+        **throughput(total_samples_read, n_channels, t_wall),
     }
 
 
@@ -466,7 +442,7 @@ def _bench_sliding_fft_target(info: StudyInfo, target: dict,
     stamp_fft_chunks = [_stamp_bounds(info, row_bounds) for row_bounds in row_fft_chunks]
     chunk_bounds = row_fft_chunks if target["reader_kind"] == "edf" else stamp_fft_chunks
 
-    with _PeakRssTracker() as memory_tracker, _target_context(target) as reader_state:
+    with PeakRssTracker() as memory_tracker, _target_context(target) as reader_state:
         t_read_total = t_mont_total = t_filt_total = t_fft_total = 0.0
         total_samples_read = 0
         fft_count = 0
@@ -479,11 +455,11 @@ def _bench_sliding_fft_target(info: StudyInfo, target: dict,
             t_read_total += time.perf_counter() - t0
 
             t1 = time.perf_counter()
-            derived = _apply_bipolar_montage(matrix, labels)
+            derived = apply_bipolar_montage(matrix, labels)
             t_mont_total += time.perf_counter() - t1
 
             t2 = time.perf_counter()
-            filtered = _apply_filters(derived, sos)
+            filtered = apply_filters(derived, sos)
             t_filt_total += time.perf_counter() - t2
 
             total_samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
@@ -523,12 +499,12 @@ def _bench_sliding_fft_target(info: StudyInfo, target: dict,
         "montage_seconds": round(t_mont_total, 3),
         "filter_seconds": round(t_filt_total, 3),
         "fft_seconds": round(t_fft_total, 3),
-        **_throughput(total_samples_read, n_channels, t_wall),
+        **throughput(total_samples_read, n_channels, t_wall),
     }
 
 
 def _tuned_comparison_variants(paths: dict, cfg: dict, sample_freq: float) -> list[dict]:
-    block_sizes = _get_tuned_block_sizes(cfg, sample_freq)
+    block_sizes = get_tuned_block_sizes(cfg, sample_freq)
     parquet_codecs = get_tuned_parquet_codecs(cfg)
     hdf5_compression = get_tuned_hdf5_compression(cfg)
     variants = []
@@ -613,7 +589,7 @@ def bench_random_access(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> l
                     "position": label,
                     "window_seconds": window_sec,
                     **timing_fields,
-                    **_throughput(n_samples, n_channels, t),
+                    **throughput(n_samples, n_channels, t),
                 })
 
     return results
@@ -650,7 +626,7 @@ def bench_channel_subset(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> 
                     **_core_result_fields(target),
                     "window_seconds": window_sec,
                     **timing_fields,
-                    **_throughput(n_samples, n_ch, t),
+                    **throughput(n_samples, n_ch, t),
                     "channels": ch_label,
                 })
 
@@ -679,14 +655,14 @@ def bench_remontage(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> list[
                 matrix = _read_target_window(tgt, info, info.channel_columns, start_bound, end_bound, rs)
                 read_sec = time.perf_counter() - t_read_start
                 t_mont_start = time.perf_counter()
-                derived = _apply_bipolar_montage(matrix, labels)
+                derived = apply_bipolar_montage(matrix, labels)
                 montage_sec = time.perf_counter() - t_mont_start
                 return matrix, derived, read_sec, montage_sec
 
             times_read, times_mont, peaks = [], [], []
             matrix = derived = None
             for _ in range(reps):
-                with _PeakRssTracker() as memory_tracker:
+                with PeakRssTracker() as memory_tracker:
                     matrix, derived, r, m = run()
                 times_read.append(r)
                 times_mont.append(m)
@@ -703,11 +679,11 @@ def bench_remontage(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> list[
                 "wall_clock_seconds": round(total, 6),
                 "first_wall_clock_seconds": round(times_read[0] + times_mont[0], 6),
                 "timing_samples_seconds": [round(r + m, 6) for r, m in zip(times_read, times_mont)],
-                **_peak_rss_fields(_max_peak_rss(peaks)),
+                **peak_rss_fields(max_peak_rss(peaks)),
                 "read_seconds": round(read_sec, 6),
                 "montage_seconds": round(mont_sec, 6),
                 "derived_channels": derived.shape[0] if derived is not None and derived.ndim == 2 else 0,
-                **_throughput(n_samples, n_channels, total),
+                **throughput(n_samples, n_channels, total),
             })
     return results
 
@@ -717,7 +693,7 @@ def bench_filter_pipeline(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) ->
     labels = list(info.channel_labels)
     n_channels = len(labels)
     sample_freq = info.sample_freq
-    sos = _build_sos(sample_freq)
+    sos = build_sos(sample_freq)
 
     hours, bench_rows, bench_sec = _filter_pipeline_bench_rows(info)
 
@@ -771,7 +747,7 @@ def bench_window_scaling(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> 
                     **_core_result_fields(target),
                     "window_seconds": window_sec,
                     **timing_fields,
-                    **_throughput(n_samples, n_channels, t),
+                    **throughput(n_samples, n_channels, t),
                 })
 
     return results
@@ -801,7 +777,7 @@ def bench_compression(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> lis
 
         pq_path = paths[key]
         total_size = parquet_total_size_bytes(pq_path)
-        t, data, timing_fields = _timed_call(lambda: _read_parquet_window(pq_path, info.channel_columns, start_stamp, end_stamp), reps)
+        t, data, timing_fields = _timed_call(lambda: read_parquet_window(pq_path, info.channel_columns, start_stamp, end_stamp), reps)
         n_samples = data.shape[1] if data.ndim == 2 else 0
 
         none_key = "parquet_none"
@@ -819,7 +795,7 @@ def bench_compression(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> lis
             "compression_ratio": ratio,
             "window_seconds": window_sec,
             **timing_fields,
-            **_throughput(n_samples, n_channels, t),
+            **throughput(n_samples, n_channels, t),
         })
 
     return results
@@ -837,7 +813,7 @@ def bench_precision_loss(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> 
     row_bounds = _mid_row_window(info.total_rows, window_rows)
     start_stamp, end_stamp = _stamp_bounds(info, row_bounds)
 
-    matrix = _read_parquet_window(paths["parquet"], info.channel_columns, start_stamp, end_stamp)
+    matrix = read_parquet_window(paths["parquet"], info.channel_columns, start_stamp, end_stamp)
     labels = list(info.channel_labels)
     channel_results = []
 
@@ -913,13 +889,13 @@ def bench_int32_storage(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> l
     n_channels = len(info.channel_labels)
     columns = info.channel_columns
 
-    ground_truth = _read_parquet_window(paths["parquet"], columns, start_stamp, end_stamp)
+    ground_truth = read_parquet_window(paths["parquet"], columns, start_stamp, end_stamp)
     float32_size = parquet_total_size_bytes(paths["parquet"])
     read_methods = [
-        ("numpy", "int32_calibrated", _read_int32_calibrated),
-        ("numpy", "int32_nanovolt", _read_int32_nanovolt),
-        ("arrow", "int32_calibrated", _read_int32_calibrated_arrow),
-        ("arrow", "int32_nanovolt", _read_int32_nanovolt_arrow),
+        ("numpy", "int32_calibrated", read_int32_calibrated),
+        ("numpy", "int32_nanovolt", read_int32_nanovolt),
+        ("arrow", "int32_calibrated", read_int32_calibrated_arrow),
+        ("arrow", "int32_nanovolt", read_int32_nanovolt_arrow),
     ]
 
     for read_label, mode, read_fn in read_methods:
@@ -959,12 +935,12 @@ def bench_int32_storage(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> l
                 "max_abs_error_uv": round(max_err, 10),
                 "rms_error_uv": round(rms_err, 10),
                 "snr_vs_float32_db": round(snr_db, 2) if snr_db != float("inf") else "inf",
-                **_throughput(n_samples, n_channels, t),
+                **throughput(n_samples, n_channels, t),
             })
 
     zstd_key = "parquet_zstd_3"
     if zstd_key in paths:
-        t, data, timing_fields = _timed_call(lambda: _read_parquet_window(paths[zstd_key], columns, start_stamp, end_stamp), reps)
+        t, data, timing_fields = _timed_call(lambda: read_parquet_window(paths[zstd_key], columns, start_stamp, end_stamp), reps)
         zstd_size = parquet_total_size_bytes(paths[zstd_key])
         n_samples = data.shape[1] if data.ndim == 2 else 0
         results.append({
@@ -980,7 +956,7 @@ def bench_int32_storage(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> l
             "max_abs_error_uv": 0.0,
             "rms_error_uv": 0.0,
             "snr_vs_float32_db": "inf",
-            **_throughput(n_samples, n_channels, t),
+            **throughput(n_samples, n_channels, t),
         })
 
     return results

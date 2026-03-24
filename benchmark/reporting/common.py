@@ -36,7 +36,10 @@ def formats_in_rows(rows: list[dict[str, Any]]) -> list[str]:
         order = row.get("artifact_order")
         if fmt not in order_by_format or (isinstance(order, (int, float)) and order < order_by_format[fmt]):
             order_by_format[fmt] = float(order) if isinstance(order, (int, float)) else float("inf")
-    extras = sorted(formats.difference(ordered), key=lambda fmt: (order_by_format.get(fmt, float("inf")), fmt))
+    extras = sorted(
+        formats.difference(ordered),
+        key=lambda fmt: (order_by_format.get(fmt, float("inf")), label(fmt).lower(), fmt),
+    )
     return ordered + extras
 
 
@@ -89,8 +92,43 @@ def timing_cell(row: dict[str, Any], time_key: str) -> str:
     return text
 
 
+def _codec_label(value: str) -> str:
+    return {
+        "lz4": "LZ4",
+        "snappy": "snappy",
+        "zstd": "zstd",
+        "gzip": "gzip",
+        "none": "uncompressed",
+    }.get(value, value)
+
+
+def _layout_label(value: str) -> str:
+    return {
+        "col": "columnar",
+        "columnar": "columnar",
+        "rg": "row-group",
+        "rowgroup": "row-group",
+    }.get(value, value)
+
+
+def _humanize_dynamic_format(value: str) -> str:
+    pq_match = re.fullmatch(r"pq_([0-9]+(?:\.[0-9]+)?[smh])_([a-z0-9_]+)", value)
+    if pq_match:
+        block_size, codec = pq_match.groups()
+        return f"Parquet {block_size} {_codec_label(codec)}"
+
+    hdf5_match = re.fullmatch(r"h(?:df5|5)_([a-z]+)_([0-9]+(?:\.[0-9]+)?[smh])(?:_([a-z0-9_]+))?", value)
+    if hdf5_match:
+        layout, block_size, codec = hdf5_match.groups()
+        layout_text = _layout_label(layout)
+        codec_text = f" {_codec_label(codec)}" if codec else ""
+        return f"HDF5 {layout_text} {block_size}{codec_text}"
+
+    return value
+
+
 def label(value: str) -> str:
-    return FORMAT_LABELS.get(value, value)
+    return FORMAT_LABELS.get(value, _humanize_dynamic_format(value))
 
 
 def format_seconds(value: float) -> str:

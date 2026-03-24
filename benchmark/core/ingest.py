@@ -20,6 +20,9 @@ from .hash_utils import spec_hash
 from .parquet_paths import list_parquet_files
 
 
+EDF_DEFAULT_READ_WINDOW_SECONDS = 30
+
+
 def _detect_format(input_path: Path) -> str:
     """Return 'parquet', 'hdf5', 'edf', or 'erd' based on the input path."""
     if input_path.is_dir():
@@ -229,7 +232,10 @@ def _iter_hdf5_tables(hf, row_group_size: int | None):
 
 def _edf_batch_rows(total_rows: int, sample_freq: float,
                     row_group_size: int | None) -> int:
-    default_chunk_rows = max(int(np.ceil(float(sample_freq))) * 30, 1)
+    # EDF reads materialize a dense channels × samples block for each window.
+    # Cap the default reader window at a modest duration so ingest does not
+    # silently balloon memory on high-rate or high-channel-count studies.
+    default_chunk_rows = max(int(np.ceil(float(sample_freq))) * EDF_DEFAULT_READ_WINDOW_SECONDS, 1)
     chunk_rows = default_chunk_rows if row_group_size is None else min(int(row_group_size), default_chunk_rows)
     return max(1, min(total_rows, chunk_rows))
 

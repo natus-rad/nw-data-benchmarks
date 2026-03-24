@@ -239,6 +239,84 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         self.assertIn("| Baseline input | 0.0810s / 33.1 MiB/s |", rendered)
         self.assertIn("| Baseline input | 16.20s / 128.0 MiB/s |", rendered)
 
+    def test_render_report_humanizes_dynamic_variant_format_ids(self) -> None:
+        payload = {
+            "run_id": "2026-03-21T00-00-00",
+            "system": {"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16},
+            "studies": [
+                {
+                    "name": "demo",
+                    "channels": 2,
+                    "sample_freq": 100.0,
+                    "total_stamps": 1000,
+                    "duration_seconds": 10.0,
+                }
+            ],
+            "benchmarks": [
+                {
+                    "category": "random_access",
+                    "format": "pq_30m_lz4",
+                    "position": "0%",
+                    "artifact_order": 0,
+                    "wall_clock_seconds": 0.4,
+                    "mib_per_sec": 12.0,
+                },
+                {
+                    "category": "random_access",
+                    "format": "hdf5_col_30m",
+                    "position": "0%",
+                    "artifact_order": 1,
+                    "wall_clock_seconds": 0.5,
+                    "mib_per_sec": 10.0,
+                },
+            ],
+        }
+        template = "# Report\n\n${a_results}\n"
+
+        rendered = render_report(payload, template, Path("benchmark/results/demo.json"))
+
+        self.assertIn("Parquet 30m LZ4", rendered)
+        self.assertIn("HDF5 columnar 30m", rendered)
+        self.assertNotIn("| Position | pq_30m_lz4 | hdf5_col_30m |", rendered)
+
+    def test_render_report_orders_unknown_formats_by_artifact_order_before_label(self) -> None:
+        payload = {
+            "run_id": "2026-03-21T00-00-00",
+            "system": {"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16},
+            "studies": [
+                {
+                    "name": "demo",
+                    "channels": 2,
+                    "sample_freq": 100.0,
+                    "total_stamps": 1000,
+                    "duration_seconds": 10.0,
+                }
+            ],
+            "benchmarks": [
+                {
+                    "category": "random_access",
+                    "format": "hdf5_col_30m",
+                    "position": "0%",
+                    "artifact_order": 1,
+                    "wall_clock_seconds": 0.5,
+                    "mib_per_sec": 10.0,
+                },
+                {
+                    "category": "random_access",
+                    "format": "pq_30m_lz4",
+                    "position": "0%",
+                    "artifact_order": 0,
+                    "wall_clock_seconds": 0.4,
+                    "mib_per_sec": 12.0,
+                },
+            ],
+        }
+        template = "# Report\n\n${a_results}\n"
+
+        rendered = render_report(payload, template, Path("benchmark/results/demo.json"))
+
+        self.assertIn("| Position | Parquet 30m LZ4 | HDF5 columnar 30m |", rendered)
+
     def test_render_report_handles_zero_artifact_size_without_crashing(self) -> None:
         payload = {
             "run_id": "2026-03-21T00-00-00",
