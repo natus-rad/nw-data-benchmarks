@@ -8,6 +8,7 @@ from __future__ import annotations
 from enum import Enum
 
 
+# TODO: replace with stdlib StrEnum when 3.10 support is dropped.
 class _StrEnum(str, Enum):
     """str+Enum base so that members compare equal to plain strings."""
 
