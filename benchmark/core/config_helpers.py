@@ -16,6 +16,11 @@ DEFAULT_TUNED_BLOCK_MINUTES = [5, 10, 20, 30, 60, 120]
 DEFAULT_TUNED_PARQUET_CODECS = ["snappy", "lz4"]
 DEFAULT_TUNED_HDF5_COMPRESSION = "lz4"
 DEFAULT_TUNED_CHUNK_SEC = 300
+DEFAULT_FILTER_PIPELINE_CFG = {
+    "fft_window_sec": 10.0,
+    "fft_stride_sec": 2.0,
+    "read_chunk_sec": 300.0,
+}
 DEFAULT_CANONICAL_PARQUET = {
     "id": "canonical",
     "compression": "snappy",
@@ -110,6 +115,10 @@ def normalize_config(cfg: dict | None) -> dict:
         Category.FILTER_PIPELINE: _normalize_core_leaf(
             raw_filter_pipeline,
             "all",
+            {
+                key: float(raw_filter_pipeline.get(key, default))
+                for key, default in DEFAULT_FILTER_PIPELINE_CFG.items()
+            },
         ),
         Category.WINDOW_SCALING: _normalize_core_leaf(
             raw_window_scaling,
@@ -195,6 +204,12 @@ def validate_config(cfg: dict) -> None:
                 f"benchmarks.core.{category}.variants references unknown variant ids: {unknown}"
             )
 
+    filter_pipeline_cfg = get_filter_pipeline_cfg(cfg)
+    for field in ("fft_window_sec", "fft_stride_sec", "read_chunk_sec"):
+        value = filter_pipeline_cfg.get(field)
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or float(value) <= 0:
+            raise ValueError(f"benchmarks.core.filter_pipeline.{field} must be a positive number")
+
 
 def get_benchmarks_cfg(cfg: dict) -> dict:
     return _dict_or_empty(cfg.get("benchmarks"))
@@ -218,6 +233,14 @@ def is_core_category_enabled(cfg: dict, category: str) -> bool:
 
 def get_core_variants_selector(cfg: dict, category: str):
     return get_core_category_cfg(cfg, category).get("variants", "all")
+
+
+def get_filter_pipeline_cfg(cfg: dict) -> dict:
+    raw = get_core_category_cfg(cfg, Category.FILTER_PIPELINE)
+    return {
+        key: float(raw.get(key, default))
+        for key, default in DEFAULT_FILTER_PIPELINE_CFG.items()
+    }
 
 
 def get_core_include_canonical(cfg: dict, category: str) -> bool:

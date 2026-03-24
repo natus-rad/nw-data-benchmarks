@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import os
 import sys
 import threading
@@ -23,6 +24,7 @@ from .config_helpers import (
 
 BYTES_PER_FLOAT32 = 4
 _MEMORY_POLL_INTERVAL_SECONDS = 0.05
+logger = logging.getLogger(__name__)
 
 
 def _current_process_rss_bytes() -> int | None:
@@ -31,7 +33,7 @@ def _current_process_rss_bytes() -> int | None:
 
         return int(psutil.Process().memory_info().rss)
     except Exception:
-        pass
+        logger.debug("RSS detection via psutil failed; falling back to platform-specific strategies", exc_info=True)
 
     if sys.platform == "win32":
         try:
@@ -58,9 +60,13 @@ def _current_process_rss_bytes() -> int | None:
                 ctypes.byref(counters),
                 counters.cb,
             ):
+                logger.debug("RSS detection via GetProcessMemoryInfo returned failure status; returning None")
+                logger.debug("RSS detection failed; returning None")
                 return None
             return int(counters.WorkingSetSize)
         except Exception:
+            logger.debug("RSS detection via GetProcessMemoryInfo failed; returning None", exc_info=True)
+            logger.debug("RSS detection failed; returning None")
             return None
 
     statm_path = "/proc/self/statm"
@@ -71,7 +77,9 @@ def _current_process_rss_bytes() -> int | None:
             if len(parts) >= 2:
                 return int(parts[1]) * int(os.sysconf("SC_PAGE_SIZE"))
         except Exception:
-            return None
+            logger.debug("RSS detection via /proc/self/statm failed", exc_info=True)
+
+    logger.debug("RSS detection failed; returning None")
 
     return None
 

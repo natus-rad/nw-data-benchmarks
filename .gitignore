@@ -4,9 +4,6 @@
 # Benchmark result JSON files (regenerated on each run)
 benchmark/results/*.json
 
-# HTML reports (generated, not tracked — use markdown reports instead)
-benchmark/docs/*.html
-
 # Python
 __pycache__/
 *.pyc

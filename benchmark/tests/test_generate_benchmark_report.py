@@ -6,6 +6,7 @@ from unittest.mock import patch
 import benchmark.reporting.html as reporting_html
 from benchmark.scripts.generate_benchmark_report import (
     ReportGenerationError,
+    TEMPLATE_PATH,
     block_sort_key,
     generate_report,
     latest_results_file,
@@ -590,6 +591,11 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
             self.assertEqual(report_html, output_path.with_suffix(".html").resolve())
             self.assertTrue(report_md.exists())
             self.assertTrue(report_html.exists())
+
+    def test_tracked_report_template_marks_generated_output(self) -> None:
+        template_text = TEMPLATE_PATH.read_text(encoding="utf-8")
+
+        self.assertTrue(template_text.startswith("<!-- AUTO-GENERATED -->\n"))
 
 
 if __name__ == "__main__":

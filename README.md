@@ -44,7 +44,7 @@ The default configuration uses a public Azure Parquet study (~12.9 hours, 46 cha
 |---|---|
 | Storage account | `nwcsandboxstorage` |
 | Container | `waveforms` |
-| Parquet path | `parquet/Suppression~ B_54c97daa-...float32.snappy.parquet/` |
+| Parquet path | `external/benchmarks/parquet/Suppression~ B_54c97daa-...float32.snappy.parquet/` |
 | Channels | 46 (10-20 + auxiliaries) |
 | Sample rate | 256 Hz |
 | Duration | ~12.9 hours (~11.85M samples) |
@@ -204,3 +204,74 @@ If `--input` is omitted, `generate_benchmark_report.py` automatically picks the 
 - Python 3.10+
 - See `requirements.txt` for dependencies
 - ~5 GB free disk space for cached inputs and derived variants
+
+## HDF5 input quick start
+
+If you want to benchmark your own HDF5 EEG data with minimal setup, start from `benchmark/config/from_hdf5.template.yaml`.
+
+### Fastest path
+
+1. Copy `benchmark/config/from_hdf5.template.yaml` to a new config file.
+2. Set `studies[0].input` to your HDF5 file path.
+3. If your file does not store `sample_freq` in HDF5 file attributes, set `studies[0].sample_freq` explicitly.
+4. If you want to benchmark only your source HDF5 artifact and avoid generating extra comparison artifacts, set `variants: []` and enable only the benchmark sections you want.
+5. Run `python -m benchmark.scripts.run_benchmarks --config your_config.yaml`.
+
+### Recommended HDF5-only config shape
+
+If your goal is to test only your existing HDF5 data, use:
+
+- core benchmarks A-E
+- optional section K (`baseline_comparison`) for the J-style workload suite on the original HDF5 artifact
+- `variants: []`
+
+With that setup:
+
+- core benchmarks read the original HDF5 source directly when no root variants exist
+- section K also runs directly on the original HDF5 input artifact
+- no extra benchmark variants are generated
+
+### What HDF5 input layouts are supported
+
+The ingest path currently supports either of these layouts:
+
+#### `channels` group layout
+
+- HDF5 group: `channels`
+- one dataset per channel under `channels/<label>`
+- all channel datasets must have the same length
+
+The dataset names become the benchmark channel labels.
+
+#### `data` matrix layout
+
+- dataset: `data`
+- 2D shape `(N, C)` where `N` is samples/rows and `C` is channels/columns
+
+For this layout, channel labels are read from the HDF5 file attribute `channel_labels`.
+If `channel_labels` is missing, the benchmark falls back to generated names like `0`, `1`, `2`, which then become canonical Parquet columns like `ch_0`, `ch_1`, `ch_2`.
+
+### Sample frequency and timestamp expectations
+
+The benchmark suite needs sampling frequency.
+
+- It first looks for the HDF5 file attribute `sample_freq`.
+- If that attribute is absent or invalid, set `studies[0].sample_freq` in config.
+- If neither is provided, HDF5 ingest fails.
+
+For timestamps/sample index, the ingest path looks for one of these datasets at the file root:
+
+- `samplestamp`
+- `timestamps`
+- `time`
+- `sample_index`
+
+If none of those exists, the benchmark creates a default 0-based sample index automatically.
+
+### Practical notes and pitfalls
+
+- Internally, supported HDF5 input is normalized to canonical Parquet columns like `samplestamp` and `ch_<label>`.
+- If your file has neither a `channels` group nor a 2D `data` dataset, the current ingest path will fail.
+- All channels are expected to describe the same sample span.
+- For best results, timestamps/sample indices should be monotonic and match the channel data length.
+- Before a full run, use `python -m benchmark.scripts.run_benchmarks --config your_config.yaml --dry-run` to confirm the config loads and the selected benchmark sections match what you expect.

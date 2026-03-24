@@ -185,14 +185,14 @@ def benchmark_remontage(edf_path, metadata):
     return {"read": read_time, "montage": montage_time, "total": total_time}
 
 
-def maybe_download_edf_files(cfgs: dict, output_dir: Path = Path("./data/")):
+def maybe_download_edf_files(cfgs: dict, output_dir: Path = Path("./.benchmark_cache/edf/")):
     azure_cfg = cfgs["azure"]
     azure_dir = azure_cfg["folder"].rstrip("/") + "/"
     azure_files = azure_cfg["files"]
     azure_paths = [azure_dir + azure_file for azure_file in azure_files]
 
     # ensure local edf dir exists
-    local_dir = output_dir / azure_dir
+    local_dir = output_dir
     if not local_dir.exists():
         local_dir.mkdir(parents=True, exist_ok=True)
 
@@ -202,8 +202,8 @@ def maybe_download_edf_files(cfgs: dict, output_dir: Path = Path("./data/")):
     container_client = client.get_container_client(container)
 
     # download each file if it does not exist
-    for azure_edf_path in azure_paths:
-        output_path = output_dir / azure_edf_path
+    for azure_edf_path, azure_file in zip(azure_paths, azure_files):
+        output_path = output_dir / azure_file
         if not output_path.exists():
             print(f"  [download] {azure_edf_path} ... ", end="", flush=True)
             t_start = time.perf_counter()
@@ -214,7 +214,7 @@ def maybe_download_edf_files(cfgs: dict, output_dir: Path = Path("./data/")):
             print(f"{elapsed:.1f}s ({size_mib:.1f} MiB)")
         else:
             print(f"  [cached] {azure_edf_path}")
-    return [output_dir / edf_file for edf_file in azure_paths]
+    return [output_dir / edf_file for edf_file in azure_files]
 
 
 def main():
@@ -222,14 +222,14 @@ def main():
         "azure": {
             "storage_account": "nwcsandboxstorage",
             "container": "waveforms",
-            "folder": "edf",
+            "folder": "external/benchmarks/edf",
             "files": ["Suppression.edf", "Suppression_annotated.edf"],
             "anonymous": True,
         }
     }
 
     # ensure local edfs exist, download if not
-    data_dir = Path("./data")
+    data_dir = Path("./.benchmark_cache/edf")
     local_edfs = maybe_download_edf_files(azure_cfg, output_dir=data_dir)
 
     for edf_file in local_edfs:

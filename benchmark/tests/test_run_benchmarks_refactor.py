@@ -1,4 +1,5 @@
 import argparse
+import builtins
 import io
 import json
 import tempfile
@@ -301,6 +302,9 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertEqual(cfg["canonical_parquet"]["chunk_writer_max_rowgroups"], 1)
         self.assertEqual(cfg["canonical_parquet"]["chunk_reader_max_rowgroups"], 1)
         self.assertFalse(cfg["benchmarks"]["core"]["random_access"]["include_canonical"])
+        self.assertEqual(cfg["benchmarks"]["core"]["filter_pipeline"]["fft_window_sec"], 10.0)
+        self.assertEqual(cfg["benchmarks"]["core"]["filter_pipeline"]["fft_stride_sec"], 2.0)
+        self.assertEqual(cfg["benchmarks"]["core"]["filter_pipeline"]["read_chunk_sec"], 300.0)
 
     def test_validate_config_rejects_non_positive_canonical_streaming_knobs(self):
         cfg = normalize_config({"canonical_parquet": {"chunk_writer_max_rowgroups": 0}})
@@ -310,6 +314,12 @@ class BenchmarkRefactorTests(unittest.TestCase):
         cfg = normalize_config({"canonical_parquet": {"chunk_reader_max_rowgroups": -1}})
         with self.assertRaisesRegex(ValueError, "canonical_parquet.chunk_reader_max_rowgroups"):
             validate_config(cfg)
+
+    def test_validate_config_rejects_non_positive_filter_pipeline_knobs(self):
+        for field in ("fft_window_sec", "fft_stride_sec", "read_chunk_sec"):
+            cfg = normalize_config({"benchmarks": {"core": {"filter_pipeline": {field: 0}}}})
+            with self.assertRaisesRegex(ValueError, f"benchmarks.core.filter_pipeline.{field}"):
+                validate_config(cfg)
 
     def test_validate_config_rejects_canonical_id_collision(self):
         cfg = normalize_config({
@@ -1542,6 +1552,24 @@ class BenchmarkRefactorTests(unittest.TestCase):
         np.testing.assert_allclose(timed.all_seconds, np.array([0.1, 0.3, 0.2], dtype=np.float64))
         self.assertAlmostEqual(timed.peak_rss_mib, 103.0)
 
+    def test_current_process_rss_bytes_logs_debug_when_all_strategies_fail(self):
+        original_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name in {"psutil", "ctypes"}:
+                raise ModuleNotFoundError(name)
+            return original_import(name, *args, **kwargs)
+
+        with patch("benchmark.core.bench_utils.sys.platform", "win32"), \
+             patch("builtins.__import__", side_effect=fake_import), \
+             self.assertLogs("benchmark.core.bench_utils", level="DEBUG") as logs:
+            self.assertIsNone(bench_utils._current_process_rss_bytes())
+
+        output = "\n".join(logs.output)
+        self.assertIn("RSS detection via psutil failed", output)
+        self.assertIn("RSS detection via GetProcessMemoryInfo failed", output)
+        self.assertIn("RSS detection failed; returning None", output)
+
     def test_gap_safe_row_helpers_use_row_counts_not_stamp_spans(self):
         stamps = [0, 1, 2, 3, 100, 101, 102, 103]
         info = SimpleNamespace(stamp_at_row=lambda row: stamps[row])
@@ -1846,6 +1874,63 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertTrue(seen_reader_states)
         self.assertTrue(all(state is None for state in seen_reader_states))
         mock_core_targets.assert_called_once_with({}, {}, "filter_pipeline")
+
+    def test_bench_filter_pipeline_uses_configured_fft_and_chunk_seconds(self):
+        info = SimpleNamespace(
+            sample_freq=1.0,
+            channel_labels=["Fp1", "Fp2"],
+            channel_columns=["ch_Fp1", "ch_Fp2"],
+            total_rows=12,
+            stamp_at_row=lambda row: row,
+            start_stamp=0,
+            end_stamp=11,
+        )
+        cfg = normalize_config({
+            "benchmarks": {
+                "core": {
+                    "filter_pipeline": {
+                        "fft_window_sec": 4,
+                        "fft_stride_sec": 3,
+                        "read_chunk_sec": 5,
+                    }
+                }
+            }
+        })
+        target = {
+            "artifact_id": "baseline_edf",
+            "variant_id": None,
+            "artifact_kind": "baseline",
+            "format_family": "edf",
+            "reader_kind": "edf",
+            "path": Path("baseline.edf"),
+            "display_label": "baseline_edf",
+            "sort_index": 0,
+        }
+        captured = []
+
+        def fake_read(_target, _info, columns, start_stamp, end_stamp, reader_state=None):
+            captured.append((start_stamp, end_stamp, reader_state))
+            n = int(end_stamp) - int(start_stamp) + 1
+            return np.zeros((len(columns), n), dtype=np.float32)
+
+        with patch.object(benchmarks, "_core_targets", return_value=[target]), \
+             patch.object(benchmarks, "_read_target_window", side_effect=fake_read), \
+             patch.object(benchmarks, "apply_bipolar_montage", side_effect=lambda matrix, _labels: matrix), \
+             patch.object(benchmarks, "apply_filters", side_effect=lambda matrix, _sos: matrix), \
+             patch.object(benchmarks, "build_sos", return_value="sos"), \
+             patch.object(benchmarks, "full_study_duration_hours", return_value=1), \
+             patch.object(np.fft, "rfft", return_value=np.zeros((2, 1), dtype=np.complex64)):
+            results = benchmarks.bench_filter_pipeline(info, {}, cfg)
+
+        self.assertEqual(captured, [
+            (0, 4, None), (5, 9, None), (10, 11, None),
+            (0, 4, None), (5, 9, None), (10, 11, None),
+        ])
+        d2 = next(row for row in results if row["benchmark"] == "D.2")
+        self.assertEqual(d2["fft_window_sec"], 4)
+        self.assertEqual(d2["fft_stride_sec"], 3)
+        self.assertEqual(d2["fft_windows_expected"], 3)
+        self.assertEqual(d2["fft_windows_computed"], 3)
 
     def test_build_sos_returns_float32_coefficients(self):
         sos = signal._build_sos(256.0)

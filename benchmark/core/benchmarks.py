@@ -16,6 +16,7 @@ from .bench_utils import (
 from .config_helpers import (
     get_channel_subsets,
     get_core_include_canonical,
+    get_filter_pipeline_cfg,
     get_default_window,
     get_parquet_compression_variants,
     get_read_positions,
@@ -380,15 +381,20 @@ def _filter_pipeline_bench_rows(info: StudyInfo) -> tuple[int, int, float]:
     return hours, bench_rows, bench_sec
 
 
+def _fft_window_count(bench_rows: int, window_samples: int, stride_samples: int) -> int:
+    return max(0, ((bench_rows - window_samples) // stride_samples) + 1)
+
+
 def _bench_filter_pipeline_full_target(info: StudyInfo, target: dict,
                                        labels: list[str], sos: np.ndarray,
                                        bench_rows: int, bench_sec: float,
-                                       hours: int) -> dict:
+                                       hours: int,
+                                       read_chunk_sec: float) -> dict:
     import time
 
     sample_freq = info.sample_freq
     n_channels = len(labels)
-    chunk_rows = max(1, int(300 * sample_freq))
+    chunk_rows = max(1, int(read_chunk_sec * sample_freq))
     row_chunks = _row_chunk_windows(info.total_rows, chunk_rows, max_rows=bench_rows)
     stamp_chunks = [_stamp_bounds(info, row_bounds) for row_bounds in row_chunks]
     chunk_bounds = row_chunks if target["reader_kind"] == "edf" else stamp_chunks
@@ -432,17 +438,18 @@ def _bench_filter_pipeline_full_target(info: StudyInfo, target: dict,
 def _bench_sliding_fft_target(info: StudyInfo, target: dict,
                               labels: list[str], sos: np.ndarray,
                               bench_rows: int, bench_sec: float,
-                              hours: int) -> dict:
+                              hours: int,
+                              fft_window_sec: float,
+                              fft_stride_sec: float,
+                              read_chunk_sec: float) -> dict:
     import time
 
     sample_freq = info.sample_freq
     n_channels = len(labels)
-    fft_window_sec = 10
-    fft_stride_sec = 2
     fft_window_samples = int(fft_window_sec * sample_freq)
     fft_stride_samples = int(fft_stride_sec * sample_freq)
-    n_fft_windows = max(0, ((bench_rows - fft_window_samples) // fft_stride_samples) + 1)
-    read_chunk_rows = max(1, int(300 * sample_freq))
+    n_fft_windows = _fft_window_count(bench_rows, fft_window_samples, fft_stride_samples)
+    read_chunk_rows = max(1, int(read_chunk_sec * sample_freq))
     row_fft_chunks = _row_chunk_windows(info.total_rows, read_chunk_rows, max_rows=bench_rows)
     stamp_fft_chunks = [_stamp_bounds(info, row_bounds) for row_bounds in row_fft_chunks]
     chunk_bounds = row_fft_chunks if target["reader_kind"] == "edf" else stamp_fft_chunks
@@ -699,6 +706,10 @@ def bench_filter_pipeline(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) ->
     n_channels = len(labels)
     sample_freq = info.sample_freq
     sos = build_sos(sample_freq)
+    filter_pipeline_cfg = get_filter_pipeline_cfg(cfg)
+    fft_window_sec = filter_pipeline_cfg["fft_window_sec"]
+    fft_stride_sec = filter_pipeline_cfg["fft_stride_sec"]
+    read_chunk_sec = filter_pipeline_cfg["read_chunk_sec"]
 
     hours, bench_rows, bench_sec = _filter_pipeline_bench_rows(info)
 
@@ -707,17 +718,32 @@ def bench_filter_pipeline(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) ->
     targets = _core_targets(paths, cfg, "filter_pipeline")
 
     for target in targets:
-        results.append(_bench_filter_pipeline_full_target(info, target, labels, sos, bench_rows, bench_sec, hours))
+        results.append(
+            _bench_filter_pipeline_full_target(
+                info, target, labels, sos, bench_rows, bench_sec, hours, read_chunk_sec
+            )
+        )
 
-    fft_window_sec = 10
-    fft_stride_sec = 2
     fft_window_samples = int(fft_window_sec * sample_freq)
     fft_stride_samples = int(fft_stride_sec * sample_freq)
-    n_fft_windows = max(0, ((bench_rows - fft_window_samples) // fft_stride_samples) + 1)
+    n_fft_windows = _fft_window_count(bench_rows, fft_window_samples, fft_stride_samples)
     print(f"    FFT: {n_fft_windows} windows, {fft_window_sec}s window, {fft_stride_sec}s stride")
 
     for target in targets:
-        results.append(_bench_sliding_fft_target(info, target, labels, sos, bench_rows, bench_sec, hours))
+        results.append(
+            _bench_sliding_fft_target(
+                info,
+                target,
+                labels,
+                sos,
+                bench_rows,
+                bench_sec,
+                hours,
+                fft_window_sec,
+                fft_stride_sec,
+                read_chunk_sec,
+            )
+        )
 
     return results
 

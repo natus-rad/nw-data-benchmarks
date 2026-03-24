@@ -1,3 +1,5 @@
+<!-- AUTO-GENERATED -->
+
 # Benchmark Report
 
 _Generated from `${source_file}` (run `${run_id}`)._
