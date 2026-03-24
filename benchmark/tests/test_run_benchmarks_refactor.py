@@ -299,7 +299,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
         self.assertEqual(cfg["canonical_parquet"]["id"], "canonical")
         self.assertEqual(cfg["canonical_parquet"]["chunk_writer_max_rowgroups"], 1)
-        self.assertEqual(cfg["canonical_parquet"]["chunk_reader_max_rows"], 65_536)
+        self.assertEqual(cfg["canonical_parquet"]["chunk_reader_max_rowgroups"], 1)
         self.assertFalse(cfg["benchmarks"]["core"]["random_access"]["include_canonical"])
 
     def test_validate_config_rejects_non_positive_canonical_streaming_knobs(self):
@@ -307,8 +307,8 @@ class BenchmarkRefactorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "canonical_parquet.chunk_writer_max_rowgroups"):
             validate_config(cfg)
 
-        cfg = normalize_config({"canonical_parquet": {"chunk_reader_max_rows": -1}})
-        with self.assertRaisesRegex(ValueError, "canonical_parquet.chunk_reader_max_rows"):
+        cfg = normalize_config({"canonical_parquet": {"chunk_reader_max_rowgroups": -1}})
+        with self.assertRaisesRegex(ValueError, "canonical_parquet.chunk_reader_max_rowgroups"):
             validate_config(cfg)
 
     def test_validate_config_rejects_removed_canonical_alias_keys(self):
@@ -318,6 +318,10 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
         cfg = normalize_config({"canonical_parquet": {"variant_read_batch_rows": 1024}})
         with self.assertRaisesRegex(ValueError, "variant_read_batch_rows"):
+            validate_config(cfg)
+
+        cfg = normalize_config({"canonical_parquet": {"chunk_reader_max_rows": 1024}})
+        with self.assertRaisesRegex(ValueError, "chunk_reader_max_rows"):
             validate_config(cfg)
 
     def test_validate_config_rejects_canonical_id_collision(self):
@@ -992,7 +996,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
 
                 self.assertEqual(pq.read_table(paths["variant__pq_stream"]).num_rows, 5)
 
-    def test_generate_variants_uses_configured_chunk_reader_max_rows(self):
+    def test_generate_variants_uses_configured_chunk_reader_max_rowgroups(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             canonical = tmp_path / "demo_canonical"
@@ -1008,8 +1012,8 @@ class BenchmarkRefactorTests(unittest.TestCase):
             with StudyInfo.from_parquet(canonical, sample_freq=1) as info:
                 captured = []
 
-                def fake_iter(src_files, *, columns=None, max_rows=None):
-                    captured.append(max_rows)
+                def fake_iter(src_files, *, columns=None, max_row_groups=None):
+                    captured.append(max_row_groups)
                     table = pa.table({
                         "samplestamp": pa.array([0, 1, 2], type=pa.int64()),
                         "ch_Fp1": pa.array([0.1, 0.2, 0.3], type=pa.float32()),
@@ -1025,10 +1029,30 @@ class BenchmarkRefactorTests(unittest.TestCase):
                         info,
                         [{"id": "pq_stream", "format": "parquet", "row_group_minutes": 1, "compression": "lz4"}],
                         tmp_path / "variants",
-                        canonical_cfg={"chunk_reader_max_rows": 2},
+                        canonical_cfg={"chunk_reader_max_rowgroups": 2},
                     )
 
                 self.assertEqual(captured, [2])
+
+    def test_iter_parquet_tables_batches_by_row_group_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pq_file = tmp_path / "row_groups.parquet"
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([0, 1, 2, 3, 4], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2, 0.3, 0.4, 0.5], type=pa.float32()),
+                }),
+                pq_file,
+                compression="snappy",
+                row_group_size=2,
+            )
+
+            tables = list(setup._iter_parquet_tables([pq_file], max_row_groups=2))
+
+            self.assertEqual([table.num_rows for table in tables], [4, 1])
+            self.assertEqual(tables[0]["samplestamp"].to_pylist(), [0, 1, 2, 3])
+            self.assertEqual(tables[1]["samplestamp"].to_pylist(), [4])
 
     def test_generate_variants_streams_hdf5_variants_without_read_table(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1105,7 +1129,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
             self.assertEqual(len(created_writers[0].headers), 2)
             self.assertTrue(created_writers[0].blocks)
 
-    def test_generate_variants_passes_chunk_reader_max_rows_to_edf_conversion(self):
+    def test_generate_variants_passes_chunk_reader_max_rowgroups_to_edf_conversion(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             canonical = tmp_path / "demo_canonical"
@@ -1119,7 +1143,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 compression="snappy",
             )
             with StudyInfo.from_parquet(canonical, sample_freq=1) as info:
-                def fake_parquet_to_edf(_src, out_file, sample_freq, batch_rows=None):
+                def fake_parquet_to_edf(_src, out_file, sample_freq, batch_row_groups=None):
                     out_file.write_bytes(b"edf")
 
                 with patch("benchmark.core.variants.parquet_to_edf", side_effect=fake_parquet_to_edf) as mock_convert:
@@ -1128,10 +1152,10 @@ class BenchmarkRefactorTests(unittest.TestCase):
                         info,
                         [{"id": "edf_stream", "format": "edf"}],
                         tmp_path / "variants",
-                        canonical_cfg={"chunk_reader_max_rows": 7},
+                        canonical_cfg={"chunk_reader_max_rowgroups": 7},
                     )
 
-                self.assertEqual(mock_convert.call_args.kwargs["batch_rows"], 7)
+                self.assertEqual(mock_convert.call_args.kwargs["batch_row_groups"], 7)
 
     def test_study_info_from_parquet_accepts_single_file_path(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1277,7 +1301,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
             )
             paths = {"parquet": src_file}
             cfg = normalize_config({
-                "canonical_parquet": {"chunk_reader_max_rows": 1},
+                "canonical_parquet": {"chunk_reader_max_rowgroups": 1},
                 "benchmarks": {
                     "parquet_investigations": {
                         "compression": {
@@ -1296,7 +1320,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
             self.assertTrue(out_file.exists())
             self.assertEqual(paths["parquet_none"], out_file)
             self.assertTrue(mock_iter.called)
-            self.assertTrue(all(call.kwargs["max_rows"] == 1 for call in mock_iter.call_args_list))
+            self.assertTrue(all(call.kwargs["max_row_groups"] == 1 for call in mock_iter.call_args_list))
 
     def test_setup_int32_variants_accepts_single_file_source(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1318,13 +1342,13 @@ class BenchmarkRefactorTests(unittest.TestCase):
                     paths,
                     tmp_path / "variants",
                     "demo",
-                    {"canonical_parquet": {"chunk_reader_max_rows": 1}},
+                    {"canonical_parquet": {"chunk_reader_max_rowgroups": 1}},
                 )
 
             self.assertTrue((tmp_path / "variants" / "parquet_int32_calibrated_zstd.parquet").exists())
             self.assertTrue((tmp_path / "variants" / "parquet_int32_nanovolt_snappy.parquet").exists())
             self.assertTrue(mock_iter.called)
-            self.assertTrue(all(call.kwargs["max_rows"] == 1 for call in mock_iter.call_args_list))
+            self.assertTrue(all(call.kwargs["max_row_groups"] == 1 for call in mock_iter.call_args_list))
 
     def test_setup_tuned_variants_respects_configured_codecs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1341,7 +1365,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
             with StudyInfo.from_parquet(src_file, sample_freq=256) as info:
                 paths = {"parquet": src_file}
                 cfg = normalize_config({
-                    "canonical_parquet": {"chunk_reader_max_rows": 1},
+                    "canonical_parquet": {"chunk_reader_max_rowgroups": 1},
                     "benchmarks": {
                         "other": {
                             "tuned_comparison": {
@@ -1363,7 +1387,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 self.assertIn("tuned_pq_lz4_5m", paths)
                 self.assertNotIn("tuned_pq_5m", paths)
                 self.assertTrue(mock_iter.called)
-                self.assertTrue(all(call.kwargs["max_rows"] == 1 for call in mock_iter.call_args_list))
+                self.assertTrue(all(call.kwargs["max_row_groups"] == 1 for call in mock_iter.call_args_list))
 
     def test_bench_tuned_comparison_uses_configured_chunk_sec(self):
         info = SimpleNamespace(

@@ -21,7 +21,7 @@ DEFAULT_CANONICAL_PARQUET = {
     "compression": "snappy",
     "row_group_minutes": 30,
     "chunk_writer_max_rowgroups": 1,
-    "chunk_reader_max_rows": 65_536,
+    "chunk_reader_max_rowgroups": 1,
 }
 
 REMOVED_TOP_LEVEL_BENCHMARK_FIELDS = {
@@ -158,14 +158,19 @@ def validate_config(cfg: dict) -> None:
     if "variant_read_batch_rows" in raw_canonical_cfg:
         raise ValueError(
             "canonical_parquet.variant_read_batch_rows is no longer supported; "
-            "use canonical_parquet.chunk_reader_max_rows"
+            "use canonical_parquet.chunk_reader_max_rowgroups"
+        )
+    if "chunk_reader_max_rows" in raw_canonical_cfg:
+        raise ValueError(
+            "canonical_parquet.chunk_reader_max_rows is no longer supported; "
+            "use canonical_parquet.chunk_reader_max_rowgroups"
         )
 
     canonical_cfg = get_canonical_parquet_cfg(cfg)
     canonical_id = canonical_cfg.get("id")
     if not isinstance(canonical_id, str) or not canonical_id.strip():
         raise ValueError("canonical_parquet.id must define a non-empty string")
-    for field in ("row_group_minutes", "chunk_writer_max_rowgroups", "chunk_reader_max_rows"):
+    for field in ("row_group_minutes", "chunk_writer_max_rowgroups", "chunk_reader_max_rowgroups"):
         value = canonical_cfg.get(field)
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"canonical_parquet.{field} must be a positive integer")
