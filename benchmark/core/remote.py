@@ -10,6 +10,7 @@ from .bench_utils import PeakRssTracker, chunk_ranges, peak_rss_fields, print_re
 from .config_helpers import get_remote_query_cfg, is_investigation_enabled
 from .readers import EdfFileReader, edf_file
 from .signal import CHANNELS_10_20
+from .study_info import StudyInfo
 
 
 _PeakRssTracker = PeakRssTracker
@@ -59,7 +60,7 @@ def _duckdb_remote_read(con, az_path: str, columns: list[str],
     return elapsed, n_rows
 
 
-def bench_remote_query(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
+def bench_remote_query(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     """Benchmark I: Remote Parquet (DuckDB) vs Remote EDF (full download + local read)."""
     results = []
     args = _kwargs.get("args")

@@ -8,6 +8,7 @@ import hdf5plugin
 import numpy as np
 import pyarrow.parquet as pq
 
+from .constants import DEFAULT_STREAMING_BATCH_ROWS
 from .config_helpers import (
     get_canonical_parquet_cfg,
     get_parquet_compression_variants,
@@ -22,7 +23,7 @@ from .study_info import StudyInfo
 
 def _chunk_reader_max_rows(cfg: dict | None) -> int:
     canonical_cfg = get_canonical_parquet_cfg(cfg or {})
-    return max(1, int(canonical_cfg.get("chunk_reader_max_rows", 65_536)))
+    return max(1, int(canonical_cfg.get("chunk_reader_max_rows", DEFAULT_STREAMING_BATCH_ROWS)))
 
 
 def _iter_parquet_tables(src_files: list[Path], *, columns: list[str] | None = None,

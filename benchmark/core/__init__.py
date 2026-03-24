@@ -12,6 +12,7 @@ __all__ = [
     "benchmarks",
     "config_helpers",
     "constants",
+    "hash_utils",
     "ingest",
     "parquet_paths",
     "readers",

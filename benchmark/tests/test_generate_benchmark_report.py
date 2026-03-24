@@ -140,6 +140,21 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         self.assertIn('<a href="#summary">Summary</a>', html)
         self.assertIn('<a href="#random-access" class="sub">Random Access</a>', html)
 
+    def test_render_html_builds_expected_td_tags_for_table_cells(self) -> None:
+        html = render_html(
+            "# Report\n\n"
+            "## Table\n\n"
+            "| Format | Read | Throughput |\n"
+            "| --- | --- | --- |\n"
+            "| A | 2.0s | 10.0 MiB/s |\n"
+            "| B | 1.0s | 12.0 MiB/s |\n"
+            "| C | — | *not available* |\n"
+        )
+
+        self.assertIn('<td>A</td>', html)
+        self.assertIn('<td class="win">12.0 MiB/s</td>', html)
+        self.assertIn('<td class="na">—</td>', html)
+
     def test_render_report_includes_separate_k_section(self) -> None:
         payload = {
             "run_id": "2026-03-21T00-00-00",

@@ -8,8 +8,6 @@ same format.
 """
 from __future__ import annotations
 
-import hashlib
-import json
 from pathlib import Path
 
 import h5py
@@ -18,14 +16,22 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from .constants import DEFAULT_STREAMING_BATCH_ROWS
+from .hash_utils import spec_hash as shared_spec_hash
 from .parquet_paths import list_parquet_files
 from .setup import build_chunk_index, iter_parquet_tables as iter_setup_parquet_tables, parquet_to_edf
 from .study_info import StudyInfo
 
 
 def _spec_hash(spec: dict) -> str:
-    encoded = json.dumps(spec, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha1(encoded).hexdigest()[:8]
+    return shared_spec_hash(spec, length=8)
+
+
+def _iter_parquet_tables(src_files: list[Path], *, columns: list[str] | None = None,
+                         batch_rows: int | None = None):
+    # Compatibility wrapper: preserve the local patch/import surface while the
+    # actual streaming implementation lives in benchmark.core.setup.
+    yield from iter_setup_parquet_tables(src_files, columns=columns, max_rows=batch_rows)
 
 
 def _safe_id(value: str) -> str:
@@ -44,11 +50,6 @@ def _register_root_variant(paths: dict, variant_id: str, fmt: str, reader_kind: 
         "display_label": variant_id,
         "sort_index": sort_index,
     })
-
-
-def _iter_parquet_tables(src_files: list[Path], *, columns: list[str] | None = None,
-                         batch_rows: int | None = None):
-    yield from iter_setup_parquet_tables(src_files, columns=columns, max_rows=batch_rows)
 
 
 def _write_streamed_parquet(writer: pq.ParquetWriter, tables, row_group_size: int) -> None:
@@ -94,7 +95,10 @@ def generate_variants(canonical_pq: Path, info: StudyInfo,
     canonical_cfg = canonical_cfg or {}
     chunk_reader_max_rows = max(
         1,
-        int(canonical_cfg.get("chunk_reader_max_rows", canonical_cfg.get("variant_read_batch_rows", 65_536))),
+        int(canonical_cfg.get(
+            "chunk_reader_max_rows",
+            canonical_cfg.get("variant_read_batch_rows", DEFAULT_STREAMING_BATCH_ROWS),
+        )),
     )
 
     print("  Generating test variants (skip if cached)...")

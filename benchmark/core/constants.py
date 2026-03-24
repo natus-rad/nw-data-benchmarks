@@ -77,6 +77,10 @@ CROSS_FORMAT: frozenset[Category] = frozenset({
 })
 
 
+# Shared chunk/batch default used when no explicit streaming batch size is set.
+DEFAULT_STREAMING_BATCH_ROWS = 65_536
+
+
 # ── Format keys ───────────────────────────────────────────────────
 # These are the ``paths`` dict keys that benchmark functions check.
 
@@ -145,3 +149,16 @@ FORMAT_ORDER: list[str] = [
     "baseline_erd",
 ]
 
+
+__all__ = [
+    "CATEGORY_ORDER",
+    "CORE_BENCHMARKS",
+    "CROSS_FORMAT",
+    "Category",
+    "DEFAULT_STREAMING_BATCH_ROWS",
+    "FORMAT_LABELS",
+    "FORMAT_ORDER",
+    "FormatKey",
+    "InputFormat",
+    "PARQUET_INVESTIGATIONS",
+]

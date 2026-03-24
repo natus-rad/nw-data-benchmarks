@@ -45,6 +45,7 @@ from .readers import (
 from .remote import bench_remote_query
 from .setup import get_tuned_block_sizes
 from .signal import apply_bipolar_montage, apply_filters, build_sos
+from .study_info import StudyInfo
 
 
 _PeakRssTracker = PeakRssTracker
@@ -218,18 +219,142 @@ def _row_chunk_windows(total_rows: int, chunk_rows: int,
     return list(_chunk_ranges(0, end_row, chunk_rows))
 
 
-def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
+def _append_logged_result(results: list[dict], row: dict) -> None:
+    row = dict(row)
+    row["_printed_inline"] = True
+    results.append(row)
+    _print_result(row)
+
+
+def _timed_variant_window_read(info: StudyInfo, variant: dict,
+                               columns: list[str],
+                               row_bounds: tuple[int, int],
+                               stamp_bounds: tuple[int, int],
+                               reps: int) -> tuple[float, int, dict]:
+    with _target_context(variant) as reader_state:
+        start_bound, end_bound = _read_bounds_for_target(variant, row_bounds, stamp_bounds)
+        t, data, timing_fields = _timed_call(
+            lambda v=variant, rs=reader_state, s=start_bound, e=end_bound: _read_target_window(v, info, columns, s, e, rs),
+            reps,
+        )
+    n_samples = data.shape[1] if data.ndim == 2 else 0
+    return t, n_samples, timing_fields
+
+
+def _run_comparison_random_access(results: list[dict], info: StudyInfo,
+                                  variants: list[dict], reps: int,
+                                  category_prefix: str, section_letter: str,
+                                  window_sec: float,
+                                  window_row_bounds: tuple[int, int],
+                                  window_stamp_bounds: tuple[int, int],
+                                  n_channels: int,
+                                  channel_columns: list[str]) -> None:
+    print(f"\n  --- {section_letter}.1: Random access ({window_sec}s at 50%) ---")
+    for variant in variants:
+        t, n_samples, timing_fields = _timed_variant_window_read(
+            info, variant, channel_columns, window_row_bounds, window_stamp_bounds, reps,
+        )
+        _append_logged_result(results, {
+            "category": f"{category_prefix}_random_access",
+            "benchmark": f"{section_letter}.1",
+            "format": variant["format"],
+            **variant["result_fields"],
+            "window_seconds": window_sec,
+            **timing_fields,
+            **_throughput(n_samples, n_channels, t),
+        })
+
+
+def _run_comparison_channel_subset(results: list[dict], info: StudyInfo,
+                                   variants: list[dict], reps: int,
                                    category_prefix: str, section_letter: str,
-                                   skip_message: str) -> list[dict]:
+                                   window_sec: float,
+                                   window_row_bounds: tuple[int, int],
+                                   window_stamp_bounds: tuple[int, int],
+                                   channel_columns: list[str]) -> None:
+    print(f"\n  --- {section_letter}.2: Channel subset (4 ch, {window_sec}s) ---")
+    subset_cols = channel_columns[:4]
+    for variant in variants:
+        t, n_samples, timing_fields = _timed_variant_window_read(
+            info, variant, subset_cols, window_row_bounds, window_stamp_bounds, reps,
+        )
+        _append_logged_result(results, {
+            "category": f"{category_prefix}_channel_subset",
+            "benchmark": f"{section_letter}.2",
+            "format": variant["format"],
+            **variant["result_fields"],
+            "window_seconds": window_sec,
+            **timing_fields,
+            **_throughput(n_samples, len(subset_cols), t),
+        })
+
+
+def _run_comparison_window_scaling(results: list[dict], info: StudyInfo,
+                                   variants: list[dict], reps: int,
+                                   category_prefix: str, section_letter: str,
+                                   sample_freq: float, total_rows: int,
+                                   n_channels: int,
+                                   channel_columns: list[str],
+                                   window_sizes: list[int]) -> None:
+    print(f"\n  --- {section_letter}.3: Window scaling ---")
+    scaling_bounds = []
+    for ws in window_sizes:
+        ws_rows = max(1, int(ws * sample_freq))
+        row_bounds = _mid_row_window(total_rows, ws_rows)
+        scaling_bounds.append((ws, row_bounds, _stamp_bounds(info, row_bounds)))
+
+    for ws, row_bounds, stamp_bounds in scaling_bounds:
+        for variant in variants:
+            t, n_samples, timing_fields = _timed_variant_window_read(
+                info, variant, channel_columns, row_bounds, stamp_bounds, reps,
+            )
+            _append_logged_result(results, {
+                "category": f"{category_prefix}_window_scaling",
+                "benchmark": f"{section_letter}.3",
+                "format": variant["format"],
+                **variant["result_fields"],
+                "window_seconds": ws,
+                **timing_fields,
+                **_throughput(n_samples, n_channels, t),
+            })
+
+
+def _run_comparison_full_study(results: list[dict], info: StudyInfo,
+                               variants: list[dict], category_prefix: str,
+                               section_letter: str, sample_freq: float,
+                               total_rows: int, n_channels: int,
+                               channel_columns: list[str], cfg: dict) -> None:
     import time
 
-    results = []
+    print(f"\n  --- {section_letter}.4: Full-study sequential read ---")
+    chunk_sec = get_tuned_chunk_sec(cfg)
+    chunk_rows = max(1, int(chunk_sec * sample_freq))
+    row_chunks = _row_chunk_windows(total_rows, chunk_rows)
+    stamp_chunks = [_stamp_bounds(info, row_bounds) for row_bounds in row_chunks]
+    for variant in variants:
+        samples_read = 0
+        chunk_bounds = row_chunks if variant["reader_kind"] == "edf" else stamp_chunks
+        with _PeakRssTracker() as memory_tracker, _target_context(variant) as reader_state:
+            t_wall_start = time.perf_counter()
+            for cs, ce in chunk_bounds:
+                matrix = _read_target_window(variant, info, channel_columns, cs, ce, reader_state)
+                samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
+            t_wall = time.perf_counter() - t_wall_start
+        _append_logged_result(results, {
+            "category": f"{category_prefix}_full_study",
+            "benchmark": f"{section_letter}.4",
+            "format": variant["format"],
+            **variant["result_fields"],
+            "total_samples": samples_read,
+            **_single_timing_fields(t_wall, precision=3, peak_rss_mib=memory_tracker.peak_rss_mib),
+            **_throughput(samples_read, n_channels, t_wall),
+        })
 
-    def _append_logged_result(row: dict) -> None:
-        row = dict(row)
-        row["_printed_inline"] = True
-        results.append(row)
-        _print_result(row)
+
+def _run_comparison_workload_suite(info: StudyInfo, variants: list[dict], cfg: dict,
+                                   category_prefix: str, section_letter: str,
+                                   skip_message: str) -> list[dict]:
+    results = []
 
     sample_freq = info.sample_freq
     n_channels = len(info.channel_labels)
@@ -247,97 +372,159 @@ def _run_comparison_workload_suite(info, variants: list[dict], cfg: dict,
     window_row_bounds = _mid_row_window(total_rows, window_rows)
     window_stamp_bounds = _stamp_bounds(info, window_row_bounds)
 
-    print(f"\n  --- {section_letter}.1: Random access ({window_sec}s at 50%) ---")
-    for variant in variants:
-        with _target_context(variant) as reader_state:
-            start_bound, end_bound = _read_bounds_for_target(variant, window_row_bounds, window_stamp_bounds)
-            t, data, timing_fields = _timed_call(
-                lambda v=variant, rs=reader_state, s=start_bound, e=end_bound: _read_target_window(v, info, ch_cols, s, e, rs),
-                reps,
-            )
-        n_samples = data.shape[1] if data.ndim == 2 else 0
-        _append_logged_result({
-            "category": f"{category_prefix}_random_access",
-            "benchmark": f"{section_letter}.1",
-            "format": variant["format"],
-            **variant["result_fields"],
-            "window_seconds": window_sec,
-            **timing_fields,
-            **_throughput(n_samples, n_channels, t),
-        })
-
-    print(f"\n  --- {section_letter}.2: Channel subset (4 ch, {window_sec}s) ---")
-    subset_cols = ch_cols[:4]
-    for variant in variants:
-        with _target_context(variant) as reader_state:
-            start_bound, end_bound = _read_bounds_for_target(variant, window_row_bounds, window_stamp_bounds)
-            t, data, timing_fields = _timed_call(
-                lambda v=variant, rs=reader_state, s=start_bound, e=end_bound: _read_target_window(v, info, subset_cols, s, e, rs),
-                reps,
-            )
-        n_samples = data.shape[1] if data.ndim == 2 else 0
-        _append_logged_result({
-            "category": f"{category_prefix}_channel_subset",
-            "benchmark": f"{section_letter}.2",
-            "format": variant["format"],
-            **variant["result_fields"],
-            "window_seconds": window_sec,
-            **timing_fields,
-            **_throughput(n_samples, 4, t),
-        })
-
-    print(f"\n  --- {section_letter}.3: Window scaling ---")
-    window_sizes = get_window_sizes(cfg)
-    scaling_bounds = []
-    for ws in window_sizes:
-        ws_rows = max(1, int(ws * sample_freq))
-        row_bounds = _mid_row_window(total_rows, ws_rows)
-        scaling_bounds.append((ws, row_bounds, _stamp_bounds(info, row_bounds)))
-
-    for ws, row_bounds, stamp_bounds in scaling_bounds:
-        for variant in variants:
-            with _target_context(variant) as reader_state:
-                start_bound, end_bound = _read_bounds_for_target(variant, row_bounds, stamp_bounds)
-                t, data, timing_fields = _timed_call(
-                    lambda v=variant, ss=start_bound, ee=end_bound, rs=reader_state: _read_target_window(v, info, ch_cols, ss, ee, rs),
-                    reps,
-                )
-            n_samples = data.shape[1] if data.ndim == 2 else 0
-            _append_logged_result({
-                "category": f"{category_prefix}_window_scaling",
-                "benchmark": f"{section_letter}.3",
-                "format": variant["format"],
-                **variant["result_fields"],
-                "window_seconds": ws,
-                **timing_fields,
-                **_throughput(n_samples, n_channels, t),
-            })
-
-    print(f"\n  --- {section_letter}.4: Full-study sequential read ---")
-    chunk_sec = get_tuned_chunk_sec(cfg)
-    chunk_rows = max(1, int(chunk_sec * sample_freq))
-    row_chunks = _row_chunk_windows(total_rows, chunk_rows)
-    stamp_chunks = [_stamp_bounds(info, row_bounds) for row_bounds in row_chunks]
-    for variant in variants:
-        samples_read = 0
-        chunk_bounds = row_chunks if variant["reader_kind"] == "edf" else stamp_chunks
-        with _PeakRssTracker() as memory_tracker, _target_context(variant) as reader_state:
-            t_wall_start = time.perf_counter()
-            for cs, ce in chunk_bounds:
-                matrix = _read_target_window(variant, info, ch_cols, cs, ce, reader_state)
-                samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
-            t_wall = time.perf_counter() - t_wall_start
-        _append_logged_result({
-            "category": f"{category_prefix}_full_study",
-            "benchmark": f"{section_letter}.4",
-            "format": variant["format"],
-            **variant["result_fields"],
-            "total_samples": samples_read,
-            **_single_timing_fields(t_wall, precision=3, peak_rss_mib=memory_tracker.peak_rss_mib),
-            **_throughput(samples_read, n_channels, t_wall),
-        })
+    _run_comparison_random_access(
+        results, info, variants, reps, category_prefix, section_letter,
+        window_sec, window_row_bounds, window_stamp_bounds, n_channels, ch_cols,
+    )
+    _run_comparison_channel_subset(
+        results, info, variants, reps, category_prefix, section_letter,
+        window_sec, window_row_bounds, window_stamp_bounds, ch_cols,
+    )
+    _run_comparison_window_scaling(
+        results, info, variants, reps, category_prefix, section_letter,
+        sample_freq, total_rows, n_channels, ch_cols, get_window_sizes(cfg),
+    )
+    _run_comparison_full_study(
+        results, info, variants, category_prefix, section_letter,
+        sample_freq, total_rows, n_channels, ch_cols, cfg,
+    )
 
     return results
+
+
+def _filter_pipeline_bench_rows(info: StudyInfo) -> tuple[int, int, float]:
+    hours = max(1, _full_study_duration_hours(info))
+    bench_rows = min(max(1, int(hours * 3600 * info.sample_freq)), info.total_rows)
+    bench_sec = bench_rows / info.sample_freq
+    return hours, bench_rows, bench_sec
+
+
+def _bench_filter_pipeline_full_target(info: StudyInfo, target: dict,
+                                       labels: list[str], sos: np.ndarray,
+                                       bench_rows: int, bench_sec: float,
+                                       hours: int) -> dict:
+    import time
+
+    sample_freq = info.sample_freq
+    n_channels = len(labels)
+    chunk_rows = max(1, int(300 * sample_freq))
+    row_chunks = _row_chunk_windows(info.total_rows, chunk_rows, max_rows=bench_rows)
+    stamp_chunks = [_stamp_bounds(info, row_bounds) for row_bounds in row_chunks]
+    chunk_bounds = row_chunks if target["reader_kind"] == "edf" else stamp_chunks
+
+    with _PeakRssTracker() as memory_tracker, _target_context(target) as reader_state:
+        t_read_total = t_mont_total = t_filt_total = 0.0
+        total_samples_read = 0
+        t_wall_start = time.perf_counter()
+        for cs, ce in chunk_bounds:
+            t0 = time.perf_counter()
+            matrix = _read_target_window(target, info, info.channel_columns, cs, ce, reader_state)
+            t_read_total += time.perf_counter() - t0
+
+            t1 = time.perf_counter()
+            derived = _apply_bipolar_montage(matrix, labels)
+            t_mont_total += time.perf_counter() - t1
+
+            t2 = time.perf_counter()
+            _apply_filters(derived, sos)
+            t_filt_total += time.perf_counter() - t2
+
+            total_samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
+        t_wall = time.perf_counter() - t_wall_start
+
+    return {
+        "category": "filter_pipeline_full",
+        **_core_result_fields(target),
+        "benchmark": "D.1",
+        "duration_hours": hours,
+        "duration_seconds": bench_sec,
+        "sample_freq": sample_freq,
+        "total_samples": total_samples_read,
+        **_single_timing_fields(t_wall, precision=3, peak_rss_mib=memory_tracker.peak_rss_mib),
+        "read_seconds": round(t_read_total, 3),
+        "montage_seconds": round(t_mont_total, 3),
+        "filter_seconds": round(t_filt_total, 3),
+        **_throughput(total_samples_read, n_channels, t_wall),
+    }
+
+
+def _bench_sliding_fft_target(info: StudyInfo, target: dict,
+                              labels: list[str], sos: np.ndarray,
+                              bench_rows: int, bench_sec: float,
+                              hours: int) -> dict:
+    import time
+
+    sample_freq = info.sample_freq
+    n_channels = len(labels)
+    fft_window_sec = 10
+    fft_stride_sec = 2
+    fft_window_samples = int(fft_window_sec * sample_freq)
+    fft_stride_samples = int(fft_stride_sec * sample_freq)
+    n_fft_windows = max(0, ((bench_rows - fft_window_samples) // fft_stride_samples) + 1)
+    read_chunk_rows = max(1, int(300 * sample_freq))
+    row_fft_chunks = _row_chunk_windows(info.total_rows, read_chunk_rows, max_rows=bench_rows)
+    stamp_fft_chunks = [_stamp_bounds(info, row_bounds) for row_bounds in row_fft_chunks]
+    chunk_bounds = row_fft_chunks if target["reader_kind"] == "edf" else stamp_fft_chunks
+
+    with _PeakRssTracker() as memory_tracker, _target_context(target) as reader_state:
+        t_read_total = t_mont_total = t_filt_total = t_fft_total = 0.0
+        total_samples_read = 0
+        fft_count = 0
+        t_wall_start = time.perf_counter()
+        tail: np.ndarray | None = None
+
+        for cs, ce in chunk_bounds:
+            t0 = time.perf_counter()
+            matrix = _read_target_window(target, info, info.channel_columns, cs, ce, reader_state)
+            t_read_total += time.perf_counter() - t0
+
+            t1 = time.perf_counter()
+            derived = _apply_bipolar_montage(matrix, labels)
+            t_mont_total += time.perf_counter() - t1
+
+            t2 = time.perf_counter()
+            filtered = _apply_filters(derived, sos)
+            t_filt_total += time.perf_counter() - t2
+
+            total_samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
+            combined = np.concatenate([tail, filtered], axis=1) if tail is not None and tail.shape[1] > 0 else filtered
+            n_combined = combined.shape[1]
+            t3 = time.perf_counter()
+            pos = 0
+            while pos + fft_window_samples <= n_combined:
+                np.fft.rfft(combined[:, pos:pos + fft_window_samples], axis=1)
+                fft_count += 1
+                pos += fft_stride_samples
+            t_fft_total += time.perf_counter() - t3
+            tail = combined[:, pos:]
+
+        t_wall = time.perf_counter() - t_wall_start
+
+    if fft_count != n_fft_windows:
+        print(
+            f"  [warn] D.2 {target['artifact_id']}: expected {n_fft_windows} FFT windows, "
+            f"computed {fft_count} (delta {fft_count - n_fft_windows:+d})"
+        )
+
+    return {
+        "category": "sliding_fft_full",
+        **_core_result_fields(target),
+        "benchmark": "D.2",
+        "duration_hours": hours,
+        "duration_seconds": bench_sec,
+        "sample_freq": sample_freq,
+        "total_samples": total_samples_read,
+        "fft_window_sec": fft_window_sec,
+        "fft_stride_sec": fft_stride_sec,
+        "fft_windows_expected": n_fft_windows,
+        "fft_windows_computed": fft_count,
+        **_single_timing_fields(t_wall, precision=3, peak_rss_mib=memory_tracker.peak_rss_mib),
+        "read_seconds": round(t_read_total, 3),
+        "montage_seconds": round(t_mont_total, 3),
+        "filter_seconds": round(t_filt_total, 3),
+        "fft_seconds": round(t_fft_total, 3),
+        **_throughput(total_samples_read, n_channels, t_wall),
+    }
 
 
 def _tuned_comparison_variants(paths: dict, cfg: dict, sample_freq: float) -> list[dict]:
@@ -388,7 +575,7 @@ def _baseline_comparison_variants(paths: dict) -> list[dict]:
     return variants
 
 
-def bench_random_access(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
+def bench_random_access(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     results = []
     reps = get_repetitions(cfg)
     window_sec = get_default_window(cfg)
@@ -432,7 +619,7 @@ def bench_random_access(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     return results
 
 
-def bench_channel_subset(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
+def bench_channel_subset(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     results = []
     reps = get_repetitions(cfg)
     window_sec = get_default_window(cfg)
@@ -470,7 +657,7 @@ def bench_channel_subset(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     return results
 
 
-def bench_remontage(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
+def bench_remontage(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     import time
 
     results = []
@@ -525,145 +712,36 @@ def bench_remontage(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     return results
 
 
-def bench_filter_pipeline(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
-    import time
-
+def bench_filter_pipeline(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     results = []
     labels = list(info.channel_labels)
     n_channels = len(labels)
     sample_freq = info.sample_freq
     sos = _build_sos(sample_freq)
 
-    hours = _full_study_duration_hours(info)
-    if hours < 1:
-        hours = 1
-    bench_rows = min(max(1, int(hours * 3600 * sample_freq)), info.total_rows)
-    bench_sec = bench_rows / sample_freq
-
-    chunk_sec = 300
-    chunk_rows = max(1, int(chunk_sec * sample_freq))
-    row_chunks = _row_chunk_windows(info.total_rows, chunk_rows, max_rows=bench_rows)
-    stamp_chunks = [_stamp_bounds(info, row_bounds) for row_bounds in row_chunks]
+    hours, bench_rows, bench_sec = _filter_pipeline_bench_rows(info)
 
     print(f"    Study: {hours}h ({bench_sec:.0f}s), {n_channels} ch, {sample_freq} Hz")
 
     targets = _core_targets(paths, cfg, "filter_pipeline")
 
     for target in targets:
-        with _PeakRssTracker() as memory_tracker, _target_context(target) as reader_state:
-            t_read_total = t_mont_total = t_filt_total = 0.0
-            total_samples_read = 0
-            chunk_bounds = row_chunks if target["reader_kind"] == "edf" else stamp_chunks
-
-            t_wall_start = time.perf_counter()
-            for cs, ce in chunk_bounds:
-                t0 = time.perf_counter()
-                matrix = _read_target_window(target, info, info.channel_columns, cs, ce, reader_state)
-                t_read_total += time.perf_counter() - t0
-
-                t1 = time.perf_counter()
-                derived = _apply_bipolar_montage(matrix, labels)
-                t_mont_total += time.perf_counter() - t1
-
-                t2 = time.perf_counter()
-                _apply_filters(derived, sos)
-                t_filt_total += time.perf_counter() - t2
-
-                total_samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
-
-            t_wall = time.perf_counter() - t_wall_start
-            results.append({
-                "category": "filter_pipeline_full",
-                **_core_result_fields(target),
-                "benchmark": "D.1",
-                "duration_hours": hours,
-                "duration_seconds": bench_sec,
-                "sample_freq": sample_freq,
-                "total_samples": total_samples_read,
-                **_single_timing_fields(t_wall, precision=3, peak_rss_mib=memory_tracker.peak_rss_mib),
-                "read_seconds": round(t_read_total, 3),
-                "montage_seconds": round(t_mont_total, 3),
-                "filter_seconds": round(t_filt_total, 3),
-                **_throughput(total_samples_read, n_channels, t_wall),
-            })
+        results.append(_bench_filter_pipeline_full_target(info, target, labels, sos, bench_rows, bench_sec, hours))
 
     fft_window_sec = 10
     fft_stride_sec = 2
     fft_window_samples = int(fft_window_sec * sample_freq)
     fft_stride_samples = int(fft_stride_sec * sample_freq)
     n_fft_windows = max(0, ((bench_rows - fft_window_samples) // fft_stride_samples) + 1)
-    read_chunk_sec = 300
-    read_chunk_rows = max(1, int(read_chunk_sec * sample_freq))
-    row_fft_chunks = _row_chunk_windows(info.total_rows, read_chunk_rows, max_rows=bench_rows)
-    stamp_fft_chunks = [_stamp_bounds(info, row_bounds) for row_bounds in row_fft_chunks]
     print(f"    FFT: {n_fft_windows} windows, {fft_window_sec}s window, {fft_stride_sec}s stride")
 
     for target in targets:
-        with _PeakRssTracker() as memory_tracker, _target_context(target) as reader_state:
-            t_read_total = t_mont_total = t_filt_total = t_fft_total = 0.0
-            total_samples_read = 0
-            fft_count = 0
-            chunk_bounds = row_fft_chunks if target["reader_kind"] == "edf" else stamp_fft_chunks
-
-            t_wall_start = time.perf_counter()
-            tail: np.ndarray | None = None
-
-            for cs, ce in chunk_bounds:
-                t0 = time.perf_counter()
-                matrix = _read_target_window(target, info, info.channel_columns, cs, ce, reader_state)
-                t_read_total += time.perf_counter() - t0
-
-                t1 = time.perf_counter()
-                derived = _apply_bipolar_montage(matrix, labels)
-                t_mont_total += time.perf_counter() - t1
-
-                t2 = time.perf_counter()
-                filtered = _apply_filters(derived, sos)
-                t_filt_total += time.perf_counter() - t2
-
-                total_samples_read += matrix.shape[1] if matrix.ndim == 2 else 0
-                combined = np.concatenate([tail, filtered], axis=1) if tail is not None and tail.shape[1] > 0 else filtered
-                n_combined = combined.shape[1]
-                t3 = time.perf_counter()
-                pos = 0
-                while pos + fft_window_samples <= n_combined:
-                    np.fft.rfft(combined[:, pos:pos + fft_window_samples], axis=1)
-                    fft_count += 1
-                    pos += fft_stride_samples
-                t_fft_total += time.perf_counter() - t3
-                tail = combined[:, pos:]
-
-            t_wall = time.perf_counter() - t_wall_start
-            if fft_count != n_fft_windows:
-                print(
-                    f"  [warn] D.2 {target['artifact_id']}: expected {n_fft_windows} FFT windows, "
-                    f"computed {fft_count} (delta {fft_count - n_fft_windows:+d})"
-                )
-
-            results.append({
-                "category": "sliding_fft_full",
-                **_core_result_fields(target),
-                "benchmark": "D.2",
-                "duration_hours": hours,
-                "duration_seconds": bench_sec,
-                "sample_freq": sample_freq,
-                "total_samples": total_samples_read,
-                "fft_window_sec": fft_window_sec,
-                "fft_stride_sec": fft_stride_sec,
-                "fft_windows_expected": n_fft_windows,
-                "fft_windows_computed": fft_count,
-                **_single_timing_fields(t_wall, precision=3, peak_rss_mib=memory_tracker.peak_rss_mib),
-                "read_seconds": round(t_read_total, 3),
-                "montage_seconds": round(t_mont_total, 3),
-                "filter_seconds": round(t_filt_total, 3),
-                "fft_seconds": round(t_fft_total, 3),
-                **_throughput(total_samples_read, n_channels, t_wall),
-            })
+        results.append(_bench_sliding_fft_target(info, target, labels, sos, bench_rows, bench_sec, hours))
 
     return results
 
 
-def bench_window_scaling(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
+def bench_window_scaling(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     results = []
     reps = get_repetitions(cfg)
     window_sizes = get_window_sizes(cfg)
@@ -699,7 +777,7 @@ def bench_window_scaling(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     return results
 
 
-def bench_compression(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
+def bench_compression(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     results = []
     if "parquet" not in paths:
         return results
@@ -747,7 +825,7 @@ def bench_compression(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     return results
 
 
-def bench_precision_loss(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
+def bench_precision_loss(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     results = []
     if "parquet" not in paths:
         return results
@@ -820,7 +898,7 @@ def bench_precision_loss(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     return results
 
 
-def bench_int32_storage(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
+def bench_int32_storage(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     results = []
     if "parquet" not in paths:
         return results
@@ -908,7 +986,7 @@ def bench_int32_storage(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     return results
 
 
-def bench_tuned_comparison(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
+def bench_tuned_comparison(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     variants = _tuned_comparison_variants(paths, cfg, info.sample_freq)
     return _run_comparison_workload_suite(
         info,
@@ -920,7 +998,7 @@ def bench_tuned_comparison(info, paths: dict, cfg: dict, **_kwargs) -> list[dict
     )
 
 
-def bench_baseline_comparison(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
+def bench_baseline_comparison(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     variants = _baseline_comparison_variants(paths)
     return _run_comparison_workload_suite(
         info,

@@ -9,14 +9,14 @@ this canonical Parquet, so each input format only needs one ingest path.
 """
 from __future__ import annotations
 
-import hashlib
-import json
 from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from .constants import DEFAULT_STREAMING_BATCH_ROWS
+from .hash_utils import spec_hash
 from .parquet_paths import list_parquet_files
 
 
@@ -39,8 +39,7 @@ def _detect_format(input_path: Path) -> str:
 
 
 def _spec_hash(payload: dict) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha1(encoded).hexdigest()[:10]
+    return spec_hash(payload, length=10)
 
 
 def _decode_hdf5_label(label: object) -> str:
@@ -98,7 +97,7 @@ def _write_table(table: pa.Table, out_file: Path, compression: str,
 
 def _hdf5_batch_rows(total_rows: int, row_group_size: int | None,
                      chunk_rows: int | None = None) -> int:
-    for candidate in (row_group_size, chunk_rows, 65_536):
+    for candidate in (row_group_size, chunk_rows, DEFAULT_STREAMING_BATCH_ROWS):
         if candidate and int(candidate) > 0:
             return max(1, min(total_rows, int(candidate)))
     return max(1, total_rows)
