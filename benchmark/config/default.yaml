@@ -41,7 +41,7 @@ studies:
     # --- Universal input path ---
     # This can be either a local path or a remote Azure blob prefix/URL.
     # The default points at the public Parquet dataset we've been using.
-    input: "external/benchmarks/parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"
+    input: "external/benchmarks/h5/hdf5_col_30m_d928f99b.h5"
 
     # --- Sample frequency (Hz) ---
     # Required for EDF inputs. Optional for HDF5 / ERD when the source metadata
@@ -67,13 +67,6 @@ variants:
   - id: pq_30m_lz4
     format: parquet
     row_group_minutes: 30
-    compression: lz4
-
-  - id: hdf5_col_30m
-    format: hdf5
-    layout: columnar
-    chunk_minutes: 30
-    dtype: float32
     compression: lz4
 
 # Benchmark families are grouped by purpose:
