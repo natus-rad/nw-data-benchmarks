@@ -12,7 +12,7 @@ from pathlib import Path
 
 try:
     from benchmark.core.azure_storage import resolve_input_path
-    from benchmark.core.bench_utils import _estimate_runs, _print_result
+    from benchmark.core.bench_utils import estimate_runs, print_result
     from benchmark.core.benchmarks import BENCHMARKS
     from benchmark.core.config_helpers import (
         get_canonical_parquet_cfg,
@@ -34,15 +34,14 @@ try:
         validate_config,
     )
     from benchmark.core.constants import Category, FormatKey, InputFormat
-    from benchmark.core.ingest import _canonical_file, _detect_format, _recover_sample_freq, ingest
-    from benchmark.core.remote import bench_remote_query
+    from benchmark.core.ingest import canonical_file, detect_format, ingest, recover_sample_freq
     from benchmark.core.setup import (
-        _setup_int32_variants,
-        _setup_parquet_compression_variants,
-        _setup_tuned_variants,
+        setup_int32_variants,
+        setup_parquet_compression_variants,
+        setup_tuned_variants,
     )
-    from benchmark.core.study_info import StudyInfo, _system_info, load_config
-    from benchmark.core.variants import _safe_id, _spec_hash as _variant_spec_hash, generate_variants
+    from benchmark.core.study_info import StudyInfo, load_config, system_info
+    from benchmark.core.variants import generate_variants, safe_id, spec_hash as variant_spec_hash
     from benchmark.scripts.generate_benchmark_report import generate_report
 except ModuleNotFoundError as exc:
     if exc.name == "benchmark" and __package__ in (None, ""):
@@ -55,6 +54,18 @@ except ModuleNotFoundError as exc:
 
 _RESULT_SAVE_RETRIES = 10
 _RESULT_SAVE_RETRY_DELAY_SECONDS = 0.2
+
+_canonical_file = canonical_file
+_detect_format = detect_format
+_estimate_runs = estimate_runs
+_print_result = print_result
+_recover_sample_freq = recover_sample_freq
+_safe_id = safe_id
+_setup_int32_variants = setup_int32_variants
+_setup_parquet_compression_variants = setup_parquet_compression_variants
+_setup_tuned_variants = setup_tuned_variants
+_system_info = system_info
+_variant_spec_hash = variant_spec_hash
 
 
 def _results_backup_path(out_path: Path) -> Path:
@@ -546,69 +557,69 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
             canonical_cfg=get_canonical_parquet_cfg(cfg),
             study_name=study_cfg["name"],
         )
-        info = StudyInfo.from_parquet(canonical_pq, sample_freq=sample_freq)
-        short_name = study_cfg["name"][:30]
-        output_base = cache_dir / f"{short_name}_variants"
-        variant_specs = cfg.get("variants", [])
-        paths = generate_variants(canonical_pq, info, variant_specs, output_base, canonical_cfg=get_canonical_parquet_cfg(cfg))
-        paths.update(_baseline_input_paths(input_path, detected_fmt))
-        paths["__source_target__"] = _source_target(input_path, detected_fmt)
-        paths["__canonical_target__"] = _canonical_target(canonical_pq, cfg)
-        paths["__canonical_parquet__"] = canonical_pq
-        source_type = detected_fmt
-        study_dir = input_path
+        with StudyInfo.from_parquet(canonical_pq, sample_freq=sample_freq) as info:
+            short_name = study_cfg["name"][:30]
+            output_base = cache_dir / f"{short_name}_variants"
+            variant_specs = cfg.get("variants", [])
+            paths = generate_variants(canonical_pq, info, variant_specs, output_base, canonical_cfg=get_canonical_parquet_cfg(cfg))
+            paths.update(_baseline_input_paths(input_path, detected_fmt))
+            paths["__source_target__"] = _source_target(input_path, detected_fmt)
+            paths["__canonical_target__"] = _canonical_target(canonical_pq, cfg)
+            paths["__canonical_parquet__"] = canonical_pq
+            source_type = detected_fmt
+            study_dir = input_path
 
-        selected_ids = {cat_id for cat_id, _, _ in selected}
-        if not variant_specs and detected_fmt == InputFormat.ERD and any(
-            cat_id in {
-                Category.RANDOM_ACCESS,
-                Category.CHANNEL_SUBSET,
-                Category.REMONTAGE,
-                Category.FILTER_PIPELINE,
-                Category.WINDOW_SCALING,
+            selected_ids = {cat_id for cat_id, _, _ in selected}
+            if not variant_specs and detected_fmt == InputFormat.ERD and any(
+                cat_id in {
+                    Category.RANDOM_ACCESS,
+                    Category.CHANNEL_SUBSET,
+                    Category.REMONTAGE,
+                    Category.FILTER_PIPELINE,
+                    Category.WINDOW_SCALING,
+                }
+                and cfg.get("benchmarks", {}).get("core", {}).get(cat_id, {}).get("variants", "all") != []
+                for cat_id in selected_ids
+            ):
+                raise ValueError(
+                    "Core source-direct benchmarking is not yet supported for ERD when root variants is empty. "
+                    "Declare benchmark variants or disable core benchmarks for this run."
+                )
+            if Category.COMPRESSION in selected_ids and paths.get(FormatKey.PARQUET) and is_investigation_enabled(cfg, "compression"):
+                _setup_parquet_compression_variants(
+                    paths, paths[FormatKey.PARQUET], output_base, short_name, cfg)
+            if Category.INT32_STORAGE in selected_ids and paths.get(FormatKey.PARQUET) and is_investigation_enabled(cfg, "int32_storage"):
+                _setup_int32_variants(paths, output_base, short_name, cfg)
+            if Category.TUNED_COMPARISON in selected_ids and paths.get(FormatKey.PARQUET):
+                _setup_tuned_variants(paths, output_base, info, cfg)
+
+            study_meta = {
+                "name": study_cfg["name"],
+                "source_type": source_type,
+                "local_source": str(study_dir),
+                "sample_freq": info.sample_freq,
+                "channels": len(info.channel_labels),
+                "start_stamp": info.start_stamp,
+                "end_stamp": info.end_stamp,
+                "total_stamps": info.total_rows,
+                "duration_seconds": round(info.total_rows / info.sample_freq, 1),
+                "segments": info.n_segments if hasattr(info, "n_segments") else len(info.segment_plans),
+                "paths": {k: str(v) for k, v in paths.items() if isinstance(v, Path)},
             }
-            and cfg.get("benchmarks", {}).get("core", {}).get(cat_id, {}).get("variants", "all") != []
-            for cat_id in selected_ids
-        ):
-            raise ValueError(
-                "Core source-direct benchmarking is not yet supported for ERD when root variants is empty. "
-                "Declare benchmark variants or disable core benchmarks for this run."
-            )
-        if Category.COMPRESSION in selected_ids and paths.get(FormatKey.PARQUET) and is_investigation_enabled(cfg, "compression"):
-            _setup_parquet_compression_variants(
-                paths, paths[FormatKey.PARQUET], output_base, short_name, cfg)
-        if Category.INT32_STORAGE in selected_ids and paths.get(FormatKey.PARQUET) and is_investigation_enabled(cfg, "int32_storage"):
-            _setup_int32_variants(paths, output_base, short_name, cfg)
-        if Category.TUNED_COMPARISON in selected_ids and paths.get(FormatKey.PARQUET):
-            _setup_tuned_variants(paths, output_base, info, cfg)
+            output["studies"].append(study_meta)
 
-        study_meta = {
-            "name": study_cfg["name"],
-            "source_type": source_type,
-            "local_source": str(study_dir),
-            "sample_freq": info.sample_freq,
-            "channels": len(info.channel_labels),
-            "start_stamp": info.start_stamp,
-            "end_stamp": info.end_stamp,
-            "total_stamps": info.total_rows,
-            "duration_seconds": round(info.total_rows / info.sample_freq, 1),
-            "segments": info.n_segments if hasattr(info, "n_segments") else len(info.segment_plans),
-            "paths": {k: str(v) for k, v in paths.items() if isinstance(v, Path)},
-        }
-        output["studies"].append(study_meta)
-
-        for _, cat_name, bench_fn in selected:
-            print(f"\n-- {cat_name} --")
-            results = bench_fn(info, paths, cfg, args) if bench_fn is bench_remote_query else bench_fn(info, paths, cfg)
-            for result in results:
-                result = dict(result)
-                inline_printed = bool(result.pop("_printed_inline", False))
-                result["study"] = study_cfg["name"]
-                output["benchmarks"].append(result)
-                if not inline_printed:
-                    _print_result(result)
-            _save_results(output, out_path)
-            print(f"  [checkpoint -> {out_path}]")
+            for _, cat_name, bench_fn in selected:
+                print(f"\n-- {cat_name} --")
+                results = bench_fn(info, paths, cfg, args=args)
+                for result in results:
+                    result = dict(result)
+                    inline_printed = bool(result.pop("_printed_inline", False))
+                    result["study"] = study_cfg["name"]
+                    output["benchmarks"].append(result)
+                    if not inline_printed:
+                        _print_result(result)
+                _save_results(output, out_path)
+                print(f"  [checkpoint -> {out_path}]")
 
     print(f"\nResults saved to {out_path}")
     if not getattr(args, "no_report", False):
@@ -630,6 +641,9 @@ def main() -> None:
 
     cfg = load_config(args.config)
     run_benchmarks(cfg, args)
+
+
+__all__ = ["main", "run_benchmarks"]
 
 
 if __name__ == "__main__":

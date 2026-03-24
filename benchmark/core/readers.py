@@ -322,3 +322,35 @@ def _read_tuned_pq(path: Path, columns: list[str],
         table.column(c).to_numpy().astype(np.float32, copy=False)
         for c in columns
     ])
+
+
+edf_file = _edf_file
+edf_total_samples = _edf_total_samples
+h5_total_samples = _h5_total_samples
+read_edf_window = _read_edf_window
+read_h5_columnar_window = _read_h5_columnar_window
+read_h5_input_window = _read_h5_input_window
+read_h5_rowgroup_window = _read_h5_rowgroup_window
+read_int32_calibrated = _read_int32_calibrated
+read_int32_calibrated_arrow = _read_int32_calibrated_arrow
+read_int32_nanovolt = _read_int32_nanovolt
+read_int32_nanovolt_arrow = _read_int32_nanovolt_arrow
+read_parquet_window = _read_parquet_window
+read_tuned_parquet = _read_tuned_pq
+
+__all__ = [
+    "EdfFileReader",
+    "edf_file",
+    "edf_total_samples",
+    "h5_total_samples",
+    "read_edf_window",
+    "read_h5_columnar_window",
+    "read_h5_input_window",
+    "read_h5_rowgroup_window",
+    "read_int32_calibrated",
+    "read_int32_calibrated_arrow",
+    "read_int32_nanovolt",
+    "read_int32_nanovolt_arrow",
+    "read_parquet_window",
+    "read_tuned_parquet",
+]

@@ -231,3 +231,11 @@ def _download_edf_from_azure(cfg: dict, edf_blob_path: str,
     elapsed = time.perf_counter() - t0
 
     return elapsed, local_path
+
+
+download_edf_from_azure = _download_edf_from_azure
+
+__all__ = [
+    "download_edf_from_azure",
+    "resolve_input_path",
+]

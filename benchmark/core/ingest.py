@@ -424,3 +424,15 @@ def _ingest_erd(erd_dir: Path, out_file: Path, compression: str,
     _write_table(table, out_file, compression, row_group_size)
     print(f"  [ingest] wrote {out_file} ({total_rows:,} rows)")
     return float(raw.sample_freq)
+
+
+canonical_file = _canonical_file
+detect_format = _detect_format
+recover_sample_freq = _recover_sample_freq
+
+__all__ = [
+    "canonical_file",
+    "detect_format",
+    "ingest",
+    "recover_sample_freq",
+]

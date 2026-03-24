@@ -177,6 +177,12 @@ class StudyInfo:
         self._stamp_cache_path: Path | None = None
         self._segment_row_offsets: tuple[int, ...] = ()
 
+    def __enter__(self) -> "StudyInfo":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
     def close(self) -> None:
         stamps = self._stamps
         self._stamps = None
@@ -253,3 +259,12 @@ class StudyInfo:
         obj._stamp_cache_path = cache_path
         obj._segment_row_offsets = tuple(row_offsets[:-1])
         return obj
+
+
+system_info = _system_info
+
+__all__ = [
+    "StudyInfo",
+    "load_config",
+    "system_info",
+]

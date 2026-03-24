@@ -32,6 +32,17 @@ import benchmark.scripts.run_benchmarks as run_benchmarks
 import benchmark.scripts.generate_benchmark_report as benchmark_report
 
 
+class FakeStudyInfo(SimpleNamespace):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return None
+
+    def close(self):
+        return None
+
+
 class BenchmarkRefactorTests(unittest.TestCase):
     def test_core_modules_import(self):
         self.assertIsNotNone(azure_storage)
@@ -534,7 +545,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
             no_report=True,
             sas_token=None,
         )
-        fake_info = SimpleNamespace(
+        fake_info = FakeStudyInfo(
             sample_freq=256.0,
             total_rows=1024,
             n_segments=1,
@@ -568,7 +579,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
             no_report=True,
             sas_token=None,
         )
-        fake_info = SimpleNamespace(
+        fake_info = FakeStudyInfo(
             sample_freq=256.0,
             total_rows=1024,
             n_segments=1,
@@ -580,7 +591,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
         )
         captured = {}
 
-        def _fake_bench(_info, paths, cfg_norm):
+        def _fake_bench(_info, paths, cfg_norm, **_kwargs):
             captured["targets"] = benchmarks._core_targets(paths, cfg_norm, "random_access")
             return []
 
@@ -615,12 +626,12 @@ class BenchmarkRefactorTests(unittest.TestCase):
         canonical = Path("demo_canonical.parquet")
         captured = {}
 
-        def _fake_bench(_info, paths, _cfg):
+        def _fake_bench(_info, paths, _cfg, **_kwargs):
             captured.update(paths)
             return []
 
         selected = [("baseline_comparison", "K", _fake_bench)]
-        fake_info = SimpleNamespace(
+        fake_info = FakeStudyInfo(
             sample_freq=256.0,
             channel_labels=["Fp1"],
             start_stamp=0,
@@ -1111,10 +1122,10 @@ class BenchmarkRefactorTests(unittest.TestCase):
             )
             info = StudyInfo.from_parquet(canonical, sample_freq=1)
 
-            def fake_parquet_to_edf(_src, out_file, sample_freq=256.0, batch_rows=None):
+            def fake_parquet_to_edf(_src, out_file, sample_freq, batch_rows=None):
                 out_file.write_bytes(b"edf")
 
-            with patch("benchmark.core.variants._parquet_to_edf", side_effect=fake_parquet_to_edf) as mock_convert:
+            with patch("benchmark.core.variants.parquet_to_edf", side_effect=fake_parquet_to_edf) as mock_convert:
                 generate_variants(
                     canonical,
                     info,
@@ -2074,7 +2085,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertEqual([row["channel_subset"] for row in results], ["all", "all"])
 
     def test_runner_skips_duplicate_print_for_inline_logged_results(self):
-        def fake_bench(_info, _paths, _cfg):
+        def fake_bench(_info, _paths, _cfg, **_kwargs):
             return [{
                 "category": "remote_query",
                 "benchmark": "I.1",
@@ -2085,7 +2096,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 "_printed_inline": True,
             }]
 
-        info = SimpleNamespace(
+        info = FakeStudyInfo(
             sample_freq=256.0,
             channel_labels=["Fp1"],
             channel_columns=["ch_Fp1"],
@@ -2161,7 +2172,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
             self.assertEqual(json.loads(backup_path.read_text(encoding="utf-8")), {"old": True})
 
     def test_runner_generates_report_by_default(self):
-        def fake_bench(_info, _paths, _cfg):
+        def fake_bench(_info, _paths, _cfg, **_kwargs):
             return [{
                 "category": "random_access",
                 "format": "parquet",
@@ -2190,7 +2201,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 no_report=False,
                 sas_token=None,
             )
-            info = SimpleNamespace(
+            info = FakeStudyInfo(
                 sample_freq=256.0,
                 channel_labels=["Fp1"],
                 start_stamp=0,
@@ -2213,7 +2224,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
             mock_generate_report.assert_called_once_with(results_path, html=True)
 
     def test_runner_skips_report_when_no_report_requested(self):
-        def fake_bench(_info, _paths, _cfg):
+        def fake_bench(_info, _paths, _cfg, **_kwargs):
             return [{
                 "category": "random_access",
                 "format": "parquet",
@@ -2242,7 +2253,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
                 no_report=True,
                 sas_token=None,
             )
-            info = SimpleNamespace(
+            info = FakeStudyInfo(
                 sample_freq=256.0,
                 channel_labels=["Fp1"],
                 start_stamp=0,

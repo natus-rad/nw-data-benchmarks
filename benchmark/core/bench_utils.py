@@ -188,6 +188,7 @@ def _chunk_ranges(start_stamp: int, end_stamp: int, chunk_stamps: int):
         yield s, e
         s = e + 1
 
+
 def _estimate_runs(cfg: dict, selected: list) -> int:
     """Rough estimate of total benchmark invocations."""
     n = 0
@@ -277,3 +278,28 @@ def _print_result(r: dict) -> None:
         parts.append(f"avg_snr={r['avg_snr_db']:.1f}dB")
 
     print("  ".join(parts))
+
+
+PeakRssTracker = _PeakRssTracker
+chunk_ranges = _chunk_ranges
+estimate_runs = _estimate_runs
+full_study_duration_hours = _full_study_duration_hours
+max_peak_rss = _max_peak_rss
+peak_rss_fields = _peak_rss_fields
+print_result = _print_result
+throughput = _throughput
+timed = _timed
+
+__all__ = [
+    "BYTES_PER_FLOAT32",
+    "PeakRssTracker",
+    "TimedMeasurement",
+    "chunk_ranges",
+    "estimate_runs",
+    "full_study_duration_hours",
+    "max_peak_rss",
+    "peak_rss_fields",
+    "print_result",
+    "throughput",
+    "timed",
+]

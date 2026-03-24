@@ -4,14 +4,14 @@ from contextlib import nullcontext
 import numpy as np
 
 from .bench_utils import (
-    _PeakRssTracker,
-    _chunk_ranges,
-    _full_study_duration_hours,
-    _max_peak_rss,
-    _peak_rss_fields,
-    _print_result,
-    _throughput,
-    _timed,
+    PeakRssTracker,
+    chunk_ranges,
+    full_study_duration_hours,
+    max_peak_rss,
+    peak_rss_fields,
+    print_result,
+    throughput,
+    timed,
 )
 from .config_helpers import (
     get_channel_subsets,
@@ -31,20 +31,44 @@ from .config_helpers import (
 from .parquet_paths import parquet_total_size_bytes
 from .readers import (
     EdfFileReader,
-    _edf_file,
-    _read_h5_columnar_window,
-    _read_h5_input_window,
-    _read_h5_rowgroup_window,
-    _read_int32_calibrated,
-    _read_int32_calibrated_arrow,
-    _read_int32_nanovolt,
-    _read_int32_nanovolt_arrow,
-    _read_parquet_window,
-    _read_tuned_pq,
+    edf_file,
+    read_h5_columnar_window,
+    read_h5_input_window,
+    read_h5_rowgroup_window,
+    read_int32_calibrated,
+    read_int32_calibrated_arrow,
+    read_int32_nanovolt,
+    read_int32_nanovolt_arrow,
+    read_parquet_window,
+    read_tuned_parquet,
 )
 from .remote import bench_remote_query
-from .setup import _get_tuned_block_sizes
-from .signal import _apply_bipolar_montage, _apply_filters, _build_sos
+from .setup import get_tuned_block_sizes
+from .signal import apply_bipolar_montage, apply_filters, build_sos
+
+
+_PeakRssTracker = PeakRssTracker
+_chunk_ranges = chunk_ranges
+_edf_file = edf_file
+_full_study_duration_hours = full_study_duration_hours
+_get_tuned_block_sizes = get_tuned_block_sizes
+_max_peak_rss = max_peak_rss
+_peak_rss_fields = peak_rss_fields
+_print_result = print_result
+_apply_bipolar_montage = apply_bipolar_montage
+_apply_filters = apply_filters
+_build_sos = build_sos
+_read_h5_columnar_window = read_h5_columnar_window
+_read_h5_input_window = read_h5_input_window
+_read_h5_rowgroup_window = read_h5_rowgroup_window
+_read_int32_calibrated = read_int32_calibrated
+_read_int32_calibrated_arrow = read_int32_calibrated_arrow
+_read_int32_nanovolt = read_int32_nanovolt
+_read_int32_nanovolt_arrow = read_int32_nanovolt_arrow
+_read_parquet_window = read_parquet_window
+_read_tuned_pq = read_tuned_parquet
+_throughput = throughput
+_timed = timed
 
 
 def _target_context(target: dict):
@@ -364,7 +388,7 @@ def _baseline_comparison_variants(paths: dict) -> list[dict]:
     return variants
 
 
-def bench_random_access(info, paths: dict, cfg: dict) -> list[dict]:
+def bench_random_access(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     results = []
     reps = get_repetitions(cfg)
     window_sec = get_default_window(cfg)
@@ -408,7 +432,7 @@ def bench_random_access(info, paths: dict, cfg: dict) -> list[dict]:
     return results
 
 
-def bench_channel_subset(info, paths: dict, cfg: dict) -> list[dict]:
+def bench_channel_subset(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     results = []
     reps = get_repetitions(cfg)
     window_sec = get_default_window(cfg)
@@ -446,7 +470,7 @@ def bench_channel_subset(info, paths: dict, cfg: dict) -> list[dict]:
     return results
 
 
-def bench_remontage(info, paths: dict, cfg: dict) -> list[dict]:
+def bench_remontage(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     import time
 
     results = []
@@ -501,7 +525,7 @@ def bench_remontage(info, paths: dict, cfg: dict) -> list[dict]:
     return results
 
 
-def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
+def bench_filter_pipeline(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     import time
 
     results = []
@@ -639,7 +663,7 @@ def bench_filter_pipeline(info, paths: dict, cfg: dict) -> list[dict]:
     return results
 
 
-def bench_window_scaling(info, paths: dict, cfg: dict) -> list[dict]:
+def bench_window_scaling(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     results = []
     reps = get_repetitions(cfg)
     window_sizes = get_window_sizes(cfg)
@@ -675,7 +699,7 @@ def bench_window_scaling(info, paths: dict, cfg: dict) -> list[dict]:
     return results
 
 
-def bench_compression(info, paths: dict, cfg: dict) -> list[dict]:
+def bench_compression(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     results = []
     if "parquet" not in paths:
         return results
@@ -723,7 +747,7 @@ def bench_compression(info, paths: dict, cfg: dict) -> list[dict]:
     return results
 
 
-def bench_precision_loss(info, paths: dict, cfg: dict) -> list[dict]:
+def bench_precision_loss(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     results = []
     if "parquet" not in paths:
         return results
@@ -796,7 +820,7 @@ def bench_precision_loss(info, paths: dict, cfg: dict) -> list[dict]:
     return results
 
 
-def bench_int32_storage(info, paths: dict, cfg: dict) -> list[dict]:
+def bench_int32_storage(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     results = []
     if "parquet" not in paths:
         return results
@@ -884,7 +908,7 @@ def bench_int32_storage(info, paths: dict, cfg: dict) -> list[dict]:
     return results
 
 
-def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
+def bench_tuned_comparison(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     variants = _tuned_comparison_variants(paths, cfg, info.sample_freq)
     return _run_comparison_workload_suite(
         info,
@@ -896,7 +920,7 @@ def bench_tuned_comparison(info, paths: dict, cfg: dict) -> list[dict]:
     )
 
 
-def bench_baseline_comparison(info, paths: dict, cfg: dict) -> list[dict]:
+def bench_baseline_comparison(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     variants = _baseline_comparison_variants(paths)
     return _run_comparison_workload_suite(
         info,
@@ -921,3 +945,17 @@ BENCHMARKS = {
     "tuned_comparison": ("J: Tuned Parquet vs HDF5 (matched block sizes)", bench_tuned_comparison),
     "baseline_comparison": ("K: Baseline format comparison using J-style workloads", bench_baseline_comparison),
 }
+
+__all__ = [
+    "BENCHMARKS",
+    "bench_baseline_comparison",
+    "bench_channel_subset",
+    "bench_compression",
+    "bench_filter_pipeline",
+    "bench_int32_storage",
+    "bench_precision_loss",
+    "bench_random_access",
+    "bench_remontage",
+    "bench_tuned_comparison",
+    "bench_window_scaling",
+]

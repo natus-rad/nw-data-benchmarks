@@ -51,7 +51,7 @@ def _iter_parquet_tables(src_files: list[Path], *, columns: list[str] | None = N
 
 
 def _parquet_to_edf(pq_dir: Path, edf_path: Path,
-                    sample_freq: float = 256.0,
+                    sample_freq: float,
                     batch_rows: int | None = None) -> None:
     """Convert float32 Parquet files to a single EDF file."""
     import pyedflib
@@ -611,3 +611,22 @@ def _setup_tuned_h5(paths, output_base, src_files, ch_cols,
     size_mib = out_file.stat().st_size / (1024 * 1024)
     n_chunks = (total_rows + cs - 1) // cs
     print(f"  [convert] {key}: {size_mib:.1f} MiB, {n_chunks} chunks")
+
+
+build_chunk_index = _build_chunk_index
+get_tuned_block_sizes = _get_tuned_block_sizes
+iter_parquet_tables = _iter_parquet_tables
+parquet_to_edf = _parquet_to_edf
+setup_int32_variants = _setup_int32_variants
+setup_parquet_compression_variants = _setup_parquet_compression_variants
+setup_tuned_variants = _setup_tuned_variants
+
+__all__ = [
+    "build_chunk_index",
+    "get_tuned_block_sizes",
+    "iter_parquet_tables",
+    "parquet_to_edf",
+    "setup_int32_variants",
+    "setup_parquet_compression_variants",
+    "setup_tuned_variants",
+]

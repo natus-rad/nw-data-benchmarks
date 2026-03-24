@@ -47,3 +47,16 @@ def _apply_filters(matrix: np.ndarray, sos: np.ndarray) -> np.ndarray:
     matrix32 = np.asarray(matrix, dtype=np.float32)
     filtered = sosfilt(np.asarray(sos, dtype=np.float32), matrix32, axis=1)
     return np.asarray(filtered, dtype=np.float32)
+
+
+apply_bipolar_montage = _apply_bipolar_montage
+apply_filters = _apply_filters
+build_sos = _build_sos
+
+__all__ = [
+    "BIPOLAR_PAIRS",
+    "CHANNELS_10_20",
+    "apply_bipolar_montage",
+    "apply_filters",
+    "build_sos",
+]

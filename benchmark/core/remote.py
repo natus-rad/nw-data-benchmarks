@@ -1,16 +1,24 @@
 from __future__ import annotations
 
-import argparse
 import time
 from pathlib import Path
 
 import numpy as np
 
-from .azure_storage import _download_edf_from_azure
-from .bench_utils import _PeakRssTracker, _chunk_ranges, _peak_rss_fields, _print_result, _throughput
+from .azure_storage import download_edf_from_azure
+from .bench_utils import PeakRssTracker, chunk_ranges, peak_rss_fields, print_result, throughput
 from .config_helpers import get_remote_query_cfg, is_investigation_enabled
-from .readers import EdfFileReader, _edf_file
+from .readers import EdfFileReader, edf_file
 from .signal import CHANNELS_10_20
+
+
+_PeakRssTracker = PeakRssTracker
+_chunk_ranges = chunk_ranges
+_download_edf_from_azure = download_edf_from_azure
+_edf_file = edf_file
+_peak_rss_fields = peak_rss_fields
+_print_result = print_result
+_throughput = throughput
 
 
 def _make_duckdb_connection(account: str):
@@ -51,16 +59,16 @@ def _duckdb_remote_read(con, az_path: str, columns: list[str],
     return elapsed, n_rows
 
 
-def bench_remote_query(info, paths: dict, cfg: dict,
-                       args: argparse.Namespace | None = None) -> list[dict]:
+def bench_remote_query(info, paths: dict, cfg: dict, **_kwargs) -> list[dict]:
     """Benchmark I: Remote Parquet (DuckDB) vs Remote EDF (full download + local read)."""
     results = []
+    args = _kwargs.get("args")
 
     def _append_logged_result(row: dict) -> None:
         row = dict(row)
         row["_printed_inline"] = True
         results.append(row)
-        _print_result(row)
+        print_result(row)
 
     remote_cfg = get_remote_query_cfg(cfg)
     if not remote_cfg:
@@ -268,3 +276,6 @@ def bench_remote_query(info, paths: dict, cfg: dict,
             })
 
     return results
+
+
+__all__ = ["bench_remote_query"]
