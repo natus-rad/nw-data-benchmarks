@@ -1,7 +1,9 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import benchmark.reporting.html as reporting_html
 from benchmark.scripts.generate_benchmark_report import (
     ReportGenerationError,
     block_sort_key,
@@ -186,6 +188,28 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         self.assertIn('<div class="diagram-card"><div class="mermaid">flowchart LR\nA[Input] --> B[Canonical]</div></div>', html)
         self.assertIn('cdn.jsdelivr.net/npm/mermaid', html)
 
+    def test_render_html_rereads_css_and_js_assets_after_they_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            css_path = root / "report.css"
+            js_path = root / "report.js"
+            css_path.write_text("body { color: red; }", encoding="utf-8")
+            js_path.write_text("console.log('first')", encoding="utf-8")
+
+            with patch.object(reporting_html, "HTML_CSS_PATH", css_path), \
+                 patch.object(reporting_html, "HTML_SCRIPT_PATH", js_path):
+                first_html = render_html("# Report\n\nHello\n")
+                css_path.write_text("body { color: blue; }", encoding="utf-8")
+                js_path.write_text("console.log('second')", encoding="utf-8")
+                second_html = render_html("# Report\n\nHello\n")
+
+            self.assertIn("body { color: red; }", first_html)
+            self.assertIn("console.log('first')", first_html)
+            self.assertIn("body { color: blue; }", second_html)
+            self.assertIn("console.log('second')", second_html)
+            self.assertNotIn("body { color: red; }", second_html)
+            self.assertNotIn("console.log('first')", second_html)
+
     def test_render_report_includes_separate_k_section(self) -> None:
         payload = {
             "run_id": "2026-03-21T00-00-00",
@@ -316,6 +340,25 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
         rendered = render_report(payload, template, Path("benchmark/results/demo.json"))
 
         self.assertIn("| Position | Parquet 30m LZ4 | HDF5 columnar 30m |", rendered)
+
+    def test_render_report_humanizes_variant_prefixed_dynamic_formats(self) -> None:
+        payload = {
+            "run_id": "2026-03-21T00-00-00",
+            "system": {"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16},
+            "studies": [{"name": "demo", "channels": 2, "sample_freq": 100.0, "total_stamps": 1000, "duration_seconds": 10.0}],
+            "benchmarks": [
+                {"category": "random_access", "format": "variant__pq_30m_lz4", "position": "0%", "artifact_order": 0, "wall_clock_seconds": 0.4, "mib_per_sec": 12.0},
+                {"category": "random_access", "format": "variant__hdf5_col_30m", "position": "0%", "artifact_order": 1, "wall_clock_seconds": 0.5, "mib_per_sec": 10.0},
+            ],
+        }
+        template = "# Report\n\n${a_results}\n"
+
+        rendered = render_report(payload, template, Path("benchmark/results/demo.json"))
+
+        self.assertIn("Parquet 30m LZ4", rendered)
+        self.assertIn("HDF5 columnar 30m", rendered)
+        self.assertNotIn("variant__pq_30m_lz4", rendered)
+        self.assertNotIn("variant__hdf5_col_30m", rendered)
 
     def test_render_report_handles_zero_artifact_size_without_crashing(self) -> None:
         payload = {

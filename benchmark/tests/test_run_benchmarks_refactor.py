@@ -311,19 +311,6 @@ class BenchmarkRefactorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "canonical_parquet.chunk_reader_max_rowgroups"):
             validate_config(cfg)
 
-    def test_validate_config_rejects_removed_canonical_alias_keys(self):
-        cfg = normalize_config({"canonical_parquet": {"write_row_groups_per_chunk": 2}})
-        with self.assertRaisesRegex(ValueError, "write_row_groups_per_chunk"):
-            validate_config(cfg)
-
-        cfg = normalize_config({"canonical_parquet": {"variant_read_batch_rows": 1024}})
-        with self.assertRaisesRegex(ValueError, "variant_read_batch_rows"):
-            validate_config(cfg)
-
-        cfg = normalize_config({"canonical_parquet": {"chunk_reader_max_rows": 1024}})
-        with self.assertRaisesRegex(ValueError, "chunk_reader_max_rows"):
-            validate_config(cfg)
-
     def test_validate_config_rejects_canonical_id_collision(self):
         cfg = normalize_config({
             "canonical_parquet": {"id": "pq_main"},
@@ -1259,6 +1246,28 @@ class BenchmarkRefactorTests(unittest.TestCase):
             with patch("benchmark.core.study_info._open_stamp_cache", side_effect=AssertionError("closed StudyInfo should not reopen stamp cache")):
                 with self.assertRaisesRegex(RuntimeError, "cannot be used after StudyInfo.close"):
                     info.stamp_at_row(0)
+
+    def test_study_info_stamp_at_row_checks_bounds_before_indexing_memmap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            pq_file = tmp_path / "single.parquet"
+            pq.write_table(
+                pa.table({
+                    "samplestamp": pa.array([10, 11], type=pa.int64()),
+                    "ch_Fp1": pa.array([0.1, 0.2], type=pa.float32()),
+                }),
+                pq_file,
+                compression="snappy",
+            )
+
+            info = StudyInfo.from_parquet(pq_file, sample_freq=256)
+            try:
+                with self.assertRaisesRegex(IndexError, r"Row index -1 out of range \[0, 2\)"):
+                    info.stamp_at_row(-1)
+                with self.assertRaisesRegex(IndexError, r"Row index 2 out of range \[0, 2\)"):
+                    info.stamp_at_row(2)
+            finally:
+                info.close()
 
     def test_study_info_from_parquet_reuses_existing_stamp_cache(self):
         with tempfile.TemporaryDirectory() as tmp:

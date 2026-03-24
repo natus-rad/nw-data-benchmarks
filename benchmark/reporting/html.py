@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from functools import lru_cache
 from pathlib import Path
 import re
 
@@ -11,7 +10,6 @@ HTML_CSS_PATH = Path(__file__).resolve().parents[1] / "scripts" / "generate_benc
 HTML_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "generate_benchmark_report.js"
 
 
-@lru_cache(maxsize=None)
 def _report_asset_text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8").strip()

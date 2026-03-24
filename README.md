@@ -19,7 +19,7 @@ See the generated [benchmark report](benchmark/docs/benchmark_report.md) for the
 git clone <repo-url> && cd nw-data-benchmarks
 pip install -r requirements.txt
 
-# 2. Run the default benchmark suite
+# 2. Run the default benchmark suite (see benchmark/config/default.yaml)
 python -m benchmark.scripts.run_benchmarks
 
 #    This writes benchmark/results/*.json and generates

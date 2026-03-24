@@ -112,6 +112,9 @@ def _layout_label(value: str) -> str:
 
 
 def _humanize_dynamic_format(value: str) -> str:
+    if value.startswith("variant__"):
+        value = value[len("variant__"):]
+
     pq_match = re.fullmatch(r"pq_([0-9]+(?:\.[0-9]+)?[smh])_([a-z0-9_]+)", value)
     if pq_match:
         block_size, codec = pq_match.groups()

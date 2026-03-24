@@ -75,10 +75,7 @@ def _canonical_file(cache_dir: Path, input_path: Path, fmt: str,
         "canonical": {
             "compression": canonical_cfg.get("compression", "snappy"),
             "row_group_minutes": canonical_cfg.get("row_group_minutes", 30),
-            "chunk_writer_max_rowgroups": canonical_cfg.get(
-                "chunk_writer_max_rowgroups",
-                canonical_cfg.get("write_row_groups_per_chunk", 1),
-            ),
+            "chunk_writer_max_rowgroups": canonical_cfg.get("chunk_writer_max_rowgroups", 1),
         },
     }
     token = _spec_hash(payload)
@@ -304,10 +301,7 @@ def ingest(input_path: Path, cache_dir: Path,
     row_group_size = _row_group_size(float(sample_freq), canonical_cfg.get("row_group_minutes"))
     write_chunk_rows = _write_chunk_rows(
         row_group_size,
-        canonical_cfg.get(
-            "chunk_writer_max_rowgroups",
-            canonical_cfg.get("write_row_groups_per_chunk", 1),
-        ),
+        canonical_cfg.get("chunk_writer_max_rowgroups", 1),
     )
 
     if fmt == "parquet":

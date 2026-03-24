@@ -58,8 +58,8 @@ canonical_parquet:
   id: canonical
   compression: snappy
   row_group_minutes: 30
-  chunk_writer_max_rowgroups: 1  # Buffer this many canonical row groups before each streamed write flush.
-  chunk_reader_max_rowgroups: 1   # Row groups to read at a time from canonical Parquet when generating variants.
+  chunk_writer_max_rowgroups: 2  # Buffer this many canonical row groups before each streamed write flush.
+  chunk_reader_max_rowgroups: 2  # Row groups to read at a time from canonical Parquet when generating variants.
 
 # User-declared benchmark targets generated from canonical Parquet.
 # `id` must be unique and stable; it is also used in reports and cache naming.

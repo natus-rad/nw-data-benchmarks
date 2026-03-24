@@ -131,11 +131,7 @@ def normalize_config(cfg: dict | None) -> dict:
     baseline = dict(raw_baseline)
     baseline["enabled"] = bool(baseline.get("enabled", False))
 
-    canonical_cfg = _dict_or_empty(cfg.get("canonical_parquet"))
-    cfg["canonical_parquet"] = {
-        **DEFAULT_CANONICAL_PARQUET,
-        **canonical_cfg,
-    }
+    cfg["canonical_parquet"] = get_canonical_parquet_cfg(cfg)
     cfg["benchmarks"] = {
         "common": common,
         "core": core,
@@ -149,23 +145,6 @@ def normalize_config(cfg: dict | None) -> dict:
 
 
 def validate_config(cfg: dict) -> None:
-    raw_canonical_cfg = _dict_or_empty(cfg.get("canonical_parquet"))
-    if "write_row_groups_per_chunk" in raw_canonical_cfg:
-        raise ValueError(
-            "canonical_parquet.write_row_groups_per_chunk is no longer supported; "
-            "use canonical_parquet.chunk_writer_max_rowgroups"
-        )
-    if "variant_read_batch_rows" in raw_canonical_cfg:
-        raise ValueError(
-            "canonical_parquet.variant_read_batch_rows is no longer supported; "
-            "use canonical_parquet.chunk_reader_max_rowgroups"
-        )
-    if "chunk_reader_max_rows" in raw_canonical_cfg:
-        raise ValueError(
-            "canonical_parquet.chunk_reader_max_rows is no longer supported; "
-            "use canonical_parquet.chunk_reader_max_rowgroups"
-        )
-
     canonical_cfg = get_canonical_parquet_cfg(cfg)
     canonical_id = canonical_cfg.get("id")
     if not isinstance(canonical_id, str) or not canonical_id.strip():
@@ -275,7 +254,11 @@ def selected_categories(cfg: dict) -> list[str]:
 
 
 def get_canonical_parquet_cfg(cfg: dict) -> dict:
-    return {**DEFAULT_CANONICAL_PARQUET, **_dict_or_empty(cfg.get("canonical_parquet"))}
+    canonical_cfg = _dict_or_empty(cfg.get("canonical_parquet"))
+    return {
+        key: canonical_cfg.get(key, default)
+        for key, default in DEFAULT_CANONICAL_PARQUET.items()
+    }
 
 
 def get_repetitions(cfg: dict) -> int:

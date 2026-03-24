@@ -203,8 +203,6 @@ class StudyInfo:
         Uses a disk-backed memmap built during from_parquet() setup — O(1)
         indexed access without loading the full samplestamp column into RAM.
         """
-        if self._stamps is not None:
-            return int(self._stamps[idx])
         if self._stamp_cache_closed:
             raise RuntimeError(
                 "StudyInfo.stamp_at_row() cannot be used after StudyInfo.close(). "
@@ -215,6 +213,11 @@ class StudyInfo:
                 "StudyInfo.stamp_at_row() requires Parquet-backed samplestamps. "
                 "Construct StudyInfo via StudyInfo.from_parquet()."
             )
+        total_rows = int(self.total_rows)
+        if not 0 <= idx < total_rows:
+            raise IndexError(f"Row index {idx} out of range [0, {total_rows})")
+        if self._stamps is not None:
+            return int(self._stamps[idx])
         self._stamps = _open_stamp_cache(self._stamp_cache_path, int(self.total_rows))
         return int(self._stamps[idx])
 

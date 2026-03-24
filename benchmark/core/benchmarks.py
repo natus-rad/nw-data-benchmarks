@@ -48,6 +48,11 @@ from .signal import apply_bipolar_montage, apply_filters, build_sos
 from .study_info import StudyInfo
 
 
+# EDF stores int16 samples across the digital range [-32768, 32767].
+EDF_DIGITAL_RANGE = 65535
+EDF_DIGITAL_OFFSET = 32768
+
+
 def _target_context(target: dict):
     # Benchmark timing intentionally avoids keeping EDF readers open across
     # repeated timed iterations so EDF is measured with reopen cost included.
@@ -839,8 +844,12 @@ def bench_precision_loss(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> 
             })
             continue
 
-        digital = np.round((signal - phys_min) / phys_range * 65535 - 32768).astype(np.int16)
-        reconstructed = (digital.astype(np.float64) + 32768) / 65535 * phys_range + phys_min
+        digital = np.round(
+            (signal - phys_min) / phys_range * EDF_DIGITAL_RANGE - EDF_DIGITAL_OFFSET
+        ).astype(np.int16)
+        reconstructed = (
+            (digital.astype(np.float64) + EDF_DIGITAL_OFFSET) / EDF_DIGITAL_RANGE * phys_range + phys_min
+        )
 
         error = np.abs(signal - reconstructed)
         max_err = float(error.max())
