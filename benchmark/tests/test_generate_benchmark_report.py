@@ -597,6 +597,105 @@ class GenerateBenchmarkReportTests(unittest.TestCase):
 
         self.assertTrue(template_text.startswith("<!-- AUTO-GENERATED -->\n"))
 
+    @staticmethod
+    def _two_study_payload() -> dict:
+        return {
+            "run_id": "2026-03-21T00-00-00",
+            "system": {"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16},
+            "studies": [
+                {"name": "study_one", "channels": 2, "sample_freq": 100.0, "total_stamps": 1000, "duration_seconds": 10.0},
+                {"name": "study_two", "channels": 4, "sample_freq": 200.0, "total_stamps": 2000, "duration_seconds": 10.0},
+            ],
+            "benchmarks": [
+                {"study": "study_one", "category": "random_access", "format": "parquet", "position": "0%", "wall_clock_seconds": 0.5, "mib_per_sec": 10.0},
+                {"study": "study_two", "category": "random_access", "format": "edf", "position": "0%", "wall_clock_seconds": 1.5, "mib_per_sec": 5.0},
+            ],
+        }
+
+    def test_render_report_repeats_marked_block_per_study(self) -> None:
+        template = (
+            "# Report\n\n${run_overview}\n\n"
+            "<!-- BEGIN PER-STUDY SECTIONS -->\n"
+            "## Study: ${study_name}\n\n${study_overview}\n\n${a_results}\n"
+            "<!-- END PER-STUDY SECTIONS -->\n"
+        )
+
+        rendered = render_report(self._two_study_payload(), template, Path("demo_benchmark_results.json"))
+
+        self.assertIn("## Study: study_one", rendered)
+        self.assertIn("## Study: study_two", rendered)
+        self.assertIn("2: study_one, study_two", rendered)
+        # Rows are scoped per study: parquet only under study_one, edf only under study_two.
+        study_two_part = rendered.split("## Study: study_two", 1)[1]
+        self.assertNotIn("Parquet", study_two_part)
+        self.assertIn("EDF", study_two_part)
+
+    def test_validate_results_rejects_untagged_rows_in_multi_study_payloads(self) -> None:
+        payload = self._two_study_payload()
+        del payload["benchmarks"][1]["study"]
+
+        with self.assertRaises(ReportGenerationError):
+            validate_results(payload, Path("demo.json"))
+
+    def test_tracked_template_renders_multi_study_payload(self) -> None:
+        template_text = TEMPLATE_PATH.read_text(encoding="utf-8")
+
+        rendered = render_report(self._two_study_payload(), template_text, Path("demo_benchmark_results.json"))
+
+        self.assertEqual(rendered.count("## Executive Summary"), 2)
+        self.assertEqual(rendered.count("## A. Random Access"), 2)
+        self.assertIn("## Study: study_one", rendered)
+        self.assertIn("## Study: study_two", rendered)
+
+    def test_generate_report_defaults_to_timestamped_output_and_latest_copy(self) -> None:
+        import benchmark.reporting.api as reporting_api
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_path = root / "demo_benchmark_results.json"
+            template_path = root / "report.template.md"
+            input_path.write_text(
+                '{"run_id": "2026-03-21T00-00-00", '
+                '"system": {"os": "Windows", "python": "3.12", "cpu_count": 8, "ram_gb": 16}, '
+                '"studies": [{"name": "demo", "channels": 2, "sample_freq": 100.0, "total_stamps": 1000, "duration_seconds": 10.0}], '
+                '"benchmarks": [{"category": "random_access", "format": "parquet", "position": "0%", "wall_clock_seconds": 0.5, "mib_per_sec": 10.0}]}',
+                encoding="utf-8",
+            )
+            template_path.write_text("# Report\n\n${overview}\n", encoding="utf-8")
+
+            with patch.object(reporting_api, "REPORTS_DIR", root / "reports"), \
+                    patch.object(reporting_api, "DEFAULT_OUTPUT", root / "benchmark_report.md"):
+                report_md, report_html = reporting_api.generate_report(
+                    input_path, template_path=template_path, html=True,
+                )
+
+            expected = (root / "reports" / "2026-03-21T00-00-00_benchmark_report.md").resolve()
+            self.assertEqual(report_md, expected)
+            self.assertTrue(expected.exists())
+            self.assertTrue(expected.with_suffix(".html").exists())
+            self.assertTrue((root / "benchmark_report.md").exists())
+            self.assertTrue((root / "benchmark_report.html").exists())
+
+    def test_render_html_deduplicates_repeated_heading_anchors(self) -> None:
+        html = render_html("# T\n\n## Same Heading\n\ntext\n\n## Same Heading\n\nmore\n")
+
+        self.assertIn('<h2 id="same-heading">', html)
+        self.assertIn('<h2 id="same-heading-2">', html)
+        self.assertIn('href="#same-heading-2"', html)
+
+    def test_timing_cell_reports_min_max_spread(self) -> None:
+        from benchmark.reporting.common import timing_cell
+
+        row = {
+            "wall_clock_seconds": 0.5,
+            "first_wall_clock_seconds": 0.9,
+            "timing_samples_seconds": [0.9, 0.5, 0.4],
+        }
+        cell = timing_cell(row, "wall_clock_seconds")
+
+        self.assertIn("first 0.9000s", cell)
+        self.assertIn("spread 0.4000s-0.9000s", cell)
+
 
 if __name__ == "__main__":
     unittest.main()

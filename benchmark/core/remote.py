@@ -7,7 +7,7 @@ import numpy as np
 
 from .azure_storage import download_edf_from_azure
 from .bench_utils import PeakRssTracker, chunk_ranges, peak_rss_fields, print_result, throughput
-from .config_helpers import get_remote_query_cfg, is_investigation_enabled
+from .config_helpers import get_remote_query_cfg, is_investigation_enabled, merge_remote_query_paths
 from .readers import EdfFileReader, edf_file
 from .signal import CHANNELS_10_20
 from .study_info import StudyInfo
@@ -69,6 +69,9 @@ def bench_remote_query(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> li
     if not is_investigation_enabled(cfg, "remote_query"):
         print("    [skip] parquet_investigations.remote_query.enabled is false.")
         return results
+    # Per-study remote dataset paths (from the dataset manifest) override the
+    # deprecated global path keys.
+    remote_cfg = merge_remote_query_paths(remote_cfg, _kwargs.get("study"))
 
     sample_freq = info.sample_freq
     n_channels = len(info.channel_labels)

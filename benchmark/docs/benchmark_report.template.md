@@ -6,13 +6,28 @@ _Generated from `${source_file}` (run `${run_id}`)._
 
 This report is automatically generated from benchmark result JSON and is intended to replace manual Markdown edits.
 
+## Methodology
+
+- **Timing.** Each timed operation runs a configured number of repetitions (`benchmarks.common.repetitions`, default 3) and the reported time is the **median** across repetitions. The first (coldest) repetition is recorded separately and shown as "first ..." in timing cells when it differs from the median. All raw per-repetition samples are preserved in the results JSON (`timing_samples_seconds`).
+- **Cache semantics.** The OS page cache is not evicted between repetitions, so median times reflect warm-cache reads. Treat the first-run value as the cold-start proxy.
+- **Throughput.** All throughput values in this report are computed from the theoretical decoded float32 payload (rows x channels x 4 bytes) divided by the median wall time - not from compressed bytes on disk.
+- **Fairness of open cost.** Every format opens and closes its file on each timed call; no format holds a persistent handle across repetitions, so file-open overhead is included uniformly.
+- **HDF5 caveat.** HDF5 artifacts include a benchmark-specific `chunk_index` helper dataset for fast seeks. HDF5 results therefore represent optimized HDF5-with-helper behavior, not generic HDF5.
+- **Memory.** Peak RSS is sampled by a background poller at 50 ms resolution inside the timed region; values are indicative, and very short operations may under-report their true peak.
+
 ## Run Overview
 
-${overview}
+${run_overview}
+
+<!-- BEGIN PER-STUDY SECTIONS -->
+
+## Study: ${study_name}
+
+${study_overview}
 
 ## Executive Summary
 
-Benchmark rows: **${benchmark_count}** across **${category_count}** categories.
+Benchmark rows: **${study_benchmark_count}** across **${study_category_count}** categories.
 
 ${summary}
 
@@ -245,3 +260,5 @@ ${k3_results}
 **Question answered:** How does the baseline input artifact perform on whole-study scans compared with the tuned variants in Benchmark J?
 
 ${k4_results}${k_notes}
+
+<!-- END PER-STUDY SECTIONS -->

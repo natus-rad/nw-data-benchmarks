@@ -4,6 +4,11 @@
 # Benchmark result JSON files (regenerated on each run)
 benchmark/results/*.json
 
+# Generated reports (rebuilt from results JSON)
+benchmark/docs/reports/
+benchmark/docs/benchmark_report.md
+benchmark/docs/benchmark_report.html
+
 # Python
 __pycache__/
 *.pyc

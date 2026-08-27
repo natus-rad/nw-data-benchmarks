@@ -10,7 +10,7 @@ import pyarrow.parquet as pq
 
 from .config_helpers import (
     get_canonical_parquet_cfg,
-    get_parquet_compression_variants,
+    get_compression_codec_matrix,
     get_tuned_block_sizes_minutes,
     get_tuned_hdf5_compression,
     get_tuned_parquet_codecs,
@@ -103,7 +103,7 @@ def _setup_parquet_compression_variants(paths: dict, src_dir: Path,
         return
     batch_row_groups = _chunk_reader_max_row_groups(cfg)
 
-    for comp_cfg in get_parquet_compression_variants(cfg):
+    for comp_cfg in get_compression_codec_matrix(cfg):
         codec = comp_cfg["codec"]
         level = comp_cfg.get("level")
         label = f"{codec}_{level}" if level else codec

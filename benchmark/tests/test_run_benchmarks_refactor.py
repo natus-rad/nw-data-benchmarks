@@ -17,14 +17,16 @@ import pyarrow.parquet as pq
 from benchmark.core import azure_storage, bench_utils, benchmarks, readers, remote, setup, signal, study_info
 from benchmark.core.config_helpers import (
     get_canonical_parquet_cfg,
-    get_parquet_compression_variants,
+    get_compression_codec_matrix,
     get_tuned_block_sizes_minutes,
     get_tuned_chunk_sec,
     get_tuned_hdf5_compression,
     get_tuned_parquet_codecs,
     normalize_config,
+    selected_categories,
     validate_config,
 )
+from benchmark.core.datasets import load_dataset_manifest, resolve_studies
 from benchmark.core.ingest import _canonical_file, _ingest_edf, _iter_edf_tables, _iter_hdf5_tables, ingest
 from benchmark.core.study_info import StudyInfo
 from benchmark.core.variants import generate_variants
@@ -302,9 +304,10 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertEqual(cfg["canonical_parquet"]["chunk_writer_max_rowgroups"], 1)
         self.assertEqual(cfg["canonical_parquet"]["chunk_reader_max_rowgroups"], 1)
         self.assertFalse(cfg["benchmarks"]["core"]["random_access"]["include_canonical"])
-        self.assertEqual(cfg["benchmarks"]["core"]["filter_pipeline"]["fft_window_sec"], 10.0)
-        self.assertEqual(cfg["benchmarks"]["core"]["filter_pipeline"]["fft_stride_sec"], 2.0)
-        self.assertEqual(cfg["benchmarks"]["core"]["filter_pipeline"]["read_chunk_sec"], 300.0)
+        self.assertEqual(cfg["benchmarks"]["core"]["random_access"]["targets"], "all")
+        self.assertEqual(cfg["benchmarks"]["core"]["filter_pipeline"]["params"]["fft_window_sec"], 10.0)
+        self.assertEqual(cfg["benchmarks"]["core"]["filter_pipeline"]["params"]["fft_stride_sec"], 2.0)
+        self.assertEqual(cfg["benchmarks"]["core"]["filter_pipeline"]["params"]["read_chunk_sec"], 300.0)
 
     def test_validate_config_rejects_non_positive_canonical_streaming_knobs(self):
         cfg = normalize_config({"canonical_parquet": {"chunk_writer_max_rowgroups": 0}})
@@ -653,7 +656,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertEqual(captured["parquet"], canonical)
         self.assertEqual(captured["baseline_parquet"], Path("demo-source.parquet"))
 
-    def test_nested_config_helpers_read_new_schema(self):
+    def test_nested_config_helpers_read_legacy_flat_schema(self):
         cfg = {
             "benchmarks": {
                 "parquet_investigations": {
@@ -673,11 +676,197 @@ class BenchmarkRefactorTests(unittest.TestCase):
             },
         }
 
-        self.assertEqual(get_parquet_compression_variants(cfg), [{"codec": "snappy"}])
+        self.assertEqual(get_compression_codec_matrix(cfg), [{"codec": "snappy"}])
         self.assertEqual(get_tuned_block_sizes_minutes(cfg), [7, 15])
         self.assertEqual(get_tuned_parquet_codecs(cfg), ["lz4"])
         self.assertEqual(get_tuned_hdf5_compression(cfg), "lz4")
         self.assertEqual(get_tuned_chunk_sec(cfg), 123)
+
+    def test_nested_config_helpers_read_unified_params_schema(self):
+        cfg = {
+            "benchmarks": {
+                "parquet_investigations": {
+                    "compression": {
+                        "enabled": False,
+                        "params": {"codec_matrix": [{"codec": "snappy"}]},
+                    },
+                },
+                "other": {
+                    "tuned_comparison": {
+                        "params": {
+                            "block_sizes_minutes": [7, 15],
+                            "parquet_codecs": ["lz4"],
+                            "hdf5_compression": "lz4",
+                            "chunk_sec": 123,
+                        }
+                    }
+                },
+            },
+        }
+
+        self.assertEqual(get_compression_codec_matrix(cfg), [{"codec": "snappy"}])
+        self.assertEqual(get_tuned_block_sizes_minutes(cfg), [7, 15])
+        self.assertEqual(get_tuned_parquet_codecs(cfg), ["lz4"])
+        self.assertEqual(get_tuned_hdf5_compression(cfg), "lz4")
+        self.assertEqual(get_tuned_chunk_sec(cfg), 123)
+
+    def test_normalize_config_translates_legacy_spellings(self):
+        cfg = normalize_config({
+            "benchmarks": {
+                "core": {
+                    "random_access": {"enabled": True, "variants": ["pq_a"], "read_positions": [0.25]},
+                },
+                "parquet_investigations": {
+                    "compression": {"enabled": True, "variants": [{"codec": "lz4"}]},
+                },
+            },
+        })
+
+        leaf = cfg["benchmarks"]["core"]["random_access"]
+        self.assertEqual(leaf["targets"], ["pq_a"])
+        self.assertEqual(leaf["params"]["read_positions"], [0.25])
+        compression = cfg["benchmarks"]["parquet_investigations"]["compression"]
+        self.assertEqual(compression["params"]["codec_matrix"], [{"codec": "lz4"}])
+        self.assertEqual(get_compression_codec_matrix(cfg), [{"codec": "lz4"}])
+
+    def _write_manifest(self, tmp_path: Path) -> Path:
+        manifest = tmp_path / "datasets.yaml"
+        manifest.write_text(
+            "datasets:\n"
+            "  demo_set:\n"
+            "    description: demo\n"
+            "    azure:\n"
+            "      storage_account: demoaccount\n"
+            "      container: democontainer\n"
+            "      anonymous: true\n"
+            "    input: blobs/demo.h5\n"
+            "    sample_freq: 128\n"
+            "    approx_download_mib: 42\n"
+            "    remote_only: false\n"
+            "    remote_query:\n"
+            "      float32_path: blobs/demo.float32.parquet/\n",
+            encoding="utf-8",
+        )
+        return manifest
+
+    def test_resolve_studies_passes_inline_studies_through(self):
+        cfg = {"studies": [{"name": "inline", "input": "local.h5", "sample_freq": 256}]}
+        resolved = resolve_studies(cfg)
+        self.assertEqual(resolved, [{"name": "inline", "input": "local.h5", "sample_freq": 256}])
+
+    def test_resolve_studies_merges_manifest_entry_with_overrides(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self._write_manifest(Path(tmp))
+            cfg = {
+                "datasets_manifest": str(manifest),
+                "studies": [{"dataset": "demo_set", "input": "local_copy.h5"}],
+            }
+            resolved = resolve_studies(cfg)
+
+        study = resolved[0]
+        self.assertEqual(study["name"], "demo_set")
+        self.assertEqual(study["input"], "local_copy.h5")  # study override wins
+        self.assertEqual(study["sample_freq"], 128)
+        self.assertEqual(study["approx_download_mib"], 42)
+        self.assertEqual(study["remote_query"]["float32_path"], "blobs/demo.float32.parquet/")
+        # Manifest azure settings are adopted when the config has none.
+        self.assertEqual(cfg["azure"]["storage_account"], "demoaccount")
+
+    def test_resolve_studies_rejects_unknown_dataset_and_azure_conflict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self._write_manifest(Path(tmp))
+            with self.assertRaisesRegex(ValueError, "unknown dataset 'missing_set'"):
+                resolve_studies({
+                    "datasets_manifest": str(manifest),
+                    "studies": [{"dataset": "missing_set"}],
+                })
+            with self.assertRaisesRegex(ValueError, "storage_account"):
+                resolve_studies({
+                    "datasets_manifest": str(manifest),
+                    "azure": {"storage_account": "otheraccount", "container": "democontainer"},
+                    "studies": [{"dataset": "demo_set"}],
+                })
+
+    def test_load_dataset_manifest_requires_existing_file(self):
+        with self.assertRaises(FileNotFoundError):
+            load_dataset_manifest("does/not/exist.yaml")
+
+    def test_repo_dataset_manifest_is_valid(self):
+        manifest = load_dataset_manifest()
+        self.assertIn("suppression_study", manifest)
+        entry = manifest["suppression_study"]
+        self.assertIn("input", entry)
+        self.assertIn("sample_freq", entry)
+        self.assertIn("remote_query", entry)
+
+    def test_merge_remote_query_paths_prefers_study_paths(self):
+        from benchmark.core.config_helpers import merge_remote_query_paths
+
+        remote_cfg = {"window_sec": 600, "remote_float32_path": "global/path/"}
+        study = {"remote_query": {"float32_path": "study/path/", "single_file_path": "study/file.parquet"}}
+        merged = merge_remote_query_paths(remote_cfg, study)
+        self.assertEqual(merged["remote_float32_path"], "study/path/")
+        self.assertEqual(merged["remote_single_file_path"], "study/file.parquet")
+        self.assertEqual(merged["window_sec"], 600)
+        # No study: global path survives.
+        self.assertEqual(merge_remote_query_paths(remote_cfg, None)["remote_float32_path"], "global/path/")
+
+    def test_preflight_disk_check_fails_on_oversized_download_estimate(self):
+        from benchmark.core.preflight import PreflightError, run_preflight_checks
+
+        cfg = {
+            "cache_dir": ".benchmark_cache",
+            "studies": [{
+                "name": "huge_study",
+                "input": "remote/blob/path.h5",
+                "approx_download_mib": 10 ** 9,  # ~1 PiB working set: guaranteed to exceed free space
+            }],
+        }
+        with self.assertRaisesRegex(PreflightError, "Insufficient disk space"):
+            run_preflight_checks(cfg, set())
+
+    def test_preflight_skips_azure_probe_for_local_inputs(self):
+        from benchmark.core.preflight import run_preflight_checks
+
+        with tempfile.TemporaryDirectory() as tmp:
+            local_input = Path(tmp) / "study.h5"
+            local_input.write_bytes(b"x")
+            cfg = {"cache_dir": tmp, "studies": [{"name": "local", "input": str(local_input)}]}
+            # No azure config present: must not raise because no probe is needed.
+            run_preflight_checks(cfg, {"random_access"})
+
+    def test_preflight_warns_when_downloads_needed_without_azure_account(self):
+        from benchmark.core.preflight import run_preflight_checks
+
+        cfg = {"studies": [{"name": "remote", "input": "blobs/study.h5", "approx_download_mib": 1}]}
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            run_preflight_checks(cfg, set())  # must not raise
+        self.assertIn("warn: run appears to need Azure blob access", buf.getvalue())
+
+    def test_selected_benchmarks_categories_all_expands_to_every_category(self):
+        cfg = {"studies": [{"name": "s", "input": "x.h5"}]}
+        args = argparse.Namespace(categories=["all"])
+        selected = run_benchmarks._selected_benchmarks(cfg, args)
+        self.assertEqual(len(selected), len(benchmarks.BENCHMARKS))
+        self.assertIn("tuned_comparison", [cat_id for cat_id, _, _ in selected])
+
+    def test_full_config_enables_everything_except_tuned_comparison(self):
+        import yaml
+
+        with open(Path("benchmark/config/full.yaml"), encoding="utf-8") as f:
+            cfg = normalize_config(yaml.safe_load(f))
+        validate_config(cfg)
+
+        selected = {cat_id for cat_id in selected_categories(cfg)}
+        self.assertNotIn("tuned_comparison", selected)
+        expected = {
+            "random_access", "channel_subset", "remontage", "filter_pipeline",
+            "window_scaling", "compression", "precision_loss", "int32_storage",
+            "remote_query", "baseline_comparison",
+        }
+        self.assertEqual(selected, expected)
+        self.assertEqual(cfg["studies"], [{"dataset": "suppression_study"}])
 
     def test_normalize_config_rejects_scalar_core_leaf_values(self):
         with self.assertRaisesRegex(ValueError, "benchmarks.core.random_access"):

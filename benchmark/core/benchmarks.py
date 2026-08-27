@@ -18,14 +18,14 @@ from .config_helpers import (
     get_core_include_canonical,
     get_filter_pipeline_cfg,
     get_default_window,
-    get_parquet_compression_variants,
+    get_compression_codec_matrix,
     get_read_positions,
     get_repetitions,
     get_tuned_chunk_sec,
     get_tuned_hdf5_compression,
     get_tuned_parquet_codecs,
     get_window_sizes,
-    get_core_variants_selector,
+    get_core_targets_selector,
     is_investigation_enabled,
     tuned_parquet_key,
 )
@@ -119,7 +119,7 @@ def _read_target_window(target: dict, info: StudyInfo, columns: list[str],
 
 
 def _core_targets(paths: dict, cfg: dict, category: str) -> list[dict]:
-    selector = get_core_variants_selector(cfg, category)
+    selector = get_core_targets_selector(cfg, category)
     include_canonical = get_core_include_canonical(cfg, category)
     root_variants = list(paths.get("__root_variants__", []))
     canonical_target = paths.get("__canonical_target__")
@@ -138,7 +138,7 @@ def _core_targets(paths: dict, cfg: dict, category: str) -> list[dict]:
             selected = []
         elif selector != "all":
             raise ValueError(
-                f"benchmarks.core.{category}.variants cannot list explicit ids when no root variants exist"
+                f"benchmarks.core.{category}.targets cannot list explicit ids when no root variants exist"
             )
         else:
             source_target = paths.get("__source_target__")
@@ -798,7 +798,7 @@ def bench_compression(info: StudyInfo, paths: dict, cfg: dict, **_kwargs) -> lis
     start_stamp, end_stamp = _stamp_bounds(info, row_bounds)
     n_channels = len(info.channel_labels)
 
-    for comp_cfg in get_parquet_compression_variants(cfg):
+    for comp_cfg in get_compression_codec_matrix(cfg):
         codec = comp_cfg["codec"]
         level = comp_cfg.get("level")
         label = f"{codec}_{level}" if level else codec

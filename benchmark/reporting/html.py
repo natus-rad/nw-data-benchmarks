@@ -95,6 +95,14 @@ def render_html(md_text: str) -> str:
     subtitle_text = ''
     uses_mermaid = False
     idx = 0
+    used_anchors: dict[str, int] = {}
+
+    def _unique_anchor(text: str) -> str:
+        # Repeated per-study sections reuse headings; keep ids unique.
+        anchor = _html_slug(text)
+        count = used_anchors.get(anchor, 0) + 1
+        used_anchors[anchor] = count
+        return anchor if count == 1 else f'{anchor}-{count}'
 
     while idx < len(lines):
         line = lines[idx]
@@ -104,14 +112,14 @@ def render_html(md_text: str) -> str:
             continue
         if line.startswith('## '):
             text = line[3:].strip()
-            anchor = _html_slug(text)
+            anchor = _unique_anchor(text)
             sections.append((anchor, text, False))
             body.append(f'<h2 id="{anchor}">{_html_inline(text)}</h2>')
             idx += 1
             continue
         if line.startswith('### '):
             text = line[4:].strip()
-            anchor = _html_slug(text)
+            anchor = _unique_anchor(text)
             sections.append((anchor, text, True))
             body.append(f'<h3 id="{anchor}">{_html_inline(text)}</h3>')
             idx += 1

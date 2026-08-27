@@ -15,28 +15,33 @@ See the generated [benchmark report](benchmark/docs/benchmark_report.md) for the
 ## Quickstart
 
 ```bash
-# 1. Clone and install dependencies
+# 1. Clone and install dependencies (fresh virtual environment recommended)
 git clone <repo-url> && cd nw-data-benchmarks
-pip install -r requirements.txt
+pip install -r requirements.txt -c constraints.txt
 
-# 2. Run the default benchmark suite (see benchmark/config/default.yaml)
+# 2. Run the full benchmark suite (every category except J) on the public Azure datasets
+python -m benchmark.scripts.run_benchmarks --config benchmark/config/full.yaml
+
+#    This downloads the registered studies into .benchmark_cache/, runs all
+#    benchmarks, writes benchmark/results/*.json, and generates Markdown +
+#    HTML reports. Use --no-report to skip report generation.
+
+# 3. Or run the smaller default suite (see benchmark/config/default.yaml)
 python -m benchmark.scripts.run_benchmarks
 
-#    This writes benchmark/results/*.json and generates
-#    benchmark/docs/benchmark_report.md + .html by default.
-#    Use --no-report to skip report generation.
+# 4. Preview what a config will run without executing anything
+python -m benchmark.scripts.run_benchmarks --config benchmark/config/full.yaml --dry-run
 
-# 3. Run only selected categories
+# 5. Run only selected categories ("all" expands to every known category)
 python -m benchmark.scripts.run_benchmarks --categories random_access channel_subset window_scaling
 
-# 4. Regenerate the report from the latest results JSON
-python -m benchmark.scripts.generate_benchmark_report
-
-# 5. Regenerate Markdown + HTML from a specific results file
-python -m benchmark.scripts.generate_benchmark_report --input benchmark/results/<file>.json --html
+# 6. Regenerate Markdown + HTML reports from the latest results JSON
+python -m benchmark.scripts.generate_benchmark_report --html
 ```
 
-The default configuration uses a public Azure Parquet study (~12.9 hours, 46 channels, 256 Hz) and caches data in `.benchmark_cache/` on first use.
+The benchmark studies are registered in `benchmark/config/datasets.yaml` and hosted in public Azure Blob Storage; data is cached in `.benchmark_cache/` on first use. Before a run starts, the runner checks free disk space and Azure reachability and fails fast with an actionable message (`--skip-preflight` bypasses this).
+
+Category J (`tuned_comparison`) is excluded from `full.yaml` because it regenerates a large matrix of tuned artifacts; run it on demand with `--categories tuned_comparison`.
 
 ## Default data source
 
@@ -44,7 +49,8 @@ The default configuration uses a public Azure Parquet study (~12.9 hours, 46 cha
 |---|---|
 | Storage account | `nwcsandboxstorage` |
 | Container | `waveforms` |
-| Parquet path | `external/benchmarks/parquet/Suppression~ B_54c97daa-...float32.snappy.parquet/` |
+| Default input (HDF5, columnar) | `external/benchmarks/h5/hdf5_col_30m_d928f99b.h5` |
+| Parquet copy | `external/benchmarks/parquet/Suppression~ B_54c97daa-...float32.snappy.parquet/` |
 | Channels | 46 (10-20 + auxiliaries) |
 | Sample rate | 256 Hz |
 | Duration | ~12.9 hours (~11.85M samples) |
@@ -130,12 +136,14 @@ Notes:
 
 Use `benchmark/config/default.yaml` as the reference config. The key top-level blocks are:
 
-- `studies` — one or more studies with `name`, `input`, and `sample_freq` when needed
+- `studies` — one or more studies, either `dataset: <key>` references into `benchmark/config/datasets.yaml` or inline entries with `name`, `input`, and `sample_freq` when needed
 - `canonical_parquet` — how the cached canonical Parquet is written
 - `variants` — the root benchmark targets to generate, each with a stable `id`
-- `benchmarks.core` — A–E, with per-category `variants: all | [id, ...] | []` and optional `include_canonical: true`
-- `benchmarks.parquet_investigations` — F–I
-- `benchmarks.other` — J (`tuned_comparison`) and K (`baseline_comparison`)
+- `benchmarks.core` — A–E, with per-category `targets: all | [id, ...] | []`, optional `include_canonical: true`, and knobs under `params:`
+- `benchmarks.parquet_investigations` — F–I, each with `enabled` and optional `params:`
+- `benchmarks.other` — J (`tuned_comparison`) and K (`baseline_comparison`), same shape
+
+Every benchmark category uses the same `enabled` / `targets` / `params` shape. Legacy configs that spell core `targets:` as `variants:` or write knobs directly on the category still load unchanged.
 
 Minimal shape:
 
@@ -165,7 +173,7 @@ benchmarks:
   core:
     random_access:
       enabled: true
-      variants: all
+      targets: all
   parquet_investigations:
     compression:
       enabled: true
@@ -184,12 +192,12 @@ benchmarks:
 
 ## Output
 
-- **JSON results** → `benchmark/results/`
+- **JSON results** → `benchmark/results/<run_id>_benchmark_results.json`
 - **Markdown report template** → `benchmark/docs/benchmark_report.template.md`
-- **Generated Markdown report** → `benchmark/docs/benchmark_report.md`
-- **Generated HTML report** → `benchmark/docs/benchmark_report.html`
+- **Per-run reports** → `benchmark/docs/reports/<run_id>_benchmark_report.md` + `.html` (never overwritten)
+- **Latest report copy** → `benchmark/docs/benchmark_report.md` + `.html` (refreshed each run)
 
-`run_benchmarks.py` generates the Markdown + HTML report automatically after a successful run. Use `--no-report` to skip that step.
+`run_benchmarks.py` generates the Markdown + HTML report automatically after a successful run. Use `--no-report` to skip that step. Reports contain one section block per study; timing cells show the median, the first (cold-proxy) repetition, and the min-max spread across repetitions.
 
 If `--input` is omitted, `generate_benchmark_report.py` automatically picks the newest `*_benchmark_results.json` file in `benchmark/results/`.
 
@@ -202,8 +210,8 @@ If `--input` is omitted, `generate_benchmark_report.py` automatically picks the 
 ## Requirements
 
 - Python 3.10+
-- See `requirements.txt` for dependencies
-- ~5 GB free disk space for cached inputs and derived variants
+- `requirements.txt` declares the dependencies; `constraints.txt` pins exact versions verified to work together (recommended: `pip install -r requirements.txt -c constraints.txt` in a fresh virtual environment)
+- ~5 GB free disk space for cached inputs and derived variants (the preflight check verifies this against the dataset manifest before running)
 
 ## HDF5 input quick start
 

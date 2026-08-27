@@ -1,0 +1,54 @@
+# ============================================================================
+# Benchmark Dataset Manifest
+# ============================================================================
+# Central registry of the benchmark studies hosted in Azure Blob Storage.
+# Run configs reference these entries by key:
+#
+#   studies:
+#     - dataset: suppression_study
+#
+# Any field written directly on the study entry overrides the manifest value,
+# so a config can, for example, point the same dataset at a local copy.
+#
+# Adding a new study to the suite:
+#   1. Upload the study artifacts to Azure Blob Storage.
+#   2. Add an entry here with the input path and metadata.
+#   3. Reference the entry from a run config via `dataset: <key>`.
+#
+# Fields per entry:
+#   description         -> human-readable summary (reports and logs)
+#   azure               -> storage account/container hosting the blobs; all
+#                          datasets in one run must share a single account and
+#                          container because the runner uses one Azure client
+#   input               -> blob path (or URL) of the preferred benchmark input
+#   sample_freq         -> sampling rate in Hz
+#   channels            -> channel count (informational)
+#   duration_hours      -> approximate study duration (informational)
+#   approx_download_mib -> approximate size of `input` on disk; used by
+#                          preflight disk-space checks
+#   remote_only         -> true for studies too large to download; they are
+#                          excluded from download-based categories (A-H, J-K)
+#   remote_query        -> per-study blob paths for benchmark I (DuckDB over
+#                          remote Parquet); omit paths that are not hosted
+#     float32_path         -> float32 snappy Parquet dataset (directory)
+#     int32_nanovolt_path  -> int32 nanovolt snappy Parquet dataset (directory)
+#     single_file_path     -> tuned single-file Parquet dataset
+#     edf_path             -> EDF blob for the download-then-read comparison
+
+datasets:
+  suppression_study:
+    description: "Suppression EEG study; ~12.9 hours, 46 channels, 256 Hz."
+    azure:
+      storage_account: "nwcsandboxstorage"
+      container: "waveforms"
+      anonymous: true
+    input: "external/benchmarks/h5/hdf5_col_30m_d928f99b.h5"
+    sample_freq: 256
+    channels: 46
+    duration_hours: 12.9
+    approx_download_mib: 1337
+    remote_only: false
+    remote_query:
+      float32_path: "external/benchmarks/parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"
+      int32_nanovolt_path: "external/benchmarks/parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.int32_nanovolt.snappy.parquet/"
+      single_file_path: "external/benchmarks/parquet/tuned_pq_lz4_10m.parquet"

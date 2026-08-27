@@ -33,7 +33,12 @@ from .sections import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESULTS_DIR = REPO_ROOT / "benchmark" / "results"
 TEMPLATE_PATH = REPO_ROOT / "benchmark" / "docs" / "benchmark_report.template.md"
+REPORTS_DIR = REPO_ROOT / "benchmark" / "docs" / "reports"
 DEFAULT_OUTPUT = REPO_ROOT / "benchmark" / "docs" / "benchmark_report.md"
+
+# Template markers delimiting the block that is rendered once per study.
+PER_STUDY_BEGIN = "<!-- BEGIN PER-STUDY SECTIONS -->"
+PER_STUDY_END = "<!-- END PER-STUDY SECTIONS -->"
 
 PIPELINE_MERMAID = """flowchart LR
     A[\"Input: EDF / HDF5 / Parquet / ERD\"] --> B[\"Canonical single-file Parquet\"]
@@ -42,13 +47,22 @@ PIPELINE_MERMAID = """flowchart LR
     D --> E[\"Benchmarks: A-E core, F-I investigations, J/K comparisons\"]
 """
 
+TECHNICAL_REMARKS = [
+    "Missing sections are called out explicitly, so partial benchmark runs still produce a readable report.",
+    "Throughput uses the theoretical decoded float32 payload size: `rows × channels × 4 bytes`.",
+    "`wall_clock_seconds` is the warm-cache-leaning median across repetitions.",
+    "`first_wall_clock_seconds` records the first repetition as the closest available cold-start proxy without explicit OS cache eviction.",
+    "`peak_rss_mib` reports sampled peak process resident memory when available.",
+    "HDF5 timings include a benchmark-specific `chunk_index` helper, so they represent a best-case HDF5 seek/read path rather than plain generic HDF5 without that helper.",
+]
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate benchmark/docs/benchmark_report.md from a benchmark result JSON file."
+        description="Generate a Markdown benchmark report from a benchmark result JSON file."
     )
     parser.add_argument("--input", type=Path, help="Path to a benchmark result JSON file. Defaults to the latest file in benchmark/results/.")
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output Markdown path. Defaults to benchmark/docs/benchmark_report.md.")
+    parser.add_argument("--output", type=Path, default=None, help="Output Markdown path. Defaults to a timestamped file in benchmark/docs/reports/ plus a refreshed copy at benchmark/docs/benchmark_report.md.")
     parser.add_argument("--template", type=Path, default=TEMPLATE_PATH, help="Markdown template path. Defaults to benchmark/docs/benchmark_report.template.md.")
     parser.add_argument("--html", action="store_true", help="Also emit a styled HTML report next to the Markdown output.")
     return parser.parse_args()
@@ -83,37 +97,96 @@ def validate_results(payload: dict[str, Any], path: Path) -> None:
         raise ReportGenerationError(f"Results file {path} has no study metadata in 'studies'.")
     if not isinstance(payload["benchmarks"], list) or not payload["benchmarks"]:
         raise ReportGenerationError(f"Results file {path} has no benchmark rows in 'benchmarks'.")
-    study = payload["studies"][0]
     study_required = ["name", "channels", "sample_freq", "total_stamps", "duration_seconds"]
-    missing = [key for key in study_required if key not in study]
-    if missing:
-        raise ReportGenerationError(
-            f"Results file {path} is missing required study field(s): {', '.join(missing)}. "
-            "The benchmark runner must emit explicit total_stamps; the report generator will not infer it from duration_seconds."
-        )
+    for study in payload["studies"]:
+        missing = [key for key in study_required if key not in study]
+        if missing:
+            raise ReportGenerationError(
+                f"Results file {path} is missing required study field(s): {', '.join(missing)}. "
+                "The benchmark runner must emit explicit total_stamps; the report generator will not infer it from duration_seconds."
+            )
+    if len(payload["studies"]) > 1:
+        untagged = sum(1 for row in payload["benchmarks"] if not row.get("study"))
+        if untagged:
+            raise ReportGenerationError(
+                f"Results file {path} contains {untagged} benchmark row(s) without a 'study' tag; "
+                "multi-study results require every row to name its study."
+            )
 
 
 def render_report(payload: dict[str, Any], template_text: str, source_path: Path) -> str:
     try:
-        study = payload["studies"][0]
-        benchmarks = payload["benchmarks"]
-        categories = {row.get("category") for row in benchmarks if row.get("category")}
-        template = Template(template_text)
-        return template.substitute(
-            run_id=payload["run_id"],
-            source_file=source_path.name,
-            benchmark_count=str(len(benchmarks)),
-            category_count=str(len(categories)),
-            overview=build_overview(study, payload["system"], categories),
-            summary=build_summary(payload),
-            key_observations=build_key_observations(payload),
-            sections=build_sections(payload),
-            **build_section_placeholders(payload),
-        ).rstrip() + "\n"
+        if PER_STUDY_BEGIN in template_text and PER_STUDY_END in template_text:
+            return _render_per_study_report(payload, template_text, source_path)
+        return _render_flat_report(payload, template_text, source_path)
     except KeyError as exc:
         raise ReportGenerationError(f"Results file {source_path} is missing required field '{exc.args[0]}' needed to render the report.") from exc
     except (TypeError, ValueError) as exc:
         raise ReportGenerationError(f"Results file {source_path} contains data that could not be interpreted for report generation: {exc}") from exc
+
+
+def _render_flat_report(payload: dict[str, Any], template_text: str, source_path: Path) -> str:
+    """Render templates without per-study markers in a single pass (legacy shape)."""
+    study = payload["studies"][0]
+    benchmarks = payload["benchmarks"]
+    categories = {row.get("category") for row in benchmarks if row.get("category")}
+    template = Template(template_text)
+    return template.substitute(
+        run_id=payload["run_id"],
+        source_file=source_path.name,
+        benchmark_count=str(len(benchmarks)),
+        category_count=str(len(categories)),
+        overview=build_overview(study, payload["system"], categories),
+        summary=build_summary(payload),
+        key_observations=build_key_observations(payload),
+        sections=build_sections(payload),
+        **build_section_placeholders(payload),
+    ).rstrip() + "\n"
+
+
+def _render_per_study_report(payload: dict[str, Any], template_text: str, source_path: Path) -> str:
+    """Render the header once and the marked template block once per study."""
+    head, rest = template_text.split(PER_STUDY_BEGIN, 1)
+    study_block, tail = rest.split(PER_STUDY_END, 1)
+    benchmarks = payload["benchmarks"]
+    categories = {row.get("category") for row in benchmarks if row.get("category")}
+
+    parts = [Template(head).substitute(
+        run_id=payload["run_id"],
+        source_file=source_path.name,
+        benchmark_count=str(len(benchmarks)),
+        category_count=str(len(categories)),
+        run_overview=build_run_overview(payload),
+    )]
+    for study in payload["studies"]:
+        study_payload = _study_scoped_payload(payload, study)
+        study_rows = study_payload["benchmarks"]
+        study_categories = {row.get("category") for row in study_rows if row.get("category")}
+        parts.append(Template(study_block).substitute(
+            study_name=str(study["name"]),
+            study_overview=build_study_overview(study, study_rows),
+            study_benchmark_count=str(len(study_rows)),
+            study_category_count=str(len(study_categories)),
+            summary=build_summary(study_payload),
+            key_observations=build_key_observations(study_payload),
+            sections=build_sections(study_payload),
+            **build_section_placeholders(study_payload),
+        ))
+    parts.append(tail)
+    return "".join(parts).rstrip() + "\n"
+
+
+def _study_scoped_payload(payload: dict[str, Any], study: dict[str, Any]) -> dict[str, Any]:
+    """A payload view containing only one study and its benchmark rows.
+
+    Rows without a 'study' tag are attributed to the study only in
+    single-study payloads (older results files predate per-row tags).
+    """
+    name = str(study["name"])
+    rows = [row for row in payload["benchmarks"] if row.get("study") == name]
+    if not rows and len(payload["studies"]) == 1:
+        rows = list(payload["benchmarks"])
+    return {**payload, "studies": [study], "benchmarks": rows}
 
 
 def build_overview(study: dict[str, Any], system: dict[str, Any], categories: set[str]) -> str:
@@ -126,21 +199,47 @@ def build_overview(study: dict[str, Any], system: dict[str, Any], categories: se
         ["System", f"{system.get('os', 'unknown')} / Python {system.get('python', 'unknown')} / {system.get('cpu_count', '?')} CPU threads / {system.get('ram_gb', '?')} GiB RAM"],
         ["Categories present", ", ".join(f"`{name}`" for name in sorted(categories))],
     ]
-    bullets = [
-        "Missing sections are called out explicitly, so partial benchmark runs still produce a readable report.",
-        "Throughput uses the theoretical decoded float32 payload size: `rows × channels × 4 bytes`.",
-        "`wall_clock_seconds` is the warm-cache-leaning median across repetitions.",
-        "`first_wall_clock_seconds` records the first repetition as the closest available cold-start proxy without explicit OS cache eviction.",
-        "`peak_rss_mib` reports sampled peak process resident memory when available.",
-        "HDF5 timings include a benchmark-specific `chunk_index` helper, so they represent a best-case HDF5 seek/read path rather than plain generic HDF5 without that helper.",
+    return (
+        "```mermaid\n" + PIPELINE_MERMAID + "```\n\n"
+        "### Technical Remarks\n\n"
+        + "\n".join(f"- {bullet}" for bullet in TECHNICAL_REMARKS)
+        + "\n\n"
+        + markdown_table(["Property", "Value"], rows)
+    )
+
+
+def build_run_overview(payload: dict[str, Any]) -> str:
+    """Run-level overview: pipeline diagram, remarks, system, and study list."""
+    system = payload["system"]
+    studies = payload["studies"]
+    benchmarks = payload["benchmarks"]
+    categories = {row.get("category") for row in benchmarks if row.get("category")}
+    rows = [
+        ["System", f"{system.get('os', 'unknown')} / Python {system.get('python', 'unknown')} / {system.get('cpu_count', '?')} CPU threads / {system.get('ram_gb', '?')} GiB RAM"],
+        ["Studies", f"{len(studies)}: " + ", ".join(str(study["name"]) for study in studies)],
+        ["Benchmark rows", f"{len(benchmarks):,}"],
+        ["Categories present", ", ".join(f"`{name}`" for name in sorted(categories))],
     ]
     return (
         "```mermaid\n" + PIPELINE_MERMAID + "```\n\n"
         "### Technical Remarks\n\n"
-        + "\n".join(f"- {bullet}" for bullet in bullets)
+        + "\n".join(f"- {bullet}" for bullet in TECHNICAL_REMARKS)
         + "\n\n"
         + markdown_table(["Property", "Value"], rows)
     )
+
+
+def build_study_overview(study: dict[str, Any], study_rows: list[dict[str, Any]]) -> str:
+    """Per-study property table used inside each study section."""
+    duration_hours = study["duration_seconds"] / 3600.0
+    categories = {row.get("category") for row in study_rows if row.get("category")}
+    rows = [
+        ["Channels", str(study["channels"])],
+        ["Sample rate", f"{study['sample_freq']:.1f} Hz"],
+        ["Duration", f"{duration_hours:.2f} h ({study['total_stamps']:,} samples)"],
+        ["Categories present", ", ".join(f"`{name}`" for name in sorted(categories)) or "(none)"],
+    ]
+    return markdown_table(["Property", "Value"], rows)
 
 
 def build_summary(payload: dict[str, Any]) -> str:
@@ -225,8 +324,15 @@ def section(title: str, rows: list[dict[str, Any]], renderer, payload: dict[str,
     return f"## {title}\n\n{renderer(rows, payload)}"
 
 
-def generate_report(input_path: Path, output_path: Path = DEFAULT_OUTPUT,
+def generate_report(input_path: Path, output_path: Path | None = None,
                     template_path: Path = TEMPLATE_PATH, html: bool = False) -> tuple[Path, Path | None]:
+    """Render a results JSON file to Markdown (and optionally HTML).
+
+    Without an explicit ``output_path``, the report is written to a
+    timestamped file under ``benchmark/docs/reports/`` (one file per run, so
+    earlier reports are never overwritten) and the stable "latest" copy at
+    ``benchmark/docs/benchmark_report.md`` is refreshed alongside it.
+    """
     input_path = input_path.resolve()
     payload = load_results(input_path)
     try:
@@ -234,13 +340,21 @@ def generate_report(input_path: Path, output_path: Path = DEFAULT_OUTPUT,
     except OSError as exc:
         raise ReportGenerationError(f"Unable to read template file {template_path}: {exc}") from exc
     rendered = render_report(payload, template_text, input_path)
-    output_path = output_path.resolve()
+    refresh_latest = output_path is None
+    if output_path is None:
+        output_path = REPORTS_DIR / f"{payload['run_id']}_benchmark_report.md"
+    output_path = Path(output_path).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(rendered, encoding="utf-8")
     html_path = None
-    if html:
+    html_text = render_html(rendered) if html else None
+    if html_text is not None:
         html_path = output_path.with_suffix(".html")
-        html_path.write_text(render_html(rendered), encoding="utf-8")
+        html_path.write_text(html_text, encoding="utf-8")
+    if refresh_latest:
+        DEFAULT_OUTPUT.write_text(rendered, encoding="utf-8")
+        if html_text is not None:
+            DEFAULT_OUTPUT.with_suffix(".html").write_text(html_text, encoding="utf-8")
     return output_path, html_path
 
 
@@ -258,4 +372,4 @@ def main() -> int:
     return 0
 
 
-__all__ = ["DEFAULT_OUTPUT", "REPO_ROOT", "RESULTS_DIR", "TEMPLATE_PATH", "ReportGenerationError", "build_key_observations", "build_overview", "build_section_placeholders", "build_sections", "build_summary", "generate_report", "latest_results_file", "load_results", "main", "parse_args", "render_report", "render_section_results", "section", "validate_results"]
+__all__ = ["DEFAULT_OUTPUT", "REPO_ROOT", "REPORTS_DIR", "RESULTS_DIR", "TEMPLATE_PATH", "ReportGenerationError", "build_key_observations", "build_overview", "build_run_overview", "build_section_placeholders", "build_sections", "build_study_overview", "build_summary", "generate_report", "latest_results_file", "load_results", "main", "parse_args", "render_report", "render_section_results", "section", "validate_results"]

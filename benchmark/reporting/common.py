@@ -84,6 +84,11 @@ def timing_cell(row: dict[str, Any], time_key: str) -> str:
         first = float(row["first_wall_clock_seconds"])
         if abs(first - float(row[time_key])) > 5e-7:
             notes.append(f"first {format_seconds(first)}")
+    samples = row.get("timing_samples_seconds")
+    if time_key == "wall_clock_seconds" and isinstance(samples, list) and len(samples) >= 2:
+        lo, hi = min(samples), max(samples)
+        if abs(float(hi) - float(lo)) > 5e-7:
+            notes.append(f"spread {format_seconds(lo)}-{format_seconds(hi)}")
     peak_rss_mib = row.get("peak_rss_mib")
     if peak_rss_mib is not None:
         notes.append(f"peak {format_mib(peak_rss_mib)}")

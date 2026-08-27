@@ -1,0 +1,28 @@
+# Known-good dependency pins for reproducible benchmark environments.
+#
+# Usage (fresh virtual environment recommended):
+#
+#   python -m venv .venv
+#   .venv/Scripts/activate        (Windows)  |  source .venv/bin/activate  (POSIX)
+#   pip install -r requirements.txt -c constraints.txt
+#
+# requirements.txt declares *what* is needed (with minimum versions);
+# this file pins *exact* versions verified to work together, so two
+# machines produce comparable benchmark numbers.
+#
+# In particular, numpy and scipy must be ABI-compatible: a scipy build
+# predating numpy 2.x fails at import ("compiled using NumPy 1.x cannot be
+# run in NumPy 2.x"). The numpy/scipy pair below is verified to import
+# cleanly in a fresh environment.
+
+numpy==2.0.2
+scipy==1.13.1
+pyarrow==21.0.0
+pyyaml==6.0
+psutil==7.0.0
+h5py==3.14.0
+hdf5plugin==6.0.0
+pyedflib==0.1.42
+azure-storage-blob==12.28.0
+azure-core==1.30.2
+duckdb==1.4.4
