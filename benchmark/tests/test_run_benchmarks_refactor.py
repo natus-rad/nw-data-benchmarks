@@ -23,6 +23,7 @@ from benchmark.core.config_helpers import (
     get_tuned_hdf5_compression,
     get_tuned_parquet_codecs,
     normalize_config,
+    selected_categories,
     validate_config,
 )
 from benchmark.core.datasets import load_dataset_manifest, resolve_studies
@@ -809,6 +810,63 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertEqual(merged["window_sec"], 600)
         # No study: global path survives.
         self.assertEqual(merge_remote_query_paths(remote_cfg, None)["remote_float32_path"], "global/path/")
+
+    def test_preflight_disk_check_fails_on_oversized_download_estimate(self):
+        from benchmark.core.preflight import PreflightError, run_preflight_checks
+
+        cfg = {
+            "cache_dir": ".benchmark_cache",
+            "studies": [{
+                "name": "huge_study",
+                "input": "remote/blob/path.h5",
+                "approx_download_mib": 10 ** 9,  # ~1 PiB working set: guaranteed to exceed free space
+            }],
+        }
+        with self.assertRaisesRegex(PreflightError, "Insufficient disk space"):
+            run_preflight_checks(cfg, set())
+
+    def test_preflight_skips_azure_probe_for_local_inputs(self):
+        from benchmark.core.preflight import run_preflight_checks
+
+        with tempfile.TemporaryDirectory() as tmp:
+            local_input = Path(tmp) / "study.h5"
+            local_input.write_bytes(b"x")
+            cfg = {"cache_dir": tmp, "studies": [{"name": "local", "input": str(local_input)}]}
+            # No azure config present: must not raise because no probe is needed.
+            run_preflight_checks(cfg, {"random_access"})
+
+    def test_preflight_warns_when_downloads_needed_without_azure_account(self):
+        from benchmark.core.preflight import run_preflight_checks
+
+        cfg = {"studies": [{"name": "remote", "input": "blobs/study.h5", "approx_download_mib": 1}]}
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            run_preflight_checks(cfg, set())  # must not raise
+        self.assertIn("warn: run appears to need Azure blob access", buf.getvalue())
+
+    def test_selected_benchmarks_categories_all_expands_to_every_category(self):
+        cfg = {"studies": [{"name": "s", "input": "x.h5"}]}
+        args = argparse.Namespace(categories=["all"])
+        selected = run_benchmarks._selected_benchmarks(cfg, args)
+        self.assertEqual(len(selected), len(benchmarks.BENCHMARKS))
+        self.assertIn("tuned_comparison", [cat_id for cat_id, _, _ in selected])
+
+    def test_full_config_enables_everything_except_tuned_comparison(self):
+        import yaml
+
+        with open(Path("benchmark/config/full.yaml"), encoding="utf-8") as f:
+            cfg = normalize_config(yaml.safe_load(f))
+        validate_config(cfg)
+
+        selected = {cat_id for cat_id in selected_categories(cfg)}
+        self.assertNotIn("tuned_comparison", selected)
+        expected = {
+            "random_access", "channel_subset", "remontage", "filter_pipeline",
+            "window_scaling", "compression", "precision_loss", "int32_storage",
+            "remote_query", "baseline_comparison",
+        }
+        self.assertEqual(selected, expected)
+        self.assertEqual(cfg["studies"], [{"dataset": "suppression_study"}])
 
     def test_normalize_config_rejects_scalar_core_leaf_values(self):
         with self.assertRaisesRegex(ValueError, "benchmarks.core.random_access"):

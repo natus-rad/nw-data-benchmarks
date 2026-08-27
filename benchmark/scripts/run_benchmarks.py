@@ -38,6 +38,7 @@ try:
     )
     from benchmark.core.constants import Category, FormatKey, InputFormat
     from benchmark.core.datasets import resolve_studies
+    from benchmark.core.preflight import run_preflight_checks
     from benchmark.core.ingest import canonical_file, detect_format, ingest, recover_sample_freq
     from benchmark.core.setup import (
         setup_int32_variants,
@@ -85,7 +86,13 @@ def _replace_results_file(tmp_path: Path, out_path: Path) -> None:
 
 def _selected_benchmarks(cfg: dict, args: argparse.Namespace) -> list[tuple[str, str, object]]:
     cfg = normalize_config(cfg)
-    categories = args.categories if args.categories else selected_categories(cfg)
+    if args.categories and "all" in args.categories:
+        # Every known category; disabled investigations still skip themselves.
+        categories = list(BENCHMARKS)
+    elif args.categories:
+        categories = args.categories
+    else:
+        categories = selected_categories(cfg)
     selected = []
     for cat in categories:
         if cat in BENCHMARKS:
@@ -610,6 +617,9 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
         _print_dry_run(cfg, args, selected)
         return
 
+    if not getattr(args, "skip_preflight", False):
+        run_preflight_checks(cfg, {cat_id for cat_id, _, _ in selected})
+
     out_path = Path(args.output) if args.output else Path("benchmark/results") / f"{run_id}_benchmark_results.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -712,6 +722,7 @@ def main() -> None:
     parser.add_argument("--output", default=None, help="Output JSON file path (default: benchmark/results/<run_id>_benchmark_results.json)")
     parser.add_argument("--dry-run", action="store_true", help="Print planned work without downloading or running benchmarks")
     parser.add_argument("--no-report", action="store_true", help="Skip the default post-run Markdown+HTML report generation")
+    parser.add_argument("--skip-preflight", action="store_true", help="Skip pre-run disk space and Azure reachability checks")
     parser.add_argument("--sas-token", default=None, help="Azure Blob SAS token (optional). Overrides AZURE_STORAGE_SAS_TOKEN if provided")
     args = parser.parse_args()
 

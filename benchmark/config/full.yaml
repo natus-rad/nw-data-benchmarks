@@ -1,0 +1,108 @@
+# ============================================================================
+# Full Benchmark Suite (turn-key)
+# ============================================================================
+# Runs every benchmark category except J (tuned_comparison) on all manifest
+# studies listed below. This is the one-command entry point:
+#
+#   python -m benchmark.scripts.run_benchmarks --config benchmark/config/full.yaml
+#
+# Category J regenerates a large matrix of tuned artifacts and is excluded by
+# decision; run it on demand:
+#
+#   python -m benchmark.scripts.run_benchmarks --categories tuned_comparison
+#
+# Studies come from the dataset manifest (benchmark/config/datasets.yaml).
+# Adding a new study to the full suite = upload to Azure + one manifest entry
+# + one `- dataset:` line below. See benchmark/config/default.yaml for the
+# fully commented reference of every field.
+
+cache_dir: ".benchmark_cache"
+
+azure:
+  storage_account: "nwcsandboxstorage"
+  container: "waveforms"
+  anonymous: true
+
+studies:
+  - dataset: suppression_study
+
+canonical_parquet:
+  id: canonical
+  compression: snappy
+  row_group_minutes: 30
+  chunk_writer_max_rowgroups: 2
+  chunk_reader_max_rowgroups: 2
+
+variants:
+  - id: pq_30m_lz4
+    format: parquet
+    row_group_minutes: 30
+    compression: lz4
+
+  - id: h5_row_30m
+    format: hdf5
+    layout: rowgroup
+    chunk_minutes: 30
+    dtype: float32
+    compression: lz4
+
+benchmarks:
+  common:
+    repetitions: 3
+    default_window: 60
+  core:
+    random_access:
+      enabled: true
+      targets: all
+      include_canonical: true
+      params:
+        read_positions: [0.0, 0.5, 0.75, 0.95]
+    channel_subset:
+      enabled: true
+      targets: all
+      params:
+        channel_subsets: [4, 10]
+    remontage:
+      enabled: true
+      targets: all
+    filter_pipeline:
+      enabled: true
+      targets: all
+      params:
+        fft_window_sec: 10
+        fft_stride_sec: 2
+        read_chunk_sec: 300
+    window_scaling:
+      enabled: true
+      targets: all
+      params:
+        window_sizes: [10, 30, 60, 300, 900, 1800, 3600]
+  parquet_investigations:
+    compression:
+      enabled: true
+      params:
+        codec_matrix:
+          - codec: "none"
+          - codec: "snappy"
+          - codec: "zstd"
+            level: 3
+          - codec: "zstd"
+            level: 9
+          - codec: "lz4"
+    precision_loss:
+      enabled: true
+    int32_storage:
+      enabled: true
+    remote_query:
+      enabled: true
+      params:
+        n_random_points: 10
+        window_sec: 600
+        full_study_chunk_sec: 3600
+  other:
+    tuned_comparison:
+      enabled: false  # Excluded from the full suite by decision; run on demand.
+    baseline_comparison:
+      enabled: true
+      params:
+        chunk_sec: 3600

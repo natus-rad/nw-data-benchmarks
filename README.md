@@ -15,28 +15,33 @@ See the generated [benchmark report](benchmark/docs/benchmark_report.md) for the
 ## Quickstart
 
 ```bash
-# 1. Clone and install dependencies
+# 1. Clone and install dependencies (fresh virtual environment recommended)
 git clone <repo-url> && cd nw-data-benchmarks
-pip install -r requirements.txt
+pip install -r requirements.txt -c constraints.txt
 
-# 2. Run the default benchmark suite (see benchmark/config/default.yaml)
+# 2. Run the full benchmark suite (every category except J) on the public Azure datasets
+python -m benchmark.scripts.run_benchmarks --config benchmark/config/full.yaml
+
+#    This downloads the registered studies into .benchmark_cache/, runs all
+#    benchmarks, writes benchmark/results/*.json, and generates Markdown +
+#    HTML reports. Use --no-report to skip report generation.
+
+# 3. Or run the smaller default suite (see benchmark/config/default.yaml)
 python -m benchmark.scripts.run_benchmarks
 
-#    This writes benchmark/results/*.json and generates
-#    benchmark/docs/benchmark_report.md + .html by default.
-#    Use --no-report to skip report generation.
+# 4. Preview what a config will run without executing anything
+python -m benchmark.scripts.run_benchmarks --config benchmark/config/full.yaml --dry-run
 
-# 3. Run only selected categories
+# 5. Run only selected categories ("all" expands to every known category)
 python -m benchmark.scripts.run_benchmarks --categories random_access channel_subset window_scaling
 
-# 4. Regenerate the report from the latest results JSON
-python -m benchmark.scripts.generate_benchmark_report
-
-# 5. Regenerate Markdown + HTML from a specific results file
-python -m benchmark.scripts.generate_benchmark_report --input benchmark/results/<file>.json --html
+# 6. Regenerate Markdown + HTML reports from the latest results JSON
+python -m benchmark.scripts.generate_benchmark_report --html
 ```
 
-The default configuration uses a public Azure HDF5 copy of the study (~12.9 hours, 46 channels, 256 Hz) and caches data in `.benchmark_cache/` on first use. A Parquet copy of the same study is hosted alongside it and is used by the remote-query benchmark (I).
+The benchmark studies are registered in `benchmark/config/datasets.yaml` and hosted in public Azure Blob Storage; data is cached in `.benchmark_cache/` on first use. Before a run starts, the runner checks free disk space and Azure reachability and fails fast with an actionable message (`--skip-preflight` bypasses this).
+
+Category J (`tuned_comparison`) is excluded from `full.yaml` because it regenerates a large matrix of tuned artifacts; run it on demand with `--categories tuned_comparison`.
 
 ## Default data source
 
@@ -205,8 +210,8 @@ If `--input` is omitted, `generate_benchmark_report.py` automatically picks the 
 ## Requirements
 
 - Python 3.10+
-- See `requirements.txt` for dependencies
-- ~5 GB free disk space for cached inputs and derived variants
+- `requirements.txt` declares the dependencies; `constraints.txt` pins exact versions verified to work together (recommended: `pip install -r requirements.txt -c constraints.txt` in a fresh virtual environment)
+- ~5 GB free disk space for cached inputs and derived variants (the preflight check verifies this against the dataset manifest before running)
 
 ## HDF5 input quick start
 
