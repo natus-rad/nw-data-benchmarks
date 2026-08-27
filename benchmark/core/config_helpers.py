@@ -386,6 +386,29 @@ def get_remote_query_cfg(cfg: dict) -> dict:
     return _section_params(get_investigation_cfg(cfg, "remote_query"))
 
 
+# Maps the legacy global remote_query path keys to the per-study manifest keys.
+REMOTE_QUERY_PATH_KEYS = {
+    "remote_float32_path": "float32_path",
+    "remote_int32_nanovolt_path": "int32_nanovolt_path",
+    "remote_single_file_path": "single_file_path",
+    "remote_edf_path": "edf_path",
+}
+
+
+def merge_remote_query_paths(remote_cfg: dict, study_cfg: dict | None) -> dict:
+    """Overlay a study's ``remote_query`` paths onto the global remote config.
+
+    Per-study paths (from the dataset manifest) take precedence; global path
+    keys remain as a deprecated fallback for single-study configs.
+    """
+    merged = dict(remote_cfg)
+    study_paths = _dict_or_empty((study_cfg or {}).get("remote_query"))
+    for legacy_key, study_key in REMOTE_QUERY_PATH_KEYS.items():
+        if study_paths.get(study_key):
+            merged[legacy_key] = study_paths[study_key]
+    return merged
+
+
 def get_tuned_comparison_cfg(cfg: dict) -> dict:
     value = _dict_or_empty(_dict_or_empty(get_benchmarks_cfg(cfg).get("other", {})).get(Category.TUNED_COMPARISON, {}))
     return value if isinstance(value, dict) else {}

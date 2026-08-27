@@ -25,6 +25,7 @@ from benchmark.core.config_helpers import (
     normalize_config,
     validate_config,
 )
+from benchmark.core.datasets import load_dataset_manifest, resolve_studies
 from benchmark.core.ingest import _canonical_file, _ingest_edf, _iter_edf_tables, _iter_hdf5_tables, ingest
 from benchmark.core.study_info import StudyInfo
 from benchmark.core.variants import generate_variants
@@ -726,6 +727,88 @@ class BenchmarkRefactorTests(unittest.TestCase):
         compression = cfg["benchmarks"]["parquet_investigations"]["compression"]
         self.assertEqual(compression["params"]["codec_matrix"], [{"codec": "lz4"}])
         self.assertEqual(get_compression_codec_matrix(cfg), [{"codec": "lz4"}])
+
+    def _write_manifest(self, tmp_path: Path) -> Path:
+        manifest = tmp_path / "datasets.yaml"
+        manifest.write_text(
+            "datasets:\n"
+            "  demo_set:\n"
+            "    description: demo\n"
+            "    azure:\n"
+            "      storage_account: demoaccount\n"
+            "      container: democontainer\n"
+            "      anonymous: true\n"
+            "    input: blobs/demo.h5\n"
+            "    sample_freq: 128\n"
+            "    approx_download_mib: 42\n"
+            "    remote_only: false\n"
+            "    remote_query:\n"
+            "      float32_path: blobs/demo.float32.parquet/\n",
+            encoding="utf-8",
+        )
+        return manifest
+
+    def test_resolve_studies_passes_inline_studies_through(self):
+        cfg = {"studies": [{"name": "inline", "input": "local.h5", "sample_freq": 256}]}
+        resolved = resolve_studies(cfg)
+        self.assertEqual(resolved, [{"name": "inline", "input": "local.h5", "sample_freq": 256}])
+
+    def test_resolve_studies_merges_manifest_entry_with_overrides(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self._write_manifest(Path(tmp))
+            cfg = {
+                "datasets_manifest": str(manifest),
+                "studies": [{"dataset": "demo_set", "input": "local_copy.h5"}],
+            }
+            resolved = resolve_studies(cfg)
+
+        study = resolved[0]
+        self.assertEqual(study["name"], "demo_set")
+        self.assertEqual(study["input"], "local_copy.h5")  # study override wins
+        self.assertEqual(study["sample_freq"], 128)
+        self.assertEqual(study["approx_download_mib"], 42)
+        self.assertEqual(study["remote_query"]["float32_path"], "blobs/demo.float32.parquet/")
+        # Manifest azure settings are adopted when the config has none.
+        self.assertEqual(cfg["azure"]["storage_account"], "demoaccount")
+
+    def test_resolve_studies_rejects_unknown_dataset_and_azure_conflict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self._write_manifest(Path(tmp))
+            with self.assertRaisesRegex(ValueError, "unknown dataset 'missing_set'"):
+                resolve_studies({
+                    "datasets_manifest": str(manifest),
+                    "studies": [{"dataset": "missing_set"}],
+                })
+            with self.assertRaisesRegex(ValueError, "storage_account"):
+                resolve_studies({
+                    "datasets_manifest": str(manifest),
+                    "azure": {"storage_account": "otheraccount", "container": "democontainer"},
+                    "studies": [{"dataset": "demo_set"}],
+                })
+
+    def test_load_dataset_manifest_requires_existing_file(self):
+        with self.assertRaises(FileNotFoundError):
+            load_dataset_manifest("does/not/exist.yaml")
+
+    def test_repo_dataset_manifest_is_valid(self):
+        manifest = load_dataset_manifest()
+        self.assertIn("suppression_study", manifest)
+        entry = manifest["suppression_study"]
+        self.assertIn("input", entry)
+        self.assertIn("sample_freq", entry)
+        self.assertIn("remote_query", entry)
+
+    def test_merge_remote_query_paths_prefers_study_paths(self):
+        from benchmark.core.config_helpers import merge_remote_query_paths
+
+        remote_cfg = {"window_sec": 600, "remote_float32_path": "global/path/"}
+        study = {"remote_query": {"float32_path": "study/path/", "single_file_path": "study/file.parquet"}}
+        merged = merge_remote_query_paths(remote_cfg, study)
+        self.assertEqual(merged["remote_float32_path"], "study/path/")
+        self.assertEqual(merged["remote_single_file_path"], "study/file.parquet")
+        self.assertEqual(merged["window_sec"], 600)
+        # No study: global path survives.
+        self.assertEqual(merge_remote_query_paths(remote_cfg, None)["remote_float32_path"], "global/path/")
 
     def test_normalize_config_rejects_scalar_core_leaf_values(self):
         with self.assertRaisesRegex(ValueError, "benchmarks.core.random_access"):

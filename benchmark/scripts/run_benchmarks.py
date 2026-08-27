@@ -32,10 +32,12 @@ try:
         get_tuned_parquet_codecs,
         get_window_sizes,
         is_investigation_enabled,
+        merge_remote_query_paths,
         tuned_parquet_key,
         validate_config,
     )
     from benchmark.core.constants import Category, FormatKey, InputFormat
+    from benchmark.core.datasets import resolve_studies
     from benchmark.core.ingest import canonical_file, detect_format, ingest, recover_sample_freq
     from benchmark.core.setup import (
         setup_int32_variants,
@@ -403,8 +405,10 @@ _CORE_CATEGORY_IDS = (
 )
 
 
-def _category_targets_summary(cfg: dict, cat_id: str) -> str:
+def _category_targets_summary(cfg: dict, cat_id: str, study: dict | None = None) -> str:
     """One-line description of what artifacts a category runs against."""
+    if study and study.get("remote_only") and cat_id != Category.REMOTE_QUERY:
+        return "skipped (remote_only dataset)"
     if cat_id in _CORE_CATEGORY_IDS:
         selector = get_core_targets_selector(cfg, cat_id)
         variant_ids = [spec["id"] for spec in cfg.get("variants", []) or []]
@@ -430,7 +434,7 @@ def _category_targets_summary(cfg: dict, cat_id: str) -> str:
     if cat_id == Category.INT32_STORAGE:
         return "int32_calibrated/int32_nanovolt x zstd/snappy/none"
     if cat_id == Category.REMOTE_QUERY:
-        remote_cfg = get_remote_query_cfg(cfg)
+        remote_cfg = merge_remote_query_paths(get_remote_query_cfg(cfg), study)
         labels = [
             label
             for label, key in (
@@ -456,7 +460,7 @@ def _print_plan_preview(cfg: dict, selected: list[tuple[str, str, object]]) -> N
     rows = []
     for study in cfg.get("studies", []):
         for cat_id, _, _ in selected:
-            rows.append((study["name"], str(cat_id), _category_targets_summary(cfg, cat_id)))
+            rows.append((study["name"], str(cat_id), _category_targets_summary(cfg, cat_id, study)))
     if not rows:
         print("\nPlan: nothing selected to run.")
         return
@@ -479,7 +483,8 @@ def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str
     print(f"Cache dir: {Path(cfg.get('cache_dir', '.benchmark_cache'))}")
     print("\nStudies:")
     for study in cfg.get("studies", []):
-        print(f"  - {study['name']} (input: {_study_input_value(study)})")
+        marker = " [remote_only]" if study.get("remote_only") else ""
+        print(f"  - {study['name']} (input: {_study_input_value(study)}){marker}")
     _print_plan_preview(cfg, selected)
     print(f"\nSelected benchmarks ({len(selected)}):")
     for cat_id, cat_name, _ in selected:
@@ -596,6 +601,7 @@ def _save_results(output: dict, out_path: Path) -> None:
 def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
     cfg = normalize_config(cfg)
     validate_config(cfg)
+    cfg["studies"] = resolve_studies(cfg)
     run_id = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     cache_dir = Path(cfg.get("cache_dir", ".benchmark_cache"))
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -617,6 +623,13 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
 
     for study_cfg in cfg.get("studies", []):
         print(f"\n{'=' * 60}\nStudy: {study_cfg['name']}\n{'=' * 60}")
+        if study_cfg.get("remote_only"):
+            print(
+                "  [skip] Dataset is flagged remote_only; download-based categories do "
+                "not run for it. Remote-only execution of benchmark I is planned for "
+                "the nightly/full pipeline phase."
+            )
+            continue
         input_path = resolve_input_path(cfg, study_cfg, args)
         sample_freq = study_cfg.get("sample_freq")
         canonical_pq, detected_fmt, sample_freq = ingest(
@@ -673,7 +686,7 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
 
             for _, cat_name, bench_fn in selected:
                 print(f"\n-- {cat_name} --")
-                results = bench_fn(info, paths, cfg, args=args)
+                results = bench_fn(info, paths, cfg, args=args, study=study_cfg)
                 for result in results:
                     result = dict(result)
                     inline_printed = bool(result.pop("_printed_inline", False))

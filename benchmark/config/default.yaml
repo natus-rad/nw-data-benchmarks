@@ -35,22 +35,21 @@ azure:
   container: "waveforms"
   anonymous: true
 
+# STUDIES
+# -------
+# A study either references a dataset from the central manifest
+# (benchmark/config/datasets.yaml) via `dataset: <key>`, or defines its
+# metadata inline:
+#   - name:        friendly study label used in results/reporting
+#   - input:       local path or remote Azure blob prefix/URL
+#   - sample_freq: sampling rate in Hz. Required for EDF inputs; optional for
+#                  HDF5/ERD when the source metadata provides it, but still
+#                  recommended for reproducible cached reruns.
+# Fields written on the study entry override the manifest values.
+# The default references the public HDF5 copy of the suppression study; see
+# the "Default data source" table in README.md.
 studies:
-  - name: "suppression_study"
-
-    # --- Universal input path ---
-    # This can be either a local path or a remote Azure blob prefix/URL.
-    # The default points at the public HDF5 (columnar, 30-minute chunks) copy
-    # of the study. A public Parquet copy of the same study is also hosted; see
-    # the "Default data source" table in README.md.
-    input: "external/benchmarks/h5/hdf5_col_30m_d928f99b.h5"
-
-    # --- Sample frequency (Hz) ---
-    # Required for EDF inputs. Optional for HDF5 / ERD when the source metadata
-    # can provide it, but still recommended for reproducible cached reruns.
-    # For Parquet inputs, keep specifying it explicitly unless your workflow
-    # guarantees the samplestamp unit matches the sampling rate.
-    sample_freq: 256
+  - dataset: suppression_study
 
 # Canonical intermediate Parquet written for every study before variants,
 # investigations, and report metadata are derived.
@@ -161,9 +160,9 @@ benchmarks:
         n_random_points: 2          # Number of random remote windows to query.
         window_sec: 600             # Duration of each random query window in seconds.
         full_study_chunk_sec: 3600  # Chunk size for optional full-study sequential reads.
-        remote_float32_path: "external/benchmarks/parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"  # Remote float32 dataset.
-        remote_int32_nanovolt_path: "external/benchmarks/parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.int32_nanovolt.snappy.parquet/"  # Remote int32-nanovolt dataset.
-        remote_single_file_path: "external/benchmarks/parquet/tuned_pq_lz4_10m.parquet"  # Remote single-file tuned Parquet dataset.
+        # Remote dataset paths come from each study's `remote_query` entry in
+        # the dataset manifest (benchmark/config/datasets.yaml). Global
+        # remote_*_path keys are still accepted here as a deprecated fallback.
   other:
     tuned_comparison:
       enabled: false

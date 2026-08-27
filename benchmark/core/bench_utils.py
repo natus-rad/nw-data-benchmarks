@@ -19,6 +19,7 @@ from .config_helpers import (
     get_tuned_parquet_codecs,
     get_window_sizes,
     is_investigation_enabled,
+    merge_remote_query_paths,
 )
 
 
@@ -198,49 +199,56 @@ def _chunk_ranges(start_stamp: int, end_stamp: int, chunk_stamps: int):
 
 
 def _estimate_runs(cfg: dict, selected: list) -> int:
-    """Rough estimate of total benchmark invocations."""
+    """Rough estimate of total benchmark invocations across all studies."""
     n = 0
     reps = get_repetitions(cfg)
     read_positions = get_read_positions(cfg)
     channel_subsets = get_channel_subsets(cfg)
     window_sizes = get_window_sizes(cfg)
     remote_cfg = get_remote_query_cfg(cfg)
-    for cat_id, _, _ in selected:
-        if cat_id == "random_access":
-            n += len(read_positions) * 2 * reps
-        elif cat_id == "channel_subset":
-            n += (len(channel_subsets) + 1) * 2 * reps
-        elif cat_id == "remontage":
-            n += 2 * reps
-        elif cat_id == "filter_pipeline":
-            n += 1
-        elif cat_id == "window_scaling":
-            n += len(window_sizes) * 2 * reps
-        elif cat_id == "compression":
-            if is_investigation_enabled(cfg, "compression"):
-                n += len(get_compression_codec_matrix(cfg)) * reps
-        elif cat_id == "precision_loss":
-            if is_investigation_enabled(cfg, "precision_loss"):
+    studies = cfg.get("studies") or [{}]
+    for study in studies:
+        remote_only = bool(study.get("remote_only"))
+        for cat_id, _, _ in selected:
+            if remote_only and cat_id != "remote_query":
+                continue
+            if cat_id == "random_access":
+                n += len(read_positions) * 2 * reps
+            elif cat_id == "channel_subset":
+                n += (len(channel_subsets) + 1) * 2 * reps
+            elif cat_id == "remontage":
+                n += 2 * reps
+            elif cat_id == "filter_pipeline":
                 n += 1
-        elif cat_id == "int32_storage":
-            if is_investigation_enabled(cfg, "int32_storage"):
-                n += 12 * reps
-        elif cat_id == "remote_query":
-            if is_investigation_enabled(cfg, "remote_query"):
-                parquet_variants = sum(
-                    1
-                    for key in ("remote_float32_path", "remote_int32_nanovolt_path", "remote_single_file_path")
-                    if remote_cfg.get(key)
-                )
-                channel_variants = 2  # all channels + 10-20 subset when available
-                n += parquet_variants * channel_variants
-                if remote_cfg.get("full_study_chunk_sec"):
+            elif cat_id == "window_scaling":
+                n += len(window_sizes) * 2 * reps
+            elif cat_id == "compression":
+                if is_investigation_enabled(cfg, "compression"):
+                    n += len(get_compression_codec_matrix(cfg)) * reps
+            elif cat_id == "precision_loss":
+                if is_investigation_enabled(cfg, "precision_loss"):
+                    n += 1
+            elif cat_id == "int32_storage":
+                if is_investigation_enabled(cfg, "int32_storage"):
+                    n += 12 * reps
+            elif cat_id == "remote_query":
+                if is_investigation_enabled(cfg, "remote_query"):
+                    # Manifest paths override the deprecated global path keys.
+                    merged = merge_remote_query_paths(remote_cfg, study)
+                    parquet_variants = sum(
+                        1
+                        for key in ("remote_float32_path", "remote_int32_nanovolt_path", "remote_single_file_path")
+                        if merged.get(key)
+                    )
+                    channel_variants = 2  # all channels + 10-20 subset when available
                     n += parquet_variants * channel_variants
-        elif cat_id == "tuned_comparison":
-            tuned_variants = len(get_tuned_parquet_codecs(cfg)) + 1  # one HDF5 variant
-            n += tuned_variants * ((2 + len(window_sizes)) * reps + 1)
-        elif cat_id == "baseline_comparison":
-            n += ((2 + len(window_sizes)) * reps + 1)
+                    if merged.get("full_study_chunk_sec"):
+                        n += parquet_variants * channel_variants
+            elif cat_id == "tuned_comparison":
+                tuned_variants = len(get_tuned_parquet_codecs(cfg)) + 1  # one HDF5 variant
+                n += tuned_variants * ((2 + len(window_sizes)) * reps + 1)
+            elif cat_id == "baseline_comparison":
+                n += ((2 + len(window_sizes)) * reps + 1)
     return n
 
 

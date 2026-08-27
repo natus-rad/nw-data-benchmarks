@@ -131,7 +131,7 @@ Notes:
 
 Use `benchmark/config/default.yaml` as the reference config. The key top-level blocks are:
 
-- `studies` — one or more studies with `name`, `input`, and `sample_freq` when needed
+- `studies` — one or more studies, either `dataset: <key>` references into `benchmark/config/datasets.yaml` or inline entries with `name`, `input`, and `sample_freq` when needed
 - `canonical_parquet` — how the cached canonical Parquet is written
 - `variants` — the root benchmark targets to generate, each with a stable `id`
 - `benchmarks.core` — A–E, with per-category `targets: all | [id, ...] | []`, optional `include_canonical: true`, and knobs under `params:`
