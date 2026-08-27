@@ -36,7 +36,7 @@ python -m benchmark.scripts.generate_benchmark_report
 python -m benchmark.scripts.generate_benchmark_report --input benchmark/results/<file>.json --html
 ```
 
-The default configuration uses a public Azure Parquet study (~12.9 hours, 46 channels, 256 Hz) and caches data in `.benchmark_cache/` on first use.
+The default configuration uses a public Azure HDF5 copy of the study (~12.9 hours, 46 channels, 256 Hz) and caches data in `.benchmark_cache/` on first use. A Parquet copy of the same study is hosted alongside it and is used by the remote-query benchmark (I).
 
 ## Default data source
 
@@ -44,7 +44,8 @@ The default configuration uses a public Azure Parquet study (~12.9 hours, 46 cha
 |---|---|
 | Storage account | `nwcsandboxstorage` |
 | Container | `waveforms` |
-| Parquet path | `external/benchmarks/parquet/Suppression~ B_54c97daa-...float32.snappy.parquet/` |
+| Default input (HDF5, columnar) | `external/benchmarks/h5/hdf5_col_30m_d928f99b.h5` |
+| Parquet copy | `external/benchmarks/parquet/Suppression~ B_54c97daa-...float32.snappy.parquet/` |
 | Channels | 46 (10-20 + auxiliaries) |
 | Sample rate | 256 Hz |
 | Duration | ~12.9 hours (~11.85M samples) |

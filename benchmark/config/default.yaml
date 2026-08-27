@@ -40,7 +40,9 @@ studies:
 
     # --- Universal input path ---
     # This can be either a local path or a remote Azure blob prefix/URL.
-    # The default points at the public Parquet dataset we've been using.
+    # The default points at the public HDF5 (columnar, 30-minute chunks) copy
+    # of the study. A public Parquet copy of the same study is also hosted; see
+    # the "Default data source" table in README.md.
     input: "external/benchmarks/h5/hdf5_col_30m_d928f99b.h5"
 
     # --- Sample frequency (Hz) ---
