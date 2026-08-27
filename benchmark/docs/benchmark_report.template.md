@@ -17,11 +17,17 @@ This report is automatically generated from benchmark result JSON and is intende
 
 ## Run Overview
 
-${overview}
+${run_overview}
+
+<!-- BEGIN PER-STUDY SECTIONS -->
+
+## Study: ${study_name}
+
+${study_overview}
 
 ## Executive Summary
 
-Benchmark rows: **${benchmark_count}** across **${category_count}** categories.
+Benchmark rows: **${study_benchmark_count}** across **${study_category_count}** categories.
 
 ${summary}
 
@@ -254,3 +260,5 @@ ${k3_results}
 **Question answered:** How does the baseline input artifact perform on whole-study scans compared with the tuned variants in Benchmark J?
 
 ${k4_results}${k_notes}
+
+<!-- END PER-STUDY SECTIONS -->

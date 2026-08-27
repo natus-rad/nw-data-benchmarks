@@ -187,12 +187,12 @@ benchmarks:
 
 ## Output
 
-- **JSON results** → `benchmark/results/`
+- **JSON results** → `benchmark/results/<run_id>_benchmark_results.json`
 - **Markdown report template** → `benchmark/docs/benchmark_report.template.md`
-- **Generated Markdown report** → `benchmark/docs/benchmark_report.md`
-- **Generated HTML report** → `benchmark/docs/benchmark_report.html`
+- **Per-run reports** → `benchmark/docs/reports/<run_id>_benchmark_report.md` + `.html` (never overwritten)
+- **Latest report copy** → `benchmark/docs/benchmark_report.md` + `.html` (refreshed each run)
 
-`run_benchmarks.py` generates the Markdown + HTML report automatically after a successful run. Use `--no-report` to skip that step.
+`run_benchmarks.py` generates the Markdown + HTML report automatically after a successful run. Use `--no-report` to skip that step. Reports contain one section block per study; timing cells show the median, the first (cold-proxy) repetition, and the min-max spread across repetitions.
 
 If `--input` is omitted, `generate_benchmark_report.py` automatically picks the newest `*_benchmark_results.json` file in `benchmark/results/`.
 
