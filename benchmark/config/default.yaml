@@ -84,12 +84,17 @@ variants:
 #   parquet_investigations  -> F-I, Parquet-specific experiments
 #   other                   -> J-K, tuned/baseline comparison workloads
 #
-# For core categories, `variants` may be:
-#   all        -> all root variant ids in declaration order
-#   []         -> skip that category
-#   [id, ...]  -> run only the listed root variant ids
-# Optional
-#   Adding `include_canonical: true` appends canonical_parquet.id to that category's targets.
+# Every category uses the same shape:
+#   enabled: true|false     -> run or skip the category
+#   targets:                -> core categories only; which root variants to run:
+#     all                   ->   all root variant ids in declaration order
+#     []                    ->   skip that category's targets
+#     [id, ...]             ->   run only the listed root variant ids
+#   include_canonical: true -> core categories only; also benchmark canonical_parquet.id
+#   params:                 -> category-specific knobs (documented inline below)
+#
+# Legacy spellings (core `variants:` and knobs written directly on the
+# category) are still accepted for backward compatibility.
 #
 # List of supported benchmarks:
 #   random_access       A: read the same window at different file positions.
@@ -110,57 +115,65 @@ benchmarks:
   core:
     random_access:
       enabled: true
-      variants: all
+      targets: all
       include_canonical: true  # Optional: also benchmark canonical_parquet.id for this category.
-      read_positions: [0.0, 0.5, 0.75, 0.95]  # Fractional positions across the study duration.
+      params:
+        read_positions: [0.0, 0.5, 0.75, 0.95]  # Fractional positions across the study duration.
     channel_subset:
       enabled: true
-      variants: all
-      channel_subsets: [4, 10]  # Channel counts to benchmark in addition to the superset.
+      targets: all
+      params:
+        channel_subsets: [4, 10]  # Channel counts to benchmark in addition to the superset.
     remontage:
       enabled: true
-      variants: all
+      targets: all
     filter_pipeline:
       enabled: true
-      variants: all
-      fft_window_sec: 10   # D.2 FFT window length in seconds.
-      fft_stride_sec: 2    # D.2 FFT stride in seconds.
-      read_chunk_sec: 300  # D.1/D.2 sequential read chunk size in seconds.
+      targets: all
+      params:
+        fft_window_sec: 10   # D.2 FFT window length in seconds.
+        fft_stride_sec: 2    # D.2 FFT stride in seconds.
+        read_chunk_sec: 300  # D.1/D.2 sequential read chunk size in seconds.
     window_scaling:
       enabled: true
-      variants: all
-      window_sizes: [10, 30, 60, 300, 900, 1800, 3600]  # Seconds.
+      targets: all
+      params:
+        window_sizes: [10, 30, 60, 300, 900, 1800, 3600]  # Seconds.
   parquet_investigations:
     compression:
       enabled: false
-      variants:
-        - codec: "none"   # Uncompressed Parquet.
-        - codec: "snappy"
-        - codec: "zstd"
-          level: 3        # Zstd compression level for this entry.
-        - codec: "zstd"
-          level: 9
-        - codec: "lz4"
+      params:
+        codec_matrix:       # Parquet codecs rewritten and measured by benchmark F.
+          - codec: "none"   # Uncompressed Parquet.
+          - codec: "snappy"
+          - codec: "zstd"
+            level: 3        # Zstd compression level for this entry.
+          - codec: "zstd"
+            level: 9
+          - codec: "lz4"
     precision_loss:
       enabled: false
     int32_storage:
       enabled: false
     remote_query:
       enabled: false
-      n_random_points: 2          # Number of random remote windows to query.
-      window_sec: 600             # Duration of each random query window in seconds.
-      full_study_chunk_sec: 3600  # Chunk size for optional full-study sequential reads.
-      remote_float32_path: "external/benchmarks/parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"  # Remote float32 dataset.
-      remote_int32_nanovolt_path: "external/benchmarks/parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.int32_nanovolt.snappy.parquet/"  # Remote int32-nanovolt dataset.
-      remote_single_file_path: "external/benchmarks/parquet/tuned_pq_lz4_10m.parquet"  # Remote single-file tuned Parquet dataset.
+      params:
+        n_random_points: 2          # Number of random remote windows to query.
+        window_sec: 600             # Duration of each random query window in seconds.
+        full_study_chunk_sec: 3600  # Chunk size for optional full-study sequential reads.
+        remote_float32_path: "external/benchmarks/parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.float32.snappy.parquet/"  # Remote float32 dataset.
+        remote_int32_nanovolt_path: "external/benchmarks/parquet/Suppression~ B_54c97daa-933a-46fc-ab0e-dcfb65a0d724.int32_nanovolt.snappy.parquet/"  # Remote int32-nanovolt dataset.
+        remote_single_file_path: "external/benchmarks/parquet/tuned_pq_lz4_10m.parquet"  # Remote single-file tuned Parquet dataset.
   other:
     tuned_comparison:
       enabled: false
-      block_sizes_minutes: [5, 10, 20, 30, 60, 120]  # Generated block sizes for tuned artifacts.
-      parquet_codecs: [snappy, lz4]                  # Tuned Parquet codecs to compare.
-      hdf5_compression: lz4                          # Only lz4 is currently supported for tuned HDF5.
-      chunk_sec: 3600                                # Sequential full-study chunk read size in seconds.
+      params:
+        block_sizes_minutes: [5, 10, 20, 30, 60, 120]  # Generated block sizes for tuned artifacts.
+        parquet_codecs: [snappy, lz4]                  # Tuned Parquet codecs to compare.
+        hdf5_compression: lz4                          # Only lz4 is currently supported for tuned HDF5.
+        chunk_sec: 3600                                # Sequential full-study chunk read size in seconds.
     baseline_comparison:
       enabled: true
-      chunk_sec: 3600                                # Sequential full-study chunk read size in seconds.
+      params:
+        chunk_sec: 3600                                # Sequential full-study chunk read size in seconds.
 

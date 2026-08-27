@@ -134,9 +134,11 @@ Use `benchmark/config/default.yaml` as the reference config. The key top-level b
 - `studies` — one or more studies with `name`, `input`, and `sample_freq` when needed
 - `canonical_parquet` — how the cached canonical Parquet is written
 - `variants` — the root benchmark targets to generate, each with a stable `id`
-- `benchmarks.core` — A–E, with per-category `variants: all | [id, ...] | []` and optional `include_canonical: true`
-- `benchmarks.parquet_investigations` — F–I
-- `benchmarks.other` — J (`tuned_comparison`) and K (`baseline_comparison`)
+- `benchmarks.core` — A–E, with per-category `targets: all | [id, ...] | []`, optional `include_canonical: true`, and knobs under `params:`
+- `benchmarks.parquet_investigations` — F–I, each with `enabled` and optional `params:`
+- `benchmarks.other` — J (`tuned_comparison`) and K (`baseline_comparison`), same shape
+
+Every benchmark category uses the same `enabled` / `targets` / `params` shape. Legacy configs that spell core `targets:` as `variants:` or write knobs directly on the category still load unchanged.
 
 Minimal shape:
 
@@ -166,7 +168,7 @@ benchmarks:
   core:
     random_access:
       enabled: true
-      variants: all
+      targets: all
   parquet_investigations:
     compression:
       enabled: true

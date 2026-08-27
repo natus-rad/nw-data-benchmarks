@@ -17,8 +17,10 @@ try:
     from benchmark.core.config_helpers import (
         get_canonical_parquet_cfg,
         get_channel_subsets,
+        get_compression_codec_matrix,
+        get_core_include_canonical,
+        get_core_targets_selector,
         get_default_window,
-        get_parquet_compression_variants,
         get_read_positions,
         get_remote_query_cfg,
         get_repetitions,
@@ -314,7 +316,7 @@ def _planned_artifacts_for_study(cfg: dict, study_cfg: dict,
     selected_ids = {cat_id for cat_id, _, _ in selected}
 
     if Category.COMPRESSION in selected_ids and is_investigation_enabled(cfg, "compression"):
-        for comp_cfg in get_parquet_compression_variants(cfg):
+        for comp_cfg in get_compression_codec_matrix(cfg):
             codec = comp_cfg["codec"]
             level = comp_cfg.get("level")
             label = f"{codec}_{level}" if level else codec
@@ -392,6 +394,85 @@ def _planned_artifacts_for_study(cfg: dict, study_cfg: dict,
     return entries, runtime_only
 
 
+_CORE_CATEGORY_IDS = (
+    Category.RANDOM_ACCESS,
+    Category.CHANNEL_SUBSET,
+    Category.REMONTAGE,
+    Category.FILTER_PIPELINE,
+    Category.WINDOW_SCALING,
+)
+
+
+def _category_targets_summary(cfg: dict, cat_id: str) -> str:
+    """One-line description of what artifacts a category runs against."""
+    if cat_id in _CORE_CATEGORY_IDS:
+        selector = get_core_targets_selector(cfg, cat_id)
+        variant_ids = [spec["id"] for spec in cfg.get("variants", []) or []]
+        if selector == "all":
+            targets = list(variant_ids)
+        elif selector == []:
+            targets = []
+        else:
+            targets = list(selector)
+        if not targets and selector != []:
+            targets = ["source artifact"]
+        if get_core_include_canonical(cfg, cat_id):
+            targets.append(str(get_canonical_parquet_cfg(cfg)["id"]))
+        return ", ".join(targets) if targets else "(none)"
+    if cat_id == Category.COMPRESSION:
+        labels = [
+            entry["codec"] + (f"_{entry['level']}" if entry.get("level") else "")
+            for entry in get_compression_codec_matrix(cfg)
+        ]
+        return ", ".join(labels) if labels else "(none)"
+    if cat_id == Category.PRECISION_LOSS:
+        return "default parquet artifact (in-memory round-trip)"
+    if cat_id == Category.INT32_STORAGE:
+        return "int32_calibrated/int32_nanovolt x zstd/snappy/none"
+    if cat_id == Category.REMOTE_QUERY:
+        remote_cfg = get_remote_query_cfg(cfg)
+        labels = [
+            label
+            for label, key in (
+                ("float32_snappy", "remote_float32_path"),
+                ("int32_nV_snappy", "remote_int32_nanovolt_path"),
+                ("single_file_lz4", "remote_single_file_path"),
+                ("edf", "remote_edf_path"),
+            )
+            if remote_cfg.get(key)
+        ]
+        return "remote: " + (", ".join(labels) if labels else "(no remote paths configured)")
+    if cat_id == Category.TUNED_COMPARISON:
+        blocks = get_tuned_block_sizes_minutes(cfg)
+        codecs = get_tuned_parquet_codecs(cfg)
+        return f"tuned parquet {codecs} x {blocks}min + tuned hdf5 ({get_tuned_hdf5_compression(cfg)})"
+    if cat_id == Category.BASELINE_COMPARISON:
+        return "resolved source artifact"
+    return "(unknown category)"
+
+
+def _print_plan_preview(cfg: dict, selected: list[tuple[str, str, object]]) -> None:
+    """Print a study x category x targets table summarizing the planned run."""
+    rows = []
+    for study in cfg.get("studies", []):
+        for cat_id, _, _ in selected:
+            rows.append((study["name"], str(cat_id), _category_targets_summary(cfg, cat_id)))
+    if not rows:
+        print("\nPlan: nothing selected to run.")
+        return
+
+    headers = ("Study", "Category", "Targets")
+    widths = [
+        max(len(headers[col]), max(len(row[col]) for row in rows))
+        for col in range(3)
+    ]
+    print("\nPlan:")
+    print("  " + "  ".join(h.ljust(widths[i]) for i, h in enumerate(headers)))
+    print("  " + "  ".join("-" * widths[i] for i in range(3)))
+    for row in rows:
+        print("  " + "  ".join(row[i].ljust(widths[i]) for i in range(3)))
+
+
 def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str, str, object]]) -> None:
     print("\n=== DRY RUN ===")
     print(f"Config: {args.config}")
@@ -399,13 +480,13 @@ def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str
     print("\nStudies:")
     for study in cfg.get("studies", []):
         print(f"  - {study['name']} (input: {_study_input_value(study)})")
+    _print_plan_preview(cfg, selected)
     print(f"\nSelected benchmarks ({len(selected)}):")
     for cat_id, cat_name, _ in selected:
         print(f"  - [{cat_id}] {cat_name}")
-        core_cfg = cfg.get("benchmarks", {}).get("core", {}).get(cat_id, {})
-        if isinstance(core_cfg, dict) and "variants" in core_cfg:
-            print(f"      variants={core_cfg['variants']}")
-            if core_cfg.get("include_canonical", False):
+        if cat_id in _CORE_CATEGORY_IDS:
+            print(f"      targets={get_core_targets_selector(cfg, cat_id)}")
+            if get_core_include_canonical(cfg, cat_id):
                 print("      include_canonical=true")
 
     selected_ids = {cat_id for cat_id, _, _ in selected}
@@ -417,12 +498,12 @@ def _print_dry_run(cfg: dict, args: argparse.Namespace, selected: list[tuple[str
     )):
         print("\nParquet investigations config:")
         if Category.COMPRESSION in selected_ids:
-            variants = get_parquet_compression_variants(cfg)
+            codec_matrix = get_compression_codec_matrix(cfg)
             labels = [
-                v["codec"] + (f" level={v['level']}" if v.get("level") else "")
-                for v in variants
+                entry["codec"] + (f" level={entry['level']}" if entry.get("level") else "")
+                for entry in codec_matrix
             ]
-            print(f"  - compression: enabled={is_investigation_enabled(cfg, 'compression')} variants={labels}")
+            print(f"  - compression: enabled={is_investigation_enabled(cfg, 'compression')} codec_matrix={labels}")
         if Category.PRECISION_LOSS in selected_ids:
             print(f"  - precision_loss: enabled={is_investigation_enabled(cfg, 'precision_loss')}")
         if Category.INT32_STORAGE in selected_ids:
@@ -559,14 +640,8 @@ def run_benchmarks(cfg: dict, args: argparse.Namespace) -> None:
 
             selected_ids = {cat_id for cat_id, _, _ in selected}
             if not variant_specs and detected_fmt == InputFormat.ERD and any(
-                cat_id in {
-                    Category.RANDOM_ACCESS,
-                    Category.CHANNEL_SUBSET,
-                    Category.REMONTAGE,
-                    Category.FILTER_PIPELINE,
-                    Category.WINDOW_SCALING,
-                }
-                and cfg.get("benchmarks", {}).get("core", {}).get(cat_id, {}).get("variants", "all") != []
+                cat_id in _CORE_CATEGORY_IDS
+                and get_core_targets_selector(cfg, cat_id) != []
                 for cat_id in selected_ids
             ):
                 raise ValueError(

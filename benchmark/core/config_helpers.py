@@ -32,13 +32,24 @@ DEFAULT_CANONICAL_PARQUET = {
 REMOVED_TOP_LEVEL_BENCHMARK_FIELDS = {
     "repetitions": "benchmarks.common.repetitions",
     "default_window": "benchmarks.common.default_window",
-    "read_positions": "benchmarks.core.random_access.read_positions",
-    "channel_subsets": "benchmarks.core.channel_subset.channel_subsets",
-    "window_sizes": "benchmarks.core.window_scaling.window_sizes",
+    "read_positions": "benchmarks.core.random_access.params.read_positions",
+    "channel_subsets": "benchmarks.core.channel_subset.params.channel_subsets",
+    "window_sizes": "benchmarks.core.window_scaling.params.window_sizes",
     "parquet_investigations": "benchmarks.parquet_investigations",
     "tuned_comparison": "benchmarks.other.tuned_comparison",
     "baseline_comparison": "benchmarks.other.baseline_comparison",
 }
+
+# Every benchmark category leaf normalizes to the same shape:
+#   enabled: bool
+#   targets: "all" | [] | [variant ids]   (core categories only)
+#   include_canonical: bool               (core categories only)
+#   params: {category-specific knobs}
+#
+# Legacy spellings remain accepted on input:
+#   - core `variants:` is read as `targets:`
+#   - knobs written flat on the leaf are read as `params:` entries
+#   - compression's legacy `variants:` codec list is read as `params.codec_matrix`
 
 
 def _list_or_empty(value) -> list:
@@ -57,16 +68,41 @@ def _require_mapping(value, path: str) -> dict:
     raise ValueError(f"Config field '{path}' must be a mapping/object.")
 
 
-def _normalize_core_leaf(leaf: dict, selector, extras: dict | None = None) -> dict:
-    normalized = {
+_LEAF_STRUCTURAL_KEYS = ("enabled", "targets", "variants", "include_canonical", "params")
+
+
+def _section_params(section: dict) -> dict:
+    """Merged view of a category leaf's knobs.
+
+    Reads the normalized ``params:`` block when present, and falls back to
+    knobs written flat on the leaf (the legacy spelling) otherwise. ``params``
+    entries win over flat duplicates.
+    """
+    section = _dict_or_empty(section)
+    merged = {key: value for key, value in section.items() if key not in _LEAF_STRUCTURAL_KEYS}
+    params = section.get("params")
+    if isinstance(params, dict):
+        merged.update(params)
+    return merged
+
+
+def _normalize_params_leaf(leaf: dict, path: str) -> dict:
+    params = _require_mapping(leaf.get("params"), f"{path}.params")
+    flat = {key: value for key, value in leaf.items() if key not in _LEAF_STRUCTURAL_KEYS}
+    return {**flat, **params}
+
+
+def _normalize_core_leaf(leaf: dict, path: str, param_defaults: dict | None = None) -> dict:
+    params = _normalize_params_leaf(leaf, path)
+    if param_defaults:
+        for key, default in param_defaults.items():
+            params[key] = params.get(key, default)
+    return {
         "enabled": bool(leaf.get("enabled", False)),
-        "variants": leaf.get("variants", selector),
+        "targets": leaf.get("targets", leaf.get("variants", "all")),
         "include_canonical": bool(leaf.get("include_canonical", False)),
+        "params": params,
     }
-    if extras:
-        for key, value in extras.items():
-            normalized[key] = leaf.get(key, value)
-    return normalized
 
 
 def normalize_config(cfg: dict | None) -> dict:
@@ -100,45 +136,56 @@ def normalize_config(cfg: dict | None) -> dict:
     core = {
         Category.RANDOM_ACCESS: _normalize_core_leaf(
             raw_random_access,
-            "all",
-            {"read_positions": _list_or_empty(raw_random_access.get("read_positions", [0.0, 0.5, 0.75, 0.95]))}
+            f"benchmarks.core.{Category.RANDOM_ACCESS}",
+            {"read_positions": [0.0, 0.5, 0.75, 0.95]},
         ),
         Category.CHANNEL_SUBSET: _normalize_core_leaf(
             raw_channel_subset,
-            "all",
-            {"channel_subsets": _list_or_empty(raw_channel_subset.get("channel_subsets", [4, 10]))}
+            f"benchmarks.core.{Category.CHANNEL_SUBSET}",
+            {"channel_subsets": [4, 10]},
         ),
         Category.REMONTAGE: _normalize_core_leaf(
             raw_remontage,
-            "all",
+            f"benchmarks.core.{Category.REMONTAGE}",
         ),
         Category.FILTER_PIPELINE: _normalize_core_leaf(
             raw_filter_pipeline,
-            "all",
-            {
-                key: float(raw_filter_pipeline.get(key, default))
-                for key, default in DEFAULT_FILTER_PIPELINE_CFG.items()
-            },
+            f"benchmarks.core.{Category.FILTER_PIPELINE}",
+            dict(DEFAULT_FILTER_PIPELINE_CFG),
         ),
         Category.WINDOW_SCALING: _normalize_core_leaf(
             raw_window_scaling,
-            "all",
-            {"window_sizes": _list_or_empty(raw_window_scaling.get("window_sizes", [10, 30, 60, 300, 900, 1800, 3600]))}
+            f"benchmarks.core.{Category.WINDOW_SCALING}",
+            {"window_sizes": [10, 30, 60, 300, 900, 1800, 3600]},
         ),
     }
-    parquet_investigations = {
-        Category.COMPRESSION: _require_mapping(raw_parquet.get(Category.COMPRESSION), f"benchmarks.parquet_investigations.{Category.COMPRESSION}"),
-        Category.PRECISION_LOSS: _require_mapping(raw_parquet.get(Category.PRECISION_LOSS), f"benchmarks.parquet_investigations.{Category.PRECISION_LOSS}"),
-        Category.INT32_STORAGE: _require_mapping(raw_parquet.get(Category.INT32_STORAGE), f"benchmarks.parquet_investigations.{Category.INT32_STORAGE}"),
-        Category.REMOTE_QUERY: _require_mapping(raw_parquet.get(Category.REMOTE_QUERY), f"benchmarks.parquet_investigations.{Category.REMOTE_QUERY}"),
-    }
-    for category in (Category.COMPRESSION, Category.PRECISION_LOSS, Category.INT32_STORAGE, Category.REMOTE_QUERY):
-        parquet_investigations[category]["enabled"] = bool(parquet_investigations[category].get("enabled", False))
+    filter_params = core[Category.FILTER_PIPELINE]["params"]
+    for key in DEFAULT_FILTER_PIPELINE_CFG:
+        filter_params[key] = float(filter_params[key])
 
-    tuned = dict(raw_tuned)
-    tuned["enabled"] = bool(tuned.get("enabled", False))
-    baseline = dict(raw_baseline)
-    baseline["enabled"] = bool(baseline.get("enabled", False))
+    parquet_investigations = {}
+    for category in (Category.COMPRESSION, Category.PRECISION_LOSS, Category.INT32_STORAGE, Category.REMOTE_QUERY):
+        path = f"benchmarks.parquet_investigations.{category}"
+        leaf = _require_mapping(raw_parquet.get(category), path)
+        params = _normalize_params_leaf(leaf, path)
+        if category == Category.COMPRESSION:
+            # Legacy spelling: compression's codec list was written as `variants:`.
+            codec_matrix = params.pop("codec_matrix", leaf.get("variants"))
+            if codec_matrix is not None:
+                params["codec_matrix"] = _list_or_empty(codec_matrix)
+        parquet_investigations[category] = {
+            "enabled": bool(leaf.get("enabled", False)),
+            "params": params,
+        }
+
+    tuned = {
+        "enabled": bool(raw_tuned.get("enabled", False)),
+        "params": _normalize_params_leaf(raw_tuned, f"benchmarks.other.{Category.TUNED_COMPARISON}"),
+    }
+    baseline = {
+        "enabled": bool(raw_baseline.get("enabled", False)),
+        "params": _normalize_params_leaf(raw_baseline, f"benchmarks.other.{Category.BASELINE_COMPARISON}"),
+    }
 
     cfg["canonical_parquet"] = get_canonical_parquet_cfg(cfg)
     cfg["benchmarks"] = {
@@ -183,25 +230,25 @@ def validate_config(cfg: dict) -> None:
         Category.FILTER_PIPELINE,
         Category.WINDOW_SCALING,
     ):
-        selector = get_core_variants_selector(cfg, category)
+        selector = get_core_targets_selector(cfg, category)
         if selector == "all" or selector == []:
             continue
         if not isinstance(selector, list):
             raise ValueError(
-                f"benchmarks.core.{category}.variants must be 'all', [], or a list of variant ids"
+                f"benchmarks.core.{category}.targets must be 'all', [], or a list of variant ids"
             )
         if any(not isinstance(variant_id, str) or not variant_id.strip() for variant_id in selector):
             raise ValueError(
-                f"benchmarks.core.{category}.variants must contain only non-empty string variant ids"
+                f"benchmarks.core.{category}.targets must contain only non-empty string variant ids"
             )
         if not variant_ids:
             raise ValueError(
-                f"benchmarks.core.{category}.variants cannot list explicit ids when root variants is empty"
+                f"benchmarks.core.{category}.targets cannot list explicit ids when root variants is empty"
             )
         unknown = [variant_id for variant_id in selector if variant_id not in variant_ids]
         if unknown:
             raise ValueError(
-                f"benchmarks.core.{category}.variants references unknown variant ids: {unknown}"
+                f"benchmarks.core.{category}.targets references unknown variant ids: {unknown}"
             )
 
     filter_pipeline_cfg = get_filter_pipeline_cfg(cfg)
@@ -231,14 +278,19 @@ def is_core_category_enabled(cfg: dict, category: str) -> bool:
     return bool(get_core_category_cfg(cfg, category).get("enabled", False))
 
 
-def get_core_variants_selector(cfg: dict, category: str):
-    return get_core_category_cfg(cfg, category).get("variants", "all")
+def get_core_targets_selector(cfg: dict, category: str):
+    leaf = get_core_category_cfg(cfg, category)
+    return leaf.get("targets", leaf.get("variants", "all"))
+
+
+def get_core_category_params(cfg: dict, category: str) -> dict:
+    return _section_params(get_core_category_cfg(cfg, category))
 
 
 def get_filter_pipeline_cfg(cfg: dict) -> dict:
-    raw = get_core_category_cfg(cfg, Category.FILTER_PIPELINE)
+    params = get_core_category_params(cfg, Category.FILTER_PIPELINE)
     return {
-        key: float(raw.get(key, default))
+        key: float(params.get(key, default))
         for key, default in DEFAULT_FILTER_PIPELINE_CFG.items()
     }
 
@@ -293,15 +345,15 @@ def get_default_window(cfg: dict) -> int:
 
 
 def get_read_positions(cfg: dict) -> list[float]:
-    return list(get_core_category_cfg(cfg, Category.RANDOM_ACCESS).get("read_positions", [0.0, 0.5, 0.75, 0.95]))
+    return list(get_core_category_params(cfg, Category.RANDOM_ACCESS).get("read_positions", [0.0, 0.5, 0.75, 0.95]))
 
 
 def get_channel_subsets(cfg: dict) -> list[int]:
-    return list(get_core_category_cfg(cfg, Category.CHANNEL_SUBSET).get("channel_subsets", [4, 10]))
+    return list(get_core_category_params(cfg, Category.CHANNEL_SUBSET).get("channel_subsets", [4, 10]))
 
 
 def get_window_sizes(cfg: dict) -> list[int]:
-    return list(get_core_category_cfg(cfg, Category.WINDOW_SCALING).get("window_sizes", [10, 30, 60, 300, 900, 1800, 3600]))
+    return list(get_core_category_params(cfg, Category.WINDOW_SCALING).get("window_sizes", [10, 30, 60, 300, 900, 1800, 3600]))
 
 
 def get_parquet_investigations(cfg: dict) -> dict:
@@ -321,16 +373,17 @@ def is_investigation_enabled(cfg: dict, name: str, default: bool = True) -> bool
     return bool(section.get("enabled", default))
 
 
-def get_parquet_compression_variants(cfg: dict) -> list[dict]:
+def get_compression_codec_matrix(cfg: dict) -> list[dict]:
     section = get_investigation_cfg(cfg, "compression")
-    variants = section.get("variants")
-    if variants is None:
+    params = _section_params(section)
+    codec_matrix = params.get("codec_matrix", section.get("variants"))
+    if codec_matrix is None:
         return list(DEFAULT_PARQUET_COMPRESSION_VARIANTS)
-    return list(variants)
+    return list(codec_matrix)
 
 
 def get_remote_query_cfg(cfg: dict) -> dict:
-    return get_investigation_cfg(cfg, "remote_query")
+    return _section_params(get_investigation_cfg(cfg, "remote_query"))
 
 
 def get_tuned_comparison_cfg(cfg: dict) -> dict:
@@ -344,37 +397,37 @@ def get_baseline_comparison_cfg(cfg: dict) -> dict:
 
 
 def get_tuned_block_sizes_minutes(cfg: dict) -> list:
-    section = get_tuned_comparison_cfg(cfg)
-    minutes = section.get("block_sizes_minutes")
+    params = _section_params(get_tuned_comparison_cfg(cfg))
+    minutes = params.get("block_sizes_minutes")
     if minutes is None:
         return list(DEFAULT_TUNED_BLOCK_MINUTES)
     return list(minutes)
 
 
 def get_tuned_parquet_codecs(cfg: dict) -> list[str]:
-    section = get_tuned_comparison_cfg(cfg)
-    codecs = section.get("parquet_codecs")
+    params = _section_params(get_tuned_comparison_cfg(cfg))
+    codecs = params.get("parquet_codecs")
     if codecs is None:
         return list(DEFAULT_TUNED_PARQUET_CODECS)
     return list(codecs)
 
 
 def get_tuned_hdf5_compression(cfg: dict) -> str:
-    section = get_tuned_comparison_cfg(cfg)
-    compression = section.get("hdf5_compression", DEFAULT_TUNED_HDF5_COMPRESSION)
+    params = _section_params(get_tuned_comparison_cfg(cfg))
+    compression = params.get("hdf5_compression", DEFAULT_TUNED_HDF5_COMPRESSION)
     if compression != "lz4":
         raise ValueError("tuned_comparison.hdf5_compression currently supports only lz4")
     return compression
 
 
 def get_tuned_chunk_sec(cfg: dict) -> int:
-    section = get_tuned_comparison_cfg(cfg)
-    return int(section.get("chunk_sec", DEFAULT_TUNED_CHUNK_SEC))
+    params = _section_params(get_tuned_comparison_cfg(cfg))
+    return int(params.get("chunk_sec", DEFAULT_TUNED_CHUNK_SEC))
 
 
 def get_baseline_chunk_sec(cfg: dict) -> int:
-    section = get_baseline_comparison_cfg(cfg)
-    return int(section.get("chunk_sec", get_tuned_chunk_sec(cfg)))
+    params = _section_params(get_baseline_comparison_cfg(cfg))
+    return int(params.get("chunk_sec", get_tuned_chunk_sec(cfg)))
 
 
 def tuned_parquet_key(codec: str, label: str) -> str:

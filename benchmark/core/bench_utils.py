@@ -12,7 +12,7 @@ import numpy as np
 
 from .config_helpers import (
     get_channel_subsets,
-    get_parquet_compression_variants,
+    get_compression_codec_matrix,
     get_read_positions,
     get_repetitions,
     get_remote_query_cfg,
@@ -218,7 +218,7 @@ def _estimate_runs(cfg: dict, selected: list) -> int:
             n += len(window_sizes) * 2 * reps
         elif cat_id == "compression":
             if is_investigation_enabled(cfg, "compression"):
-                n += len(get_parquet_compression_variants(cfg)) * reps
+                n += len(get_compression_codec_matrix(cfg)) * reps
         elif cat_id == "precision_loss":
             if is_investigation_enabled(cfg, "precision_loss"):
                 n += 1

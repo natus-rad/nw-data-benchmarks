@@ -17,7 +17,7 @@ import pyarrow.parquet as pq
 from benchmark.core import azure_storage, bench_utils, benchmarks, readers, remote, setup, signal, study_info
 from benchmark.core.config_helpers import (
     get_canonical_parquet_cfg,
-    get_parquet_compression_variants,
+    get_compression_codec_matrix,
     get_tuned_block_sizes_minutes,
     get_tuned_chunk_sec,
     get_tuned_hdf5_compression,
@@ -302,9 +302,10 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertEqual(cfg["canonical_parquet"]["chunk_writer_max_rowgroups"], 1)
         self.assertEqual(cfg["canonical_parquet"]["chunk_reader_max_rowgroups"], 1)
         self.assertFalse(cfg["benchmarks"]["core"]["random_access"]["include_canonical"])
-        self.assertEqual(cfg["benchmarks"]["core"]["filter_pipeline"]["fft_window_sec"], 10.0)
-        self.assertEqual(cfg["benchmarks"]["core"]["filter_pipeline"]["fft_stride_sec"], 2.0)
-        self.assertEqual(cfg["benchmarks"]["core"]["filter_pipeline"]["read_chunk_sec"], 300.0)
+        self.assertEqual(cfg["benchmarks"]["core"]["random_access"]["targets"], "all")
+        self.assertEqual(cfg["benchmarks"]["core"]["filter_pipeline"]["params"]["fft_window_sec"], 10.0)
+        self.assertEqual(cfg["benchmarks"]["core"]["filter_pipeline"]["params"]["fft_stride_sec"], 2.0)
+        self.assertEqual(cfg["benchmarks"]["core"]["filter_pipeline"]["params"]["read_chunk_sec"], 300.0)
 
     def test_validate_config_rejects_non_positive_canonical_streaming_knobs(self):
         cfg = normalize_config({"canonical_parquet": {"chunk_writer_max_rowgroups": 0}})
@@ -653,7 +654,7 @@ class BenchmarkRefactorTests(unittest.TestCase):
         self.assertEqual(captured["parquet"], canonical)
         self.assertEqual(captured["baseline_parquet"], Path("demo-source.parquet"))
 
-    def test_nested_config_helpers_read_new_schema(self):
+    def test_nested_config_helpers_read_legacy_flat_schema(self):
         cfg = {
             "benchmarks": {
                 "parquet_investigations": {
@@ -673,11 +674,58 @@ class BenchmarkRefactorTests(unittest.TestCase):
             },
         }
 
-        self.assertEqual(get_parquet_compression_variants(cfg), [{"codec": "snappy"}])
+        self.assertEqual(get_compression_codec_matrix(cfg), [{"codec": "snappy"}])
         self.assertEqual(get_tuned_block_sizes_minutes(cfg), [7, 15])
         self.assertEqual(get_tuned_parquet_codecs(cfg), ["lz4"])
         self.assertEqual(get_tuned_hdf5_compression(cfg), "lz4")
         self.assertEqual(get_tuned_chunk_sec(cfg), 123)
+
+    def test_nested_config_helpers_read_unified_params_schema(self):
+        cfg = {
+            "benchmarks": {
+                "parquet_investigations": {
+                    "compression": {
+                        "enabled": False,
+                        "params": {"codec_matrix": [{"codec": "snappy"}]},
+                    },
+                },
+                "other": {
+                    "tuned_comparison": {
+                        "params": {
+                            "block_sizes_minutes": [7, 15],
+                            "parquet_codecs": ["lz4"],
+                            "hdf5_compression": "lz4",
+                            "chunk_sec": 123,
+                        }
+                    }
+                },
+            },
+        }
+
+        self.assertEqual(get_compression_codec_matrix(cfg), [{"codec": "snappy"}])
+        self.assertEqual(get_tuned_block_sizes_minutes(cfg), [7, 15])
+        self.assertEqual(get_tuned_parquet_codecs(cfg), ["lz4"])
+        self.assertEqual(get_tuned_hdf5_compression(cfg), "lz4")
+        self.assertEqual(get_tuned_chunk_sec(cfg), 123)
+
+    def test_normalize_config_translates_legacy_spellings(self):
+        cfg = normalize_config({
+            "benchmarks": {
+                "core": {
+                    "random_access": {"enabled": True, "variants": ["pq_a"], "read_positions": [0.25]},
+                },
+                "parquet_investigations": {
+                    "compression": {"enabled": True, "variants": [{"codec": "lz4"}]},
+                },
+            },
+        })
+
+        leaf = cfg["benchmarks"]["core"]["random_access"]
+        self.assertEqual(leaf["targets"], ["pq_a"])
+        self.assertEqual(leaf["params"]["read_positions"], [0.25])
+        compression = cfg["benchmarks"]["parquet_investigations"]["compression"]
+        self.assertEqual(compression["params"]["codec_matrix"], [{"codec": "lz4"}])
+        self.assertEqual(get_compression_codec_matrix(cfg), [{"codec": "lz4"}])
 
     def test_normalize_config_rejects_scalar_core_leaf_values(self):
         with self.assertRaisesRegex(ValueError, "benchmarks.core.random_access"):
